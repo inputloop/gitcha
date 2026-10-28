@@ -102,6 +102,8 @@ export function loadConfig(env = process.env, overrides = {}) {
     git: {
       // Host name shown in SSH clone URLs (git@HOST:owner/name.git); unset hides SSH URLs.
       sshHost: env.GITCHA_SSH_HOST ?? null,
+      // The account OpenSSH runs gitcha-git-shell as (the "git" in git@HOST:...).
+      sshUser: env.GITCHA_SSH_USER ?? 'git',
       // The forced command OpenSSH runs for every Gitcha key.
       shellPath: env.GITCHA_GIT_SHELL ?? '/usr/bin/gitcha-git-shell',
     },

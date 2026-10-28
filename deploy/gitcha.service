@@ -1,0 +1,28 @@
+# gitcha.service -- the Gitcha server.  Not enabled by the package: systemctl enable --now gitcha
+# Copyright 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Corwin Brust <corwin@bru.st> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+[Unit]
+Description=Gitcha: forge, registry, hosting and community (loopback; put a TLS proxy in front)
+After=network.target
+[Service]
+User=gitcha
+Group=gitcha
+EnvironmentFile=/etc/inputloop/gitcha/gitcha.env
+Environment=GITCHA_DATA_DIR=/var/lib/gitcha
+StateDirectory=gitcha
+StateDirectoryMode=0700
+ExecStart=/usr/bin/gitcha-server
+Restart=on-failure
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/gitcha
+[Install]
+WantedBy=multi-user.target

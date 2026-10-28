@@ -131,7 +131,7 @@ export class ProjectService {
       key: this.key(p.owner, p.name), owner: ownerLabel(p.owner), name: p.name, description: p.description, visibility: p.visibility,
       tags: p.tags, createdAt: p.createdAt, collaborators: p.collaborators, taskTracking: p.taskTracking.enabled,
       cloneHttp: `${base}/git/${ownerLabel(p.owner)}/${p.name}.git`,
-      cloneSsh: sshHost ? `git@${sshHost}:${ownerLabel(p.owner)}/${p.name}.git` : null,
+      cloneSsh: sshHost ? `${this.config.git.sshUser}@${sshHost}:${ownerLabel(p.owner)}/${p.name}.git` : null,
       canWrite: this.canWrite(principal, p), pushes: p.pushes.slice(-10).reverse(),
     };
   }

@@ -1,0 +1,23 @@
+# Caddyfile.example -- TLS in front of Gitcha, with certificates on demand for hosted sites.
+# Copyright 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Corwin Brust <corwin@bru.st> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+#
+# Caddy asks Gitcha before it requests a certificate, so only this instance's own name, sites' subdomains and
+# custom domains whose DNS TXT check passed ever get one.
+{
+	on_demand_tls {
+		ask http://127.0.0.1:4873/api/v1/hosting/tls-allowed
+	}
+}
+
+gitcha.example.org {
+	reverse_proxy 127.0.0.1:4873
+}
+
+# Every hosted name: sites' subdomains and verified custom domains.
+https:// {
+	tls {
+		on_demand
+	}
+	reverse_proxy 127.0.0.1:4873
+}

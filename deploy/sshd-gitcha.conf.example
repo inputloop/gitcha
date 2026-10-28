@@ -1,0 +1,17 @@
+# sshd-gitcha.conf.example -- git over SSH for Gitcha.  Copy to /etc/ssh/sshd_config.d/gitcha.conf.
+# Copyright 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Corwin Brust <corwin@bru.st> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+#
+# Clone URLs read gitcha@HOST:owner/name.git (GITCHA_SSH_USER=gitcha).  Keys are looked up by fingerprint in
+# Gitcha; each is forced through gitcha-git-shell, which runs only git-upload-pack / git-receive-pack, and only
+# where that person or agent may read or write.
+Match User gitcha
+	AuthorizedKeysFile none
+	AuthorizedKeysCommand /usr/bin/gitcha-ssh-keys %f
+	AuthorizedKeysCommandUser gitcha
+	PasswordAuthentication no
+	KbdInteractiveAuthentication no
+	AllowTcpForwarding no
+	X11Forwarding no
+	PermitTTY no
+	SetEnv GITCHA_DATA_DIR=/var/lib/gitcha

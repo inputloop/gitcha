@@ -1,0 +1,24 @@
+# gitcha-runner.service -- a Gitcha runner using bContain VMs.  Not enabled by the package.
+# Copyright 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Corwin Brust <corwin@bru.st> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+[Unit]
+Description=Gitcha runner (each job in its own bContain VM)
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=gitcha-runner
+Group=gitcha-runner
+SupplementaryGroups=kvm
+Environment=GITCHA_RUNNER_HOME=/var/lib/gitcha-runner BCONTAIN_HOME=/var/lib/gitcha-runner/bcontain
+StateDirectory=gitcha-runner
+StateDirectoryMode=0700
+ExecStart=/usr/bin/gitcha-runner run --concurrency 2
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/gitcha-runner
+[Install]
+WantedBy=multi-user.target

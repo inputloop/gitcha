@@ -1,0 +1,217 @@
+<!-- SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Corwin Brust <corwin@bru.st> and Contributors -->
+<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
+
+# Deploying Gitcha
+
+This guide is for whoever runs a Gitcha instance: first for Corwin, putting the hosting
+builds on alphaOS VMs on the ghostwheel, and then for anyone who self-hosts and joins the ring.
+
+## The shape of it
+
+```
+            people, agents, git, browsers
+                          |
+                 TLS proxy (Caddy, :443)          asks Gitcha before any certificate
+                          |
+          gitcha-server on 127.0.0.1:4873         never runs user code
+           | data: /var/lib/gitcha (db.json, git/, sites/, blobs/, logs/, secret.key)
+           |
+   long-poll over HTTPS (runner token)
+           |
+   gitcha-runner on a separate VM                 each job in its own bContain VM
+```
+
+- **The server** keeps accounts, repositories, packages, sites, tickets and the queue. It
+  serves static sites itself (files only), and it never executes anything a user wrote.
+- **Runners** take CI jobs and function invocations from the queue and run each in a fresh
+  bContain VM. Run them on their own VMs, apart from the server and from the internal
+  ghostwheel, so tenant code never shares a machine with tenant data it should not see.
+- **Hosted names** (sites' subdomains and verified custom domains) are answered by the
+  hosting layer only: they never reach the Gitcha UI or API, so a user's script cannot act
+  as the person viewing it.
+
+## Packages
+
+```sh
+sh deploy/build-debs.sh out/
+```
+
+This builds `inputloop-gitcha` and `inputloop-gitcha-runner` with plain `dpkg-deb`, no root,
+in alphaOS's idiom: version `X.Y.Z+git<sha7>`, maintainer `inputloop`, and no service started
+or enabled by the package. The server's two npm dependencies come from the committed
+lockfile at build time.
+
+### Putting them in alphaOS
+
+alphaOS builds its parts in `packaging/build-debs.sh` and enables services in
+`packaging/build-iso.sh`. These are Corwin's files, so this is a proposal to take or leave,
+not a change made there:
+
+1. Add `inputloop/gitcha` to `repos.tsv` at the commit to ship.
+2. Add a part that calls Gitcha's own script, so there is one recipe:
+   ```sh
+   part_gitcha() {
+     d=$(find_src gitcha)
+     sh "$d/deploy/build-debs.sh" "$OUT"
+   }
+   ```
+   and add `gitcha` to `PARTS`.
+3. For a hosting VM image, enable the server in `build-iso.sh`'s `systemctl enable` line
+   (`gitcha`), and for a runner VM image, `gitcha-runner`. The default kiosk image should
+   enable neither.
+
+alphaOS binds everything to loopback and C4OK refuses network listening without an explicit
+setting. Gitcha keeps that posture: it listens on `127.0.0.1:4873`, and only the TLS proxy
+listens publicly. That proxy is the one deliberate exception a hosting VM makes, and it should
+be named as such in alphaOS's security model.
+
+## The server
+
+1. `apt install ./inputloop-gitcha_*.deb`
+2. Edit `/etc/inputloop/gitcha/gitcha.env` (a conffile, readable by root and the `gitcha`
+   group). At least `GITCHA_PUBLIC_URL`, and `GITCHA_HOSTING_DOMAINS` for hosting.
+3. `systemctl enable --now gitcha`
+4. Open the public URL and register. **The first account becomes the administrator.**
+5. Set `GITCHA_OPEN_REGISTRATION=false` afterwards if sign-up should be closed.
+
+### TLS and DNS
+
+`/usr/share/doc/inputloop-gitcha/Caddyfile.example` puts Caddy in front with on-demand
+certificates. Caddy asks `GET /api/v1/hosting/tls-allowed?domain=NAME` first, and Gitcha says
+yes only for its own name, sites' subdomains on a hosting domain, and custom domains whose DNS
+check passed.
+
+DNS records to create:
+
+| Record | Points at | Why |
+|---|---|---|
+| `gitcha.example.org` A/AAAA | the server VM | the UI, API and git |
+| `*.pages.example.net` A/AAAA | the server VM | every site's subdomain (one wildcard per hosting domain) |
+| `hosting.example.net` A/AAAA | the server VM | optional: the CNAME target shown to people with custom domains (`GITCHA_HOSTING_CNAME`) |
+
+Use hosting domains that are **separate registrable domains** from the UI's, so a site's
+scripts cannot set cookies for Gitcha.
+
+The keepers already hold several names (ils4 lists `ghostwheel.cloud`, whose wildcard points
+at gw10 today with a certificate for the apex only; `ghostwheel.chat`, `gwhee.lol`,
+`inputloop.com`, `gsus.work`, `vibrobea.st` and `bru.st`). Which of them serve Gitcha, and as
+which role, is the keepers' choice; ils4 says records are written by tool, never by hand in a
+panel.
+
+**Custom domains.** A person adds a domain to a site. Gitcha shows a TXT record
+(`_gitcha-challenge.NAME` = `gitcha-verify=...`) and a CNAME target. Once the TXT record
+resolves, they press verify, and only then is the domain served and allowed a certificate.
+
+### Git over SSH
+
+Copy `/usr/share/doc/inputloop-gitcha/sshd-gitcha.conf.example` to
+`/etc/ssh/sshd_config.d/gitcha.conf`, set `GITCHA_SSH_HOST` and `GITCHA_SSH_USER=gitcha` in
+`gitcha.env`, and reload sshd. OpenSSH asks `gitcha-ssh-keys` for the offered key's
+fingerprint; a known key is forced through `gitcha-git-shell`, which runs only
+`git-upload-pack` or `git-receive-pack`, and only where that person or agent may. Both
+helpers talk to the server on loopback with a secret from `/var/lib/gitcha/internal.key`.
+
+Status: built and unit-checked; **not yet run against a real sshd** (the machine this was
+written on had none).
+
+### Backups
+
+Back up `/var/lib/gitcha`. Keep `secret.key` apart from the database backups: passwords
+(as AES-256-GCM-sealed scrypt hashes) and authenticator secrets are encrypted with it, so the
+database alone is useless to a thief, and the database without the key is useless to you.
+
+## Runners
+
+1. Install bContain on the runner VM and check it: `bcontain doctor`. The runner VM needs
+   `/dev/kvm`; inside a VM that means nested virtualization on the host, or bContain falls
+   back to software emulation, which is slow.
+2. `apt install ./inputloop-gitcha-runner_*.deb`
+3. In Gitcha, an administrator creates a registration token (`POST
+   /api/v1/runners/registrations`; team owners can create one for a team runner).
+4. Register and start:
+   ```sh
+   sudo -u gitcha-runner GITCHA_RUNNER_HOME=/var/lib/gitcha-runner \
+     gitcha-runner register --server https://gitcha.example.org --token TOKEN --name "$(hostname)" --backend bcontain
+   systemctl enable --now gitcha-runner
+   ```
+
+What bContain gives each job: its own VM, CPU and memory caps, nothing kept afterwards.
+What it does not give yet, and Gitcha does not pretend otherwise: the guest has outbound
+network access (there is no network-off switch), everything inside runs as root, and there
+are no disk quotas. The job's files reach the VM over QEMU's user-mode gateway
+(10.0.2.2) behind a one-time token, because bContain has no volume mounts yet.
+
+Status: the command line and the parsing of the VM's console are unit-tested against
+bContain's source; **no job has yet run inside a real bContain VM**. That is the first thing
+to try on the ghostwheel.
+
+### orgvm functions
+
+Functions with `runtime: "orgvm"` are accepted only when `GITCHA_ORGVM=yes`, and run only on
+runners labelled `orgvm`. A runner gets that label when `GITCHA_ORGVM_CMD` is set: the command
+receives the org file, the block name and the request, and prints the response line. It is
+the seam for Corwin's jail ("user lambda in a jail that is an emacs session in own docker
+container"), which does not exist yet; until it does, org-file functions run their named block
+as node, python or sh.
+
+## Billing
+
+Off unless `GITCHA_BILLING=yes`. Then:
+
+- **Stripe:** create a Product with a recurring Price per paid plan, set `STRIPE_PRICE_PRO`
+  (and `STRIPE_PRICE_TEAM`), `STRIPE_SECRET_KEY`, and a webhook to
+  `https://gitcha.example.org/api/v1/billing/stripe/webhook` for `checkout.session.completed`,
+  `customer.subscription.*` and `invoice.payment_failed`; put its signing secret in
+  `STRIPE_WEBHOOK_SECRET`. Turn on the customer portal in the Stripe dashboard.
+- **PayPal:** create a Product and a Billing Plan per paid plan, set `PAYPAL_PLAN_PRO` (and
+  `PAYPAL_PLAN_TEAM`), `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_ENV=live`, and a
+  webhook to `https://gitcha.example.org/api/v1/billing/paypal/webhook` for the
+  `BILLING.SUBSCRIPTION.*` events; put its id in `PAYPAL_WEBHOOK_ID`.
+- Plans and limits default to Free, Pro and Team; replace them with a JSON file named by
+  `GITCHA_PLANS_FILE`.
+
+Keys live only in `gitcha.env`. Status: tested against fake Stripe and PayPal endpoints;
+**not yet run against either provider's sandbox**. Do that first, with test keys.
+
+A note for the keepers: ils4's M10 recommended "not now" for paid accounts and rejected an
+open-core tier. Billing here is a switch, off by default, and every feature works without it;
+what it sells is capacity (sandbox minutes, invocations, sites), not features.
+
+## Operations and C4OK
+
+Tickets and changes live in Gitcha; C4OK's Operations door (`/operations`, in
+c4ok-PRIVATE `w/lib/gitcha.js`) is the kiosk for them.
+
+1. In Gitcha, the administrator gives the operator's account the staff role (GraphQL
+   `setRole`).
+2. Signed in as that account, create a console key (GraphQL `createConsoleKey`, fresh code).
+3. On the C4OK host, as C4OK's account: write the key to a file, `chmod 600` it, and set
+   `C4OK_GITCHA_URL` and `C4OK_GITCHA_KEY` (the file's path) in C4OK's environment.
+
+The console key follows Gitcha's 2FA checks like any device; when Gitcha asks, the door shows
+a code form. Approving or rejecting a change always needs the approver's own Gitcha code.
+
+## NextTime
+
+Set all four `NEXTTIME_*` settings to mirror project tasks (including Second Reader reviews)
+into a NextTime instance as timebank requests, through its existing API with a Nextcloud app
+password. Only creation and cancellation are mirrored: completing a NextTime request moves
+hours in its public ledger, which is for NextTime's maintainer and the keepers to decide.
+
+## Joining the ring
+
+Every instance publishes `/.well-known/gitcha-ring.json`. To join another instance's ring,
+ask it:
+
+```sh
+curl -X POST https://their.example/api/v1/ring/announce -H 'content-type: application/json' -d '{"url":"https://gitcha.example.org"}'
+```
+
+Their administrator approves it (GraphQL or `POST /api/v1/ring/decide`). To list peers
+yourself, set `GITCHA_RING_PEERS`. Instances that sell things say so in their manifest
+(`features.paid`), and the ring page shows it; members link to each other either way.
+
+---
+Copyright 2026 Bryant Frankford and Corwin Brust and Contributors. CC-BY-SA-4.0.
+
+Alfred (for Bryant)
