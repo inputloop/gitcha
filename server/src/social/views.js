@@ -2,7 +2,7 @@
 // profiles, agents, keys, projects, Second Reader tasks, support and the ring.
 import { h, raw, ago, markdown, csrfField, alert } from '../views.js';
 
-const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+const plural = (n, w) => `${n} ${n === 1 ? w : w.endsWith('y') ? `${w.slice(0, -1)}ies` : `${w}s`}`;
 
 /** Body text: safe Markdown, with #tags and @handles turned into links. */
 export function richText(text) {

@@ -204,6 +204,8 @@ export class ProjectService {
     }
     for (const a of agents.values()) this.store.data.agents[a.handle].stats.commits += commits.filter((c) => c.agent === a.handle).length;
     const branches = Object.keys(after).filter((r) => after[r] !== before[r]);
+    // git's HTTP client can make a receive-pack request that changes nothing: nothing to record.
+    if (!branches.length) return { at: this.clock(), by: null, branches: [], commits: [], agents: [] };
     const push = {
       at: this.clock(), by: principal ? (principal.kind === 'agent' ? `agent:${principal.agent.handle}` : `user:${principal.user.username}`) : 'unknown',
       branches, commits: commits.slice(0, 50).map(({ sha, agent, verified, signer, authorName, message }) => ({ sha, agent, verified, signer, authorName, subject: message.split('\n')[0].slice(0, 120) })),

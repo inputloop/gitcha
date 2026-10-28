@@ -108,7 +108,7 @@ export const recoveryCodesPage = ({ codes, fresh = true }) => h`
   <p>If you lose your phone, each of these codes can be used <strong>once</strong> instead of an authenticator code.
   They will not be shown again.</p>
   <ul class="codes">${codes.map((c) => h`<li><code>${c}</code></li>`)}</ul>
-  <a class="btn block" href="${fresh ? '/login?msg=activated' : '/account'}">I've saved them — continue</a>
+  <a class="btn block" href="${fresh ? '/login?msg=activated' : '/account'}">I've saved them: continue</a>
 </div>`;
 
 export const loginPage = ({ csrf, error, notice, username = '', next = '' }) => h`
@@ -147,7 +147,7 @@ export const packagesPage = ({ q, results }) => h`
 ${results.length === 0 ? h`<div class="empty card"><p>No packages ${q ? h`match <strong>${q}</strong>` : 'yet'}.</p><p class="muted">Publish one with <code>gitcha publish</code> or ask Claude to do it.</p></div>` : ''}
 <div class="pkg-list">
 ${results.map((p) => h`<a class="pkg card" href="/packages/${encodeURIComponent(p.name)}">
-  <div class="pkg-top"><strong class="pkg-name">${p.name}</strong><span class="badge">v${p.latest ?? '—'}</span></div>
+  <div class="pkg-top"><strong class="pkg-name">${p.name}</strong><span class="badge">${p.latest ? `v${p.latest}` : 'no release'}</span></div>
   <p>${p.description || 'No description.'}</p>
   <div class="meta"><span>${p.team ? h`👥 ${p.team}` : h`by ${p.owner}`}</span>${p.visibility === 'team' ? h`<span>🔒 team only</span>` : ''}<span>${p.license}</span><span>${p.downloads} install${p.downloads === 1 ? '' : 's'}</span><span>updated ${ago(p.updatedAt)}</span></div>
 </a>`)}
@@ -180,7 +180,7 @@ export function markdown(src) {
 
 export const packagePage = ({ pkg, serverUrl, share }) => h`
 <div class="pkg-header">
-  <div><h1>${pkg.name} <span class="badge big">v${pkg.latest ?? '—'}</span>${pkg.visibility === 'team' ? h`<span class="badge big lock">🔒 team only</span>` : ''}</h1><p class="lead">${pkg.description}</p></div>
+  <div><h1>${pkg.name} <span class="badge big">${pkg.latest ? `v${pkg.latest}` : 'no release'}</span>${pkg.visibility === 'team' ? h`<span class="badge big lock">🔒 team only</span>` : ''}</h1><p class="lead">${pkg.description}</p></div>
 </div>
 <div class="pkg-grid">
   <article class="card readme">${pkg.readme ? markdown(pkg.readme) : h`<p class="muted">This package has no README.</p>`}</article>
@@ -314,7 +314,7 @@ ${alert(notice, 'info')}${alert(error)}
     <h2>Shared packages</h2>
     ${packages.length === 0 ? h`<p class="muted">No packages yet. Publish with <code>gitcha publish --team ${team.name}</code>, or open one of your packages and choose <em>Share with a team</em>.</p>` : ''}
     <table class="table"><tbody>
-    ${packages.map((p) => h`<tr><td><a href="/packages/${p.name}"><strong>${p.name}</strong></a> <span class="badge">v${p.latest ?? '—'}</span>${p.visibility === 'team' ? h` <span class="badge lock">🔒 team only</span>` : ''}<br><span class="muted small">${p.description}</span></td><td class="muted small">${p.downloads} install${p.downloads === 1 ? '' : 's'}</td></tr>`)}
+    ${packages.map((p) => h`<tr><td><a href="/packages/${p.name}"><strong>${p.name}</strong></a> <span class="badge">${p.latest ? `v${p.latest}` : 'no release'}</span>${p.visibility === 'team' ? h` <span class="badge lock">🔒 team only</span>` : ''}<br><span class="muted small">${p.description}</span></td><td class="muted small">${p.downloads} install${p.downloads === 1 ? '' : 's'}</td></tr>`)}
     </tbody></table>
   </section>
   <section class="card">

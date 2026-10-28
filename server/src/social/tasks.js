@@ -91,7 +91,9 @@ export class TaskService {
     if (!p.taskTracking.enabled) return null;
     const pair = agents.map((a) => a.handle).sort();
     const open = Object.values(this.data).find((t) => t.kind === 'second_reader' && t.project === key && ['open', 'claimed'].includes(t.status) && t.agents.join() === pair.join());
-    const commits = push.commits.map((c) => c.sha);
+    // Every recent commit by either agent on these branches is what the second reader reads.
+    const recent = (p.pushes ?? []).filter((x) => this.clock() - x.at < 7 * 86_400_000 && x.branches.some((b) => push.branches.includes(b)));
+    const commits = [...new Set([...recent, push].flatMap((x) => x.commits).filter((c) => pair.includes(c.agent)).map((c) => c.sha))];
     if (open) {
       this.store.tx((d) => { d.tasks[open.id].commits = [...new Set([...open.commits, ...commits])].slice(-200); });
       return open;
