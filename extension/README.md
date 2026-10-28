@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors -->
+<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
 # gitcha (Claude extension + CLI)
 
 Zero-dependency client for a [Gitcha](https://github.com/inputloop/gitcha) registry:

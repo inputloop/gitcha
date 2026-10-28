@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors -->
+<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
 # Security model
 
 Gitcha is built so that **a stolen database, a stolen laptop token, or a

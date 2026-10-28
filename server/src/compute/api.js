@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // JSON API for runners, CI runs and functions.
 import { json, send, readJson, readBody } from '../http.js';
 import { HttpError } from '../errors.js';

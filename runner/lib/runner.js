@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // The runner loop: claim a job, run it in the configured backend, stream its
 // log, report the result. Several jobs may run at once (--concurrency).
 import fs from 'node:fs';

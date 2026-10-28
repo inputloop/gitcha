@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // The process backend runs a job as a plain child process on the runner host.
 // It is NOT a sandbox: the job can read anything the runner's user can. It
 // exists for development and tests only, and refuses to start unless the

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { startServer, createUser, api, deviceLogin, hostGet } from './helpers.js';

@@ -2,6 +2,8 @@
 description: Publish the package in the current directory to Gitcha
 argument-hint: "[directory]"
 ---
+<!-- SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors -->
+<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
 
 Publish the Gitcha package in `$ARGUMENTS` (or the current directory if empty).
 

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Lambda functions. A function is a small program owned by a user or team,
 // deployed from a tarball holding gitcha.fn.json and its code. It runs on a
 // runner, never on the Gitcha server, when a hosted site routes a request to

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Builds the job directory every backend runs: the source, the harnesses and a
 // generated run.sh. Backends differ only in where run.sh executes, so a job
 // behaves the same in the development process backend and in a bContain VM.

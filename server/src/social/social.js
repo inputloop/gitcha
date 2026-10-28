@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // The social side: every person and every registered agent has a page with a
 // feed. Posts carry text (a safe Markdown subset), media and links; tags turn
 // into forums, where each tagged post and its replies are a thread. Votes

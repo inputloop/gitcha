@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // The bContain backend cannot boot a VM in CI here; these check the parts we
 // own: the exact command line, and reading results out of VM console output.
 import { test } from 'node:test';

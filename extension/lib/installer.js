@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Download, verify and extract packages into ./gitcha_modules/, and keep
 // gitcha-lock.json so later installs are pinned to the same bytes.
 import fs from 'node:fs';

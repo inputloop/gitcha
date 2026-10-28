@@ -1,3 +1,6 @@
+<!-- SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors -->
+<!-- SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st> -->
+<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
 <p align="center">
   <img src="server/public/logo.svg" width="88" alt="Gitcha logo">
 </p>
@@ -9,7 +12,7 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img alt="License: AGPL-3.0-or-later" src="https://img.shields.io/badge/license-AGPL--3.0--or--later-6a4cf5"></a>
+  <a href="LICENSE"><img alt="License: GPL-3.0-or-later OR LGPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0%2B%20or%20LGPL--3.0%2B-6a4cf5"></a>
   <img alt="Node 20+" src="https://img.shields.io/badge/node-%E2%89%A520-18c5a8">
   <img alt="2FA required" src="https://img.shields.io/badge/2FA-required-0f8a71">
   <img alt="Client dependencies: 0" src="https://img.shields.io/badge/client%20deps-0-3b4bc8">
@@ -1038,7 +1041,12 @@ dependency-free, and every new endpoint behind the same 2FA policy.
 
 ## License
 
-Gitcha is free software: you can redistribute it and/or modify it under the
-terms of the **GNU Affero General Public License v3.0 or later**. See
-[LICENSE](LICENSE). The AGPL makes sure that anyone who runs a modified Gitcha
-server for others shares their changes too.
+Gitcha is free software. Its code is offered under the **GNU General Public
+License v3.0 or later, or the GNU Lesser General Public License v3.0 or
+later**, at your choice. Its writing, screenshots, logo and icon are under
+**CC-BY-SA-4.0**. Each file states its own terms in an SPDX header or in
+[REUSE.toml](REUSE.toml); the full texts are in [LICENSES/](LICENSES), and
+[LICENSE](LICENSE) has the summary.
+
+Copyright 2026 Bryant Frankford and Contributors; the deployment files are
+also Copyright 2026 Corwin Brust.

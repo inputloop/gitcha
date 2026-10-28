@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Teams: groups of users that own packages together.
 //   owner      manage members and roles, delete the team, plus everything below
 //   maintainer publish, yank and transfer packages owned by the team

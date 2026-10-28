@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // The Gitcha ring: a webring of independent Gitcha instances. Each instance
 // publishes /.well-known/gitcha-ring.json describing itself (including any
 // paid features it offers) and lists the peers it links to. Peers come from

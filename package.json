@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "description": "Gitcha: a free, self-hosted software package registry with mandatory 2FA, plus a Claude extension.",
-  "license": "AGPL-3.0-or-later",
+  "license": "GPL-3.0-or-later OR LGPL-3.0-or-later",
   "type": "module",
   "workspaces": [
     "server",

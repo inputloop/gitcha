@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Browser-facing pages: registration, 2FA enrollment, sign-in, step-up,
 // package browsing and the account security page.
 import crypto from 'node:crypto';

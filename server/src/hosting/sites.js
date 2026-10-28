@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Static site hosting. A site is owned by a user or a team, gets a subdomain
 // on every configured hosting domain, can add DNS-verified custom domains, and
 // serves the files of its active deploy. Deploys are immutable directories on

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // HTTP routes for the social layer: the GraphQL endpoint, media upload, and
 // serving media. Media is served with a sandboxing CSP and no sniffing, from
 // bytes that were checked to be a known image, video, audio or PDF format.

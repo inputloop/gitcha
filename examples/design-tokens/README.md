@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors -->
+<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
 # design-tokens
 
 A **team-owned, team-only** package: `"team": "acme"` and `"private": true` in

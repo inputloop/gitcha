@@ -1,4 +1,6 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 # cgi.sh -- Gitcha function harness for runtime "sh". Runs inside the sandbox.
 # usage: sh cgi.sh ENTRY BODYFILE
 # Classic CGI: the request arrives as REQUEST_METHOD, PATH_INFO, QUERY_STRING,

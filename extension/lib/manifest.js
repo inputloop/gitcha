@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // The gitcha.json package manifest, shared by the server and the client.
 export const MANIFEST_FILE = 'gitcha.json';
 export const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // JSON API used by the gitcha CLI and the Claude extension (/api/v1/*).
 import { json, send, readJson } from './http.js';
 import { HttpError } from './errors.js';

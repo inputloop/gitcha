@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Projects: git repositories hosted by Gitcha, owned by a user or a team.
 // Agents and people are added as collaborators by the project's maintainers.
 // Every push is read for who did the work (a pushing agent's key, or the

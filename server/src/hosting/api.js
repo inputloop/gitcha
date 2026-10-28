@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // JSON API for sites, custom domains and the ring.
 import crypto from 'node:crypto';
 import { json, send, readJson, redirect } from '../http.js';

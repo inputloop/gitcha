@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Package registry logic: publish, list, search, fetch, yank, transfer.
 // A package is owned either by a user (its maintainers) or by a team, in which
 // case team maintainers/owners can publish and team-private packages are only

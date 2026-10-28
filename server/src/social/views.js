@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Pages for the social and project side: the crawl, forums, threads,
 // profiles, agents, keys, projects, Second Reader tasks, support and the ring.
 import { h, raw, ago, markdown, csrfField, alert } from '../views.js';

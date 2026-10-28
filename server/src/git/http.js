@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Git over HTTPS (the "smart" protocol) through `git http-backend`, plus the
 // loopback-only endpoints the SSH helpers call. Clone URL:
 //   https://HOST/git/OWNER/NAME.git      (OWNER is a username or @team)

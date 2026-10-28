@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 # Gitcha function harness for runtime "python". Runs inside the sandbox.
 # usage: python3 python.py ENTRY REQUEST.json
 # The entry module defines handler(request); request is a dict with method,

@@ -1,0 +1,6 @@
+# path glob	makers	decided by	date	note
+deploy/**	bryant,corwin	Bryant Frankford	2026-10-28	"He is a co maker, yes." (the deployment files written for Corwin's ghostwheel)
+DEPLOY.md	bryant,corwin	Bryant Frankford	2026-10-28	"He is a co maker, yes."
+docs/screenshots/**	bryant	Bryant Frankford	2026-10-28	"We own them. Free software terms." Made by Alfred for Bryant; read as Bryant alone, since Corwin has declared no terms for art
+server/public/logo.svg	bryant	Bryant Frankford	2026-10-28	"We own them. Free software terms." Made by Alfred for Bryant; read as Bryant alone, since Corwin has declared no terms for art
+extension/icon.png	bryant	Bryant Frankford	2026-10-28	"We own them. Free software terms." Made by Alfred for Bryant; read as Bryant alone, since Corwin has declared no terms for art

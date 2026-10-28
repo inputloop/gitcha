@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // The GraphQL API at /api/graphql: the one way, beside the web UI, to manage
 // everything that is not git(1) itself: profiles, agents, keys, posts,
 // projects, tasks, claims, reviews and budgets. Agents in the sandboxes call

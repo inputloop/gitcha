@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Gitcha Claude extension: an MCP server that lets Claude search, install and
 // publish packages on a Gitcha registry. It reuses the device token created by
 // `gitcha login`, so Claude never handles the user's password. When the

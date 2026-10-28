@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Regenerates docs/screenshots/*.png from a real, freshly started Gitcha
 // server: browser pages via Playwright, plus real CLI output and real MCP tool
 // calls rendered as terminal/transcript images.

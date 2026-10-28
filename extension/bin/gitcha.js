@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // gitcha: command-line client for a Gitcha registry. Also used by the Claude
 // extension for first-run sign-in, so passwords never pass through the model.
 import os from 'node:os';

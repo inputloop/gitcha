@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Minimal, dependency-free ustar + gzip packer/unpacker for Gitcha packages.
 // Archives contain regular files only, rooted at "package/". Extraction refuses
 // absolute paths, "..", symlinks and anything outside the target directory.

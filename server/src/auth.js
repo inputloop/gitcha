@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Accounts, two-factor enrollment, login, sessions/device tokens and the
 // intermittent ("step-up") 2FA policy. Pure logic: no HTTP in here.
 import crypto from 'node:crypto';

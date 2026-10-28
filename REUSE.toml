@@ -1,0 +1,64 @@
+version = 1
+
+# colophon: begin (written by colophon.py 2.0; change the terms in colophon, not here)
+[[annotations]]
+path = [
+  ".claude-plugin/marketplace.json",
+  ".colophon-decisions.tsv",
+  ".gitignore",
+  "examples/color-utils/gitcha.json",
+  "examples/design-tokens/gitcha.json",
+  "examples/design-tokens/tokens.json",
+  "examples/hello-world/gitcha.json",
+  "examples/tiny-logger/gitcha.json",
+  "extension/.claude-plugin/plugin.json",
+  "extension/.mcp.json",
+  "extension/hooks/hooks.json",
+  "extension/manifest.json",
+  "extension/package.json",
+  "package-lock.json",
+  "package.json",
+  "runner/package.json",
+  "server/package.json",
+]
+precedence = "closest"
+SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors"]
+SPDX-License-Identifier = "GPL-3.0-or-later OR LGPL-3.0-or-later"
+
+[[annotations]]
+path = [
+  "docs/screenshots/01-landing.png",
+  "docs/screenshots/02-register.png",
+  "docs/screenshots/03-setup-2fa.png",
+  "docs/screenshots/04-recovery-codes.png",
+  "docs/screenshots/05-login.png",
+  "docs/screenshots/06-login-2fa.png",
+  "docs/screenshots/07-packages.png",
+  "docs/screenshots/08-package.png",
+  "docs/screenshots/09-account.png",
+  "docs/screenshots/10-step-up.png",
+  "docs/screenshots/11-cli-login.png",
+  "docs/screenshots/12-cli-publish-install.png",
+  "docs/screenshots/13-cli-security.png",
+  "docs/screenshots/14-claude-extension.png",
+  "docs/screenshots/15-teams.png",
+  "docs/screenshots/16-team.png",
+  "docs/screenshots/17-cli-teams.png",
+  "docs/screenshots/18-crawl.png",
+  "docs/screenshots/19-thread.png",
+  "docs/screenshots/20-project.png",
+  "docs/screenshots/21-second-reader.png",
+  "docs/screenshots/22-agent.png",
+  "docs/screenshots/23-agents.png",
+  "docs/screenshots/24-keys.png",
+  "docs/screenshots/25-billing.png",
+  "docs/screenshots/26-ring.png",
+  "docs/screenshots/27-support.png",
+  "extension/icon.png",
+  "extension/skills/gitcha/SKILL.md",
+]
+precedence = "closest"
+SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors"]
+SPDX-License-Identifier = "CC-BY-SA-4.0"
+
+# colophon: end

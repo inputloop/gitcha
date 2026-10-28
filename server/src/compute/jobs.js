@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // The job queue and the runner registry. The Gitcha server never runs user
 // code: runners (gitcha-runner, normally on separate alphaOS VMs) register
 // with a registration token, long-poll for jobs, run them in an isolation
