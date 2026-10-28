@@ -99,3 +99,38 @@ test('support tickets and the ring page', async () => {
   assert.equal(ring.status, 200);
   assert.match(ring.text, /The Gitcha ring/);
 });
+
+test('the sign-up form checks the password and email confirmations', async () => {
+  const anon = browser('x=1');
+  const base = { username: 'erin', password: 'a quiet harbour light', confirm: 'a quiet harbour light' };
+  const pw = await anon.post('/register', { ...base, confirm: 'something else' });
+  assert.equal(pw.status, 400);
+  assert.match(pw.text, /The passwords do not match/);
+  const em = await anon.post('/register', { ...base, email: 'erin@example.org', email_confirm: 'erin@example.net' });
+  assert.equal(em.status, 400);
+  assert.match(em.text, /The email addresses do not match/);
+  assert.match(em.text, /value="erin@example\.org"/, 'the email is kept for another try; the passwords are not');
+  assert.doesNotMatch(em.text, /a quiet harbour light/);
+  const good = await anon.post('/register', { ...base, email: 'erin@example.org', email_confirm: 'erin@example.org' });
+  assert.equal(good.status, 303);
+  assert.equal(good.location, '/setup-2fa');
+  assert.equal(srv.auth.emailOf(srv.store.userByName('erin')), 'erin@example.org');
+});
+
+test('the account page answers, and its forms work: email, check toggles, recovery codes', async () => {
+  const tok = srv.auth.createSession(srv.store.userByName('bob'), { kind: 'web', name: 'acct', ip: '127.0.0.1' }).token;
+  const B = browser(`gitcha_sid=${tok}`);
+  const page = await B.get('/account');
+  assert.equal(page.status, 200);
+  assert.match(page.text, /Account security/);
+  assert.match(page.text, /No email on file/);
+  const bad = await B.post('/account/email', { email: 'bob@example.org', email_confirm: 'bob@example.com' });
+  assert.equal(bad.status, 400);
+  assert.match(bad.text, /The email addresses do not match/);
+  const ok = await B.post('/account/email', { email: 'bob@example.org', email_confirm: 'bob@example.org' });
+  assert.equal(ok.location, '/account?msg=email_saved');
+  assert.match((await B.get('/account?msg=email_saved')).text, /On file: <strong>bob@example\.org<\/strong>/);
+  assert.equal((await B.post('/account/checks', { interval: 'on', sensitive: 'on' })).location, '/account?msg=checks_saved');
+  assert.equal(srv.auth.checkSettings(srv.store.userByName('bob')).new_network, false);
+  assert.match((await B.post('/account/recovery-codes', {})).text, /recovery codes/i);
+});

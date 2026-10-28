@@ -18,6 +18,7 @@ const NOTICES = {
   activated: 'Your account is active. Sign in with your password and authenticator code.',
   signed_out: 'You have been signed out.',
   checks_saved: 'Two-factor check settings saved.',
+  email_saved: 'Email saved.',
   revoked: 'Device signed out.',
   team_created: 'Team created. Add members below.',
   member_saved: 'Team member saved.',
@@ -94,12 +95,11 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
   router.post('/register', async (ctx) => {
     const f = await form(ctx);
     try {
-      if (f.password !== f.confirm) throw new HttpError(400, 'mismatch', 'The passwords do not match.');
-      const { enrollToken } = auth.register({ username: f.username, password: f.password, ip: ctx.ip });
+      const { enrollToken } = auth.register({ username: f.username, password: f.password, confirm: f.confirm ?? '', email: f.email, emailConfirm: f.email_confirm, ip: ctx.ip });
       redirect(ctx.res, '/setup-2fa', { 'Set-Cookie': [...ctx.outCookies, cookie(ENROLL, enrollToken, { secure, maxAge: 30 * 60_000 })] });
     } catch (err) {
       if (!(err instanceof HttpError)) throw err;
-      page(ctx, 'Create account', V.registerPage({ csrf: csrfToken(ctx), error: err.message, username: f.username }), { status: err.status });
+      page(ctx, 'Create account', V.registerPage({ csrf: csrfToken(ctx), error: err.message, username: f.username, email: f.email, emailConfirm: f.email_confirm }), { status: err.status });
     }
   });
 
@@ -353,14 +353,13 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     redirect(ctx.res, (await billing.portal(a.user, { owner: f.owner })).url);
   });
 
-  return { page, form, csrfToken, current, requireWeb, requireFresh, NOTICES };
 
   // ---- account security -----------------------------------------------------
   const accountView = (ctx, a, { notice, error, status = 200 } = {}) => {
     const sessions = auth.store.sessionsForUser(a.user.id).filter((s) => s.kind !== 'enroll').sort((x, y) => y.lastSeen - x.lastSeen);
     const state = auth.mfaState(a);
     page(ctx, 'Account', V.accountPage({
-      csrf: csrfToken(ctx), user: a.user, checks: auth.checkSettings(a.user), sessions, currentHash: a.hash,
+      csrf: csrfToken(ctx), user: a.user, email: auth.emailOf(a.user), checks: auth.checkSettings(a.user), sessions, currentHash: a.hash,
       audit: auth.store.auditFor(a.user.id, 15), notice, error, recoveryLeft: a.user.recoveryCodes.length,
       mfaState: { verifiedAt: a.session.mfaAt, nextCheckAt: state.nextCheckAt },
     }), { user: a.user, status, wide: true });
@@ -384,6 +383,19 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     }
   });
 
+  router.post('/account/email', async (ctx) => {
+    const f = await form(ctx);
+    const a = requireWeb(ctx);
+    if (!a || !requireFresh(ctx, a, '/account?msg=confirm_again', true)) return;
+    try {
+      auth.updateEmail(a.user, { email: f.email, emailConfirm: f.email_confirm }, ctx.ip);
+      redirect(ctx.res, '/account?msg=email_saved');
+    } catch (err) {
+      if (!(err instanceof HttpError)) throw err;
+      accountView(ctx, a, { error: err.message, status: err.status });
+    }
+  });
+
   router.post('/account/recovery-codes', async (ctx) => {
     await form(ctx);
     const a = requireWeb(ctx);
@@ -399,6 +411,8 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     if (target) auth.revoke(target.hash, a.user.username, ctx.ip);
     redirect(ctx.res, '/account?msg=revoked');
   });
+
+  return { page, form, csrfToken, current, requireWeb, requireFresh, NOTICES };
 }
 
 function browserName(ua = '') {

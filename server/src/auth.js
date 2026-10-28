@@ -54,7 +54,7 @@ export class AuthService {
 
   // ---- registration & enrollment -----------------------------------------
 
-  register({ username, password, ip }) {
+  register({ username, password, confirm, email, emailConfirm, ip }) {
     if (!this.config.openRegistration && this.store.userCount() > 0) {
       throw new HttpError(403, 'registration_closed', 'Registration is closed on this server.');
     }
@@ -69,6 +69,8 @@ export class AuthService {
     if (password.toLowerCase().includes(username.toLowerCase())) {
       throw new HttpError(400, 'weak_password', 'Your password must not contain your username.');
     }
+    if (confirm !== undefined && confirm !== password) throw new HttpError(400, 'password_mismatch', 'The passwords do not match.');
+    const sealedEmail = this.sealEmail(email, emailConfirm);
     if (this.store.team(username.toLowerCase()) || this.store.data.agents?.[username.toLowerCase()]) throw new HttpError(409, 'username_taken', 'That name belongs to a team or an agent.');
     const existing = this.store.userByName(username);
     if (existing && existing.status === 'active') throw new HttpError(409, 'username_taken', 'That username is taken.');
@@ -81,6 +83,8 @@ export class AuthService {
       // scrypt hash, then sealed with AES-256-GCM: the DB alone is useless to an attacker.
       passwordHash: this.box.seal(hashPassword(password)),
       totpSecret: this.box.seal(secret),
+      // Optional; encrypted like the other personal secrets.
+      email: sealedEmail,
       totpLastStep: -1,
       status: 'pending_mfa',
       role: this.store.userCount() === 0 || existing?.role === 'admin' ? 'admin' : 'user',
@@ -93,6 +97,27 @@ export class AuthService {
       d.sessions[sha256(token)] = { userId: user.id, kind: 'enroll', createdAt: now, lastSeen: now, mfaAt: null, expiresAt: now + ENROLL_TTL };
     });
     return { user, enrollToken: token, secret, otpauth: this.otpauthFor(user, secret) };
+  }
+
+  /** Check an optional email and its confirmation; returns it sealed, or null when none was given. */
+  sealEmail(email, emailConfirm) {
+    const e = String(email ?? '').trim();
+    const c = String(emailConfirm ?? '').trim();
+    if (!e && !c) return null;
+    if (e.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new HttpError(400, 'bad_email', 'That email address does not look right.');
+    if (e.toLowerCase() !== c.toLowerCase()) throw new HttpError(400, 'email_mismatch', 'The email addresses do not match.');
+    return this.box.seal(e);
+  }
+
+  emailOf(user) { return user.email ? this.box.open(user.email) : null; }
+
+  /** Add, change or (with both fields empty) remove the account's email. */
+  updateEmail(user, { email, emailConfirm }, ip) {
+    const sealed = this.sealEmail(email, emailConfirm);
+    this.store.tx((d) => {
+      d.users[user.id].email = sealed;
+      this.store.audit({ userId: user.id, event: sealed ? 'account.email_changed' : 'account.email_removed', ip });
+    });
   }
 
   otpauthFor(user, secret = this.box.open(user.totpSecret)) {

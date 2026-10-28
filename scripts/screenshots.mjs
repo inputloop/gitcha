@@ -70,6 +70,8 @@ await page.goto(`${URL_}/register`);
 await page.fill('input[name=username]', USER);
 await page.fill('input[name=password]', PASSWORD);
 await page.fill('input[name=confirm]', PASSWORD);
+await page.fill('input[name=email]', 'alice@example.org');
+await page.fill('input[name=email_confirm]', 'alice@example.org');
 await shot('02-register');
 await page.click('main button.btn');
 

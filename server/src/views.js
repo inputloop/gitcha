@@ -63,7 +63,7 @@ export const landing = () => h`
   <div class="card"><h3>📦 Integrity-checked</h3><p>Every tarball is pinned by SHA-256, versions are immutable, and installs are verified before extraction.</p></div>
 </section>`;
 
-export const registerPage = ({ csrf, error, username = '' }) => h`
+export const registerPage = ({ csrf, error, username = '', email = '', emailConfirm = '' }) => h`
 <div class="auth-card">
   <ol class="steps"><li class="active">Account</li><li>Authenticator</li><li>Recovery codes</li></ol>
   <h1>Create your account</h1>
@@ -74,6 +74,9 @@ export const registerPage = ({ csrf, error, username = '' }) => h`
     <label>Password <input type="password" name="password" autocomplete="new-password" required minlength="10"></label>
     <label>Confirm password <input type="password" name="confirm" autocomplete="new-password" required minlength="10"></label>
     <p class="hint">At least 10 characters. Passwords are hashed with scrypt and then encrypted (AES-256-GCM) before they are stored.</p>
+    <label>Email <span class="muted">(optional)</span> <input type="email" name="email" value="${email}" autocomplete="email" maxlength="254"></label>
+    <label>Confirm email <input type="email" name="email_confirm" value="${emailConfirm}" autocomplete="email" maxlength="254"></label>
+    <p class="hint">Only if you want one on file. It is encrypted before it is stored and never shown to other people.</p>
     <button class="btn block">Continue to two-factor setup →</button>
   </form>
   <p class="muted center">Already have an account? <a href="/login">Sign in</a></p>
@@ -220,7 +223,7 @@ const CHECK_LABELS = {
 
 const hours = (ms) => (ms % 3600000 === 0 ? `${ms / 3600000} hours` : `${Math.round(ms / 60000)} minutes`);
 
-export const accountPage = ({ csrf, user, checks, sessions, currentHash, audit, notice, error, recoveryLeft, mfaState }) => h`
+export const accountPage = ({ csrf, user, email, checks, sessions, currentHash, audit, notice, error, recoveryLeft, mfaState }) => h`
 <div class="page-head"><h1>Account security</h1><span class="badge ok">2FA enabled</span></div>
 ${alert(notice, 'info')}${alert(error)}
 <div class="account-grid">
@@ -241,6 +244,17 @@ ${alert(notice, 'info')}${alert(error)}
       <button class="btn">Save check settings</button>
     </form>
     <p class="small muted">This browser last verified ${ago(mfaState.verifiedAt)}${mfaState.nextCheckAt ? h`; next check ${ago(mfaState.nextCheckAt)}` : ''}.</p>
+  </section>
+  <section class="card">
+    <h2>Email</h2>
+    <p>${email ? h`On file: <strong>${email}</strong>` : h`<span class="muted">No email on file. It is optional.</span>`}</p>
+    <form method="post" action="/account/email">
+      ${csrfField(csrf)}
+      <label>Email <input type="email" name="email" autocomplete="email" maxlength="254"></label>
+      <label>Confirm email <input type="email" name="email_confirm" autocomplete="email" maxlength="254"></label>
+      <p class="hint">Leave both empty to remove it. Saving needs a fresh code.</p>
+      <button class="btn ghost">Save email</button>
+    </form>
   </section>
   <section class="card">
     <h2>Recovery codes</h2>
@@ -264,7 +278,7 @@ ${alert(notice, 'info')}${alert(error)}
 <section class="card">
   <h2>Recent security activity</h2>
   <table class="table compact"><tbody>
-  ${audit.map((e) => h`<tr><td><code>${e.event}</code></td><td>${[e.package && `${e.package}@${e.version}`, e.name, e.method].filter(Boolean).join(' · ')}</td><td class="muted">${e.ip ?? ''}</td><td class="muted">${ago(e.at)}</td></tr>`)}
+  ${audit.map((e) => h`<tr><td><code>${e.event}</code></td><td>${[e.package && (e.version ? `${e.package}@${e.version}` : e.package), e.to && `to ${e.to}`, e.name, e.method].filter(Boolean).join(' · ')}</td><td class="muted">${e.ip ?? ''}</td><td class="muted">${ago(e.at)}</td></tr>`)}
   </tbody></table>
 </section>`;
 

@@ -13,6 +13,7 @@ Gitcha server**.
 |---|---|---|
 | Account password | server `db.json` | scrypt (N=2¹⁵, r=8, p=1, 16-byte salt), **then encrypted** with AES-256-GCM using the server key. The plaintext password is never stored anywhere. |
 | TOTP (authenticator) secret | server `db.json` | AES-256-GCM with the server key. |
+| Email address (optional) | server `db.json` | AES-256-GCM with the server key. Shown only to its owner; changing it needs a fresh code. |
 | Recovery codes | server `db.json` | SHA-256 hashes; each is deleted when used. |
 | Web sessions / device tokens | server `db.json` | Only SHA-256 hashes of the 256-bit tokens. |
 | Server key | `$GITCHA_DATA_DIR/secret.key` (0600) or `GITCHA_SECRET_KEY` | Keep it **separate from backups of `db.json`**. Losing it locks every account. |
@@ -24,7 +25,8 @@ Gitcha server**.
 
 ## Authentication flow
 
-1. **Register**: username + password, then mandatory TOTP enrollment (QR code
+1. **Register**: username, password typed twice, an optional email typed
+   twice, then mandatory TOTP enrollment (QR code
    for Google Authenticator / Authy / Aegis / 1Password). The account cannot
    sign in until a valid code confirms the authenticator works. Ten one-time
    recovery codes are shown once.

@@ -341,8 +341,11 @@ real MCP tool calls and responses. Regenerate them with
 
 ### 1. Create an account (2FA required)
 
-Choose a username and password. Passwords must be at least 10 characters and
-must not contain your username.
+Choose a username and a password, and type the password a second time to
+confirm it. Passwords must be at least 10 characters and must not contain your
+username. An email address is optional; if you give one, type it twice too.
+It is encrypted before it is stored, never shown to other people, and can be
+added, changed or removed later on the Account page (with a fresh code).
 
 ![Registration form](docs/screenshots/02-register.png)
 

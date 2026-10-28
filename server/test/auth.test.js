@@ -37,6 +37,27 @@ test('passwords and TOTP secrets are never stored in plaintext', async () => {
   } finally { await srv.close(); }
 });
 
+test('registration: confirm password; optional email with confirmation, stored encrypted', async () => {
+  const srv = await startServer();
+  try {
+    let n = 0;
+    const reg = (o) => srv.auth.register({ password: 'a long passphrase', confirm: 'a long passphrase', ip: `10.0.0.${++n}`, ...o });
+    assert.throws(() => reg({ username: 'dan', confirm: 'a long passphrasE' }), /passwords do not match/);
+    assert.throws(() => reg({ username: 'dan', email: 'dan@example.org', emailConfirm: 'dan@example.com' }), /email addresses do not match/);
+    assert.throws(() => reg({ username: 'dan', email: 'dan@example.org' }), /email addresses do not match/, 'the confirmation is required');
+    assert.throws(() => reg({ username: 'dan', email: 'not-an-email', emailConfirm: 'not-an-email' }), /does not look right/);
+    assert.equal(reg({ username: 'nomail' }).user.email, null, 'email is optional');
+    const u = reg({ username: 'dan', email: ' Dan@Example.org', emailConfirm: 'dan@example.org ' }).user;
+    assert.match(u.email, /^v1\./);
+    assert.ok(!fs.readFileSync(path.join(srv.config.dataDir, 'db.json'), 'utf8').includes('Dan@Example.org'), 'email is encrypted at rest');
+    assert.equal(srv.auth.emailOf(u), 'Dan@Example.org');
+    srv.auth.updateEmail(u, { email: 'dan@new.example', emailConfirm: 'dan@new.example' }, 'x');
+    assert.equal(srv.auth.emailOf(srv.store.userByName('dan')), 'dan@new.example');
+    srv.auth.updateEmail(u, { email: '', emailConfirm: '' }, 'x');
+    assert.equal(srv.auth.emailOf(srv.store.userByName('dan')), null, 'both empty removes it');
+  } finally { await srv.close(); }
+});
+
 test('login needs password then TOTP; codes cannot be replayed', async () => {
   const srv = await startServer();
   try {
