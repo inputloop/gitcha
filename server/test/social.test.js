@@ -133,6 +133,12 @@ test('git over HTTP: push, agent attribution, verified signatures, Second Reader
   assert.equal(p.pushes[0].commits[0].verified, true, 'signature checked against the registered key');
   assert.equal(p.pushes[0].commits[0].signer, 'agent:ada');
 
+  // A byline naming someone else's agent earns that agent nothing.
+  await commit(dir, 'spoof.txt', 'chore: spoof\n\nBix (for bob, claude-sonnet-5-5)');
+  await git(dir, ['push', '-q', remote, 'main']);
+  p = ok(await gql(ta, '{ project(owner:"alice", name:"demo") { pushes } }')).project;
+  assert.equal(p.pushes[0].commits[0].agent, null, 'alice cannot credit bob\'s agent');
+
   // Without a token: no push.
   await assert.rejects(git(dir, ['push', '-q', `http://127.0.0.1:${port}/git/alice/demo.git`, 'main']), /Authentication failed|401|could not read/);
 

@@ -195,9 +195,13 @@ export class ProjectService {
     let commits = [];
     try { commits = this.verifySignatures(p, this.newCommits(p, before, after)); } catch { commits = []; }
     const pushedBy = principal?.kind === 'agent' ? principal.agent : null;
+    // A byline only counts for an agent of the person pushing, so nobody can
+    // credit (or pair for a Second Reader) someone else's agent.
+    const pusherId = principal?.kind === 'agent' ? principal.owner?.id : principal?.user?.id;
     const agents = new Map();
     for (const c of commits) {
-      const byAgent = this.agents.fromByline(parseByline(c.message));
+      const named = this.agents.fromByline(parseByline(c.message));
+      const byAgent = named && pusherId && named.owner === pusherId ? named : null;
       const a = byAgent ?? pushedBy;
       c.agent = a?.handle ?? null;
       if (a) agents.set(a.handle, a);
