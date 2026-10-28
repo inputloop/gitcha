@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Small HTTP helpers: routing, bodies, cookies, security headers.
+import net from 'node:net';
 import { HttpError } from './errors.js';
 
 export class Router {
@@ -129,10 +130,121 @@ export function redirect(res, location, headers = {}) {
   send(res, 303, '', { Location: location, ...headers });
 }
 
-export function clientIp(req, trustProxy) {
-  if (trustProxy) {
-    const fwd = req.headers['x-forwarded-for'];
-    if (fwd) return String(fwd).split(',')[0].trim();
+// ---- addresses --------------------------------------------------------------------
+
+/**
+ * Parse an IPv4 or IPv6 address (optionally `[v6]:port`, `v4:port` or with a `%zone`) to 16 bytes, v4 as its
+ * IPv4-mapped form. Returns { bytes, v4, text } or null when it is not an address.
+ */
+export function parseIp(input) {
+  let t = String(input ?? '').trim();
+  if (!t || t.length > 64) return null;
+  const bracket = /^\[([^\]]+)\](?::\d{1,5})?$/.exec(t);
+  if (bracket) t = bracket[1];
+  else if (/^\d{1,3}(\.\d{1,3}){3}:\d{1,5}$/.test(t)) t = t.slice(0, t.lastIndexOf(':'));
+  t = t.replace(/%.*$/, '');
+  const bytes = new Uint8Array(16);
+  if (net.isIPv4(t)) {
+    bytes[10] = 0xff; bytes[11] = 0xff;
+    t.split('.').forEach((o, i) => { bytes[12 + i] = Number(o); });
+    return { bytes, v4: true, text: t.split('.').map(Number).join('.') };
   }
-  return req.socket.remoteAddress ?? 'unknown';
+  if (!net.isIPv6(t)) return null;
+  const all = v6Groups(t);
+  all.forEach((g, i) => { bytes[i * 2] = g >> 8; bytes[i * 2 + 1] = g & 0xff; });
+  const mapped = bytes.slice(0, 10).every((b) => b === 0) && bytes[10] === 0xff && bytes[11] === 0xff;
+  if (mapped) return { bytes, v4: true, text: Array.from(bytes.slice(12)).join('.') };
+  return { bytes, v4: false, text: v6Text(all) };
+}
+
+/** The eight 16-bit groups of an IPv6 address that net.isIPv6 has already accepted. */
+function v6Groups(t) {
+  let tail = [];
+  if (t.includes('.')) { // an IPv4 tail, as in ::ffff:1.2.3.4
+    const cut = t.lastIndexOf(':');
+    const o = t.slice(cut + 1).split('.').map(Number);
+    tail = [(o[0] << 8) | o[1], (o[2] << 8) | o[3]];
+    t = t.slice(0, cut + 1);
+    if (!t.endsWith('::')) t = t.slice(0, -1);
+  }
+  const part = (h) => (h ? h.split(':').map((g) => parseInt(g, 16)) : []);
+  const halves = t.split('::');
+  if (halves.length === 1) return part(halves[0]).concat(tail);
+  const left = part(halves[0]);
+  const right = part(halves[1]).concat(tail);
+  return [...left, ...new Array(8 - left.length - right.length).fill(0), ...right];
+}
+
+/** RFC 5952 text: lowercase, no leading zeros, the longest run of zero groups (two or more) as "::". */
+function v6Text(all) {
+  const hex = (g) => g.toString(16);
+  let best = { at: -1, len: 0 };
+  for (let i = 0; i < 8;) {
+    if (all[i]) { i++; continue; }
+    let j = i;
+    while (j < 8 && !all[j]) j++;
+    if (j - i > best.len) best = { at: i, len: j - i };
+    i = j;
+  }
+  if (best.len < 2) return all.map(hex).join(':');
+  return `${all.slice(0, best.at).map(hex).join(':')}::${all.slice(best.at + best.len).map(hex).join(':')}`;
+}
+
+/** Does `ip` (a parsed address) fall inside `net` ({ bytes, bits } over the 128-bit space)? */
+function inNet(ip, { bytes, bits }) {
+  for (let i = 0; i < 16 && bits > 0; i++, bits -= 8) {
+    const mask = bits >= 8 ? 0xff : (0xff << (8 - bits)) & 0xff;
+    if ((ip.bytes[i] & mask) !== (bytes[i] & mask)) return false;
+  }
+  return true;
+}
+
+/**
+ * Read GITCHA_TRUSTED_PROXIES: unset means one proxy in front (a hop count of 1); a whole number is a hop count;
+ * anything else is a comma list of addresses or CIDR ranges, which are the proxies we trust.
+ */
+export function parseTrustedProxies(value) {
+  const v = String(value ?? '').trim();
+  if (!v) return { hops: 1 };
+  if (/^\d+$/.test(v)) {
+    const hops = Number(v);
+    if (hops < 1 || hops > 10) throw new Error(`GITCHA_TRUSTED_PROXIES: a hop count must be 1 to 10, got "${v}"`);
+    return { hops };
+  }
+  const nets = v.split(',').map((s) => s.trim()).filter(Boolean).map((entry) => {
+    const [addr, len] = entry.split('/');
+    const ip = parseIp(addr);
+    if (!ip || addr.includes('[') || (len !== undefined && !/^\d{1,3}$/.test(len))) throw new Error(`GITCHA_TRUSTED_PROXIES: "${entry}" is not an address or range (use 10.0.0.0/8, 2001:db8::/32 or a hop count)`);
+    const max = ip.v4 ? 32 : 128;
+    const n = len === undefined ? max : Number(len);
+    if (n > max) throw new Error(`GITCHA_TRUSTED_PROXIES: "${entry}" has a prefix longer than ${max} bits`);
+    return { bytes: ip.bytes, bits: ip.v4 ? n + 96 : n };
+  });
+  return { nets };
+}
+
+/**
+ * The client's address. Without a proxy it is the socket's peer. With `trustProxy` on, the chain is the
+ * X-Forwarded-For entries followed by the peer; a hop count takes the entry that many hops from the right (so
+ * one proxy: the entry it appended), and a list walks from the right past trusted proxies. Anything a client
+ * typed to the left of that point is never used, and an entry that is not an address falls back to the peer.
+ */
+export function clientIp(req, trustProxy, trusted = { hops: 1 }) {
+  const peer = req.socket.remoteAddress ?? 'unknown';
+  if (!trustProxy) return peer;
+  const header = req.headers['x-forwarded-for'];
+  if (!header) return peer;
+  const entries = String(header).split(',').map((s) => s.trim()).filter(Boolean).slice(-20);
+  const chain = [...entries, peer];
+  let pick;
+  if (trusted.nets) {
+    const isTrusted = (e) => { const ip = parseIp(e); return Boolean(ip) && trusted.nets.some((n) => inNet(ip, n)); };
+    if (!isTrusted(peer)) return peer; // a direct client: its header is its own business
+    let i = chain.length - 1;
+    while (i > 0 && isTrusted(chain[i])) i--;
+    pick = chain[i];
+  } else {
+    pick = chain[Math.max(0, chain.length - 1 - trusted.hops)];
+  }
+  return parseIp(pick)?.text ?? peer;
 }

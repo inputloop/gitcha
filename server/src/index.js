@@ -6,7 +6,7 @@ import { createApp } from './app.js';
 import { installLastResort } from './http.js';
 
 installLastResort();
-const config = loadConfig(process.env, { trustProxy: /^(1|true)$/i.test(process.env.GITCHA_TRUST_PROXY ?? '') });
+const config = loadConfig(process.env);
 const { server, version } = createApp(config);
 
 server.listen(config.port, config.host, () => {
@@ -18,6 +18,8 @@ server.listen(config.port, config.host, () => {
   console.log(`  2FA re-check   every ${h(config.policy.stepUpInterval)}; sensitive actions within ${h(config.policy.sensitiveWindow)}`);
   console.log(`  locked checks  ${config.policy.lockedChecks.join(', ') || '(none: users may toggle follow-up checks)'}`);
   console.log(`  registration   ${config.openRegistration ? 'open' : 'closed'}`);
+  const via = config.trustedProxies.hops ? `${config.trustedProxies.hops} proxy hop(s)` : 'the listed proxies';
+  console.log(`  client address ${config.trustProxy ? `from X-Forwarded-For through ${via}` : 'the socket (X-Forwarded-For ignored; set GITCHA_TRUST_PROXY=true behind your own proxy)'}`);
 });
 
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => server.close(() => process.exit(0)));

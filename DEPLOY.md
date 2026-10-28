@@ -81,6 +81,11 @@ certificates. Caddy asks `GET /api/v1/hosting/tls-allowed?domain=NAME` first, an
 yes only for its own name, sites' subdomains on a hosting domain, and custom domains whose DNS
 check passed.
 
+`gitcha.env` sets `GITCHA_TRUST_PROXY=true`, which is right for this Caddyfile: Caddy replaces
+`X-Forwarded-For` with the client's address and Gitcha trusts one proxy hop. With nginx instead,
+set `proxy_set_header X-Forwarded-For $remote_addr;` (the README has the whole block); if another
+proxy sits in front of yours, say how many with `GITCHA_TRUSTED_PROXIES`.
+
 DNS records to create:
 
 | Record | Points at | Why |

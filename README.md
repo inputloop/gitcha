@@ -118,9 +118,10 @@ server; what remains is how the machines around it are set up.
   `127.0.0.1:4873`; only Caddy (or your proxy) is open, on 443 and 80.
   Firewall everything else, Gitcha's own port included.
 - [ ] **Proxy settings match reality.** Set `GITCHA_PUBLIC_URL=https://…`
-  and `GITCHA_TRUST_PROXY=true` only when a proxy you control is in front;
-  otherwise clients could fake their address past the rate limits and the
-  new-network check.
+  and `GITCHA_TRUST_PROXY=true` only when a proxy you control is in front,
+  and make that proxy set `X-Forwarded-For` (snippets under "Production
+  checklist" below); otherwise clients could fake their address past the
+  rate limits and the new-network check.
 - [ ] **Hosting domains are separate registrable domains** from the UI's
   (`pages.example.net`, not `pages.gitcha.example.org`), so a hosted site
   cannot set cookies for Gitcha.
@@ -975,7 +976,8 @@ All settings are environment variables. In the Debian package they live in
 | `GITCHA_LOCKED_CHECKS` | *(empty)* | Comma list of `interval`, `new_network`, `sensitive` that users can't turn off |
 | `GITCHA_SESSION_MAX_AGE` / `GITCHA_SESSION_IDLE` | `30d` / `7d` | Hard and idle lifetime of sessions and device tokens |
 | `GITCHA_MAX_PACKAGE_BYTES` / `GITCHA_MAX_MEDIA_BYTES` | 25 MiB / 50 MiB | Maximum package tarball and media upload |
-| `GITCHA_TRUST_PROXY` | `false` | Use `X-Forwarded-For` for client IPs (only behind your own proxy) |
+| `GITCHA_TRUST_PROXY` | `false` | Use `X-Forwarded-For` for client IPs (only behind your own proxy; `true`, `yes`, `on` or `1`) |
+| `GITCHA_TRUSTED_PROXIES` | `1` | With the above: how many proxies are in front (a number), or the proxies' addresses (`10.0.0.0/8,203.0.113.7`) |
 
 **Git, hosting and compute**
 
@@ -1012,6 +1014,29 @@ repository.
 `GITCHA_PUBLIC_URL=https://…` and `GITCHA_TRUST_PROXY=true`, back up
 `GITCHA_DATA_DIR`, and store `secret.key` separately from database backups.
 If you lose the key, no one can sign in.
+
+With `GITCHA_TRUST_PROXY=true` Gitcha takes the client's address from
+`X-Forwarded-For`: the entry the nearest trusted proxy added, never anything
+the client typed to the left of it. The default trusts one proxy (the last
+entry); `GITCHA_TRUSTED_PROXIES=2` counts two (a CDN, then yours), and
+`GITCHA_TRUSTED_PROXIES=10.0.0.0/8,203.0.113.7` names the proxies by address.
+Anything that is not an address is ignored. Make your proxy put the client's
+address last:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:4873;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;   # not the client's own header
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+```caddy
+gitcha.example.org {
+    reverse_proxy 127.0.0.1:4873   # Caddy replaces X-Forwarded-For by default
+}
+```
 
 The JSON-file store is built for small and medium communities. The `Store`
 class in `server/src/store.js` is the only place that touches the database

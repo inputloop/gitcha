@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { parseTrustedProxies } from './http.js';
 
 const HOUR = 3600_000;
 const MINUTE = 60_000;
@@ -43,6 +44,9 @@ export function loadConfig(env = process.env, overrides = {}) {
     port: Number(env.GITCHA_PORT ?? 4873),
     publicUrl,
     secureCookies: publicUrl.startsWith('https://'),
+    // Behind your own reverse proxy only. GITCHA_TRUSTED_PROXIES says which proxies (a hop count, default 1, or addresses).
+    trustProxy: bool(env.GITCHA_TRUST_PROXY, false),
+    trustedProxies: parseTrustedProxies(env.GITCHA_TRUSTED_PROXIES),
     dataDir,
     secretKey: loadSecretKey(dataDir, env.GITCHA_SECRET_KEY),
     issuer: env.GITCHA_ISSUER ?? 'Gitcha',

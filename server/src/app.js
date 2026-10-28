@@ -106,7 +106,7 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
       const url = requestUrl(req);
       isApi = url.pathname.startsWith('/api/');
       const ctx = {
-        req, res, url, ip: clientIp(req, config.trustProxy), cookies: parseCookies(req.headers.cookie), params: {}, outCookies: [],
+        req, res, url, ip: clientIp(req, config.trustProxy, config.trustedProxies), cookies: parseCookies(req.headers.cookie), params: {}, outCookies: [],
       };
       ctx.setCookie = (c) => ctx.outCookies.push(c);
       const writeHead = res.writeHead.bind(res);
