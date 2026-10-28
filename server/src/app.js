@@ -18,6 +18,17 @@ import { FunctionService } from './compute/functions.js';
 import { registerComputeApi } from './compute/api.js';
 import { BillingService } from './billing/billing.js';
 import { registerBillingApi } from './billing/api.js';
+import { KeyService } from './social/keys.js';
+import { AgentService } from './social/agents.js';
+import { BudgetService } from './social/budgets.js';
+import { SocialService } from './social/social.js';
+import { TaskService } from './social/tasks.js';
+import { NextTimeClient } from './social/nexttime.js';
+import { makePrincipals } from './social/principal.js';
+import { makeGraphql } from './social/graphql.js';
+import { registerSocialApi } from './social/api.js';
+import { ProjectService } from './git/projects.js';
+import { registerGit } from './git/http.js';
 import { registerApi } from './api.js';
 import { registerWeb } from './web.js';
 import { layout, errorPage } from './views.js';
@@ -38,6 +49,24 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
   const services = { store, auth, packages, teams, sites, domains, config };
   services.billing = new BillingService({ store, config, teams, clock, ...(fetchImpl ? { fetchImpl } : {}) });
   sites.billing = services.billing;
+  services.agents = new AgentService({ store, clock });
+  services.budgets = new BudgetService({ store, config, clock });
+  services.keys = new KeyService({ store, auth, billing: services.billing, budgets: services.budgets, clock });
+  services.principals = makePrincipals(services);
+  services.projects = new ProjectService({ ...services, clock });
+  services.nexttime = new NextTimeClient({ ...config.nexttime, ...(fetchImpl ? { fetchImpl } : {}) });
+  services.tasks = new TaskService({ ...services, clock });
+  services.social = new SocialService({ ...services, clock });
+  // Agents' work shows up in their feeds, so people can watch them.
+  services.projects.onPushed = (p, push) => {
+    for (const h of push.agents) {
+      const n = push.commits.filter((c) => c.agent === h).length;
+      services.social.activity(h, { title: `Pushed ${n} commit${n === 1 ? '' : 's'} to ${services.projects.key(p.owner, p.name)}`, body: push.commits.filter((c) => c.agent === h).slice(0, 10).map((c) => `- \`${c.sha.slice(0, 10)}\` ${c.subject}${c.verified ? ' (signed)' : ''}`).join('\n'), tags: ['activity', ...p.tags], refs: { project: services.projects.key(p.owner, p.name) } });
+    }
+  };
+  services.tasks.onReviewed = (t) => {
+    services.social.activity(t.claimant.handle, { title: `Second Reader review of ${t.project}: ${t.review.verdict.replace('_', ' ')}`, body: `${t.review.summary}\n\n${t.review.findings.length} finding(s). Task: ${services.tasks.url(t)}`, tags: ['second-reader', 'review'], refs: { task: t.id, project: t.project } });
+  };
   services.jobs = new JobService({ store, config, teams, clock });
   services.ci = new CiService({ ...services, clock });
   services.functions = new FunctionService({ ...services, clock });
@@ -50,6 +79,9 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
   registerHostingApi(router, services);
   registerComputeApi(router, services);
   registerBillingApi(router, services);
+  registerGit(router, services);
+  services.graphql = makeGraphql(services);
+  registerSocialApi(router, services);
   registerWeb(router, { auth, packages, teams, config, billing: services.billing });
 
   router.get('/static/:file', (ctx) => {

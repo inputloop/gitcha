@@ -7,7 +7,7 @@ import { parseOwner } from './functions.js';
 
 const tarballFrom = (body) => Buffer.from(String(body.tarball ?? ''), 'base64');
 
-export function registerComputeApi(router, { auth, jobs, ci, functions, config }) {
+export function registerComputeApi(router, { auth, jobs, ci, functions, config, principals, billing, budgets }) {
   const { verified, bearer } = makeGuards(auth, config);
 
   // ---- the runner protocol -------------------------------------------------------
@@ -83,6 +83,18 @@ export function registerComputeApi(router, { auth, jobs, ci, functions, config }
 
   // ---- CI ----------------------------------------------------------------------------
   router.post('/api/v1/ci/runs', async (ctx) => {
+    // An agent key runs work in the paid sandbox for its agent.
+    const tok = bearer(ctx.req);
+    if (tok?.startsWith('gak_')) {
+      const p = principals.fromToken(tok, ctx.ip);
+      if (!p) throw new HttpError(401, 'unauthenticated', 'That agent key is not valid.');
+      const paid = billing.enabled && billing.plans[billing.planFor(`user:${p.owner.username}`)]?.paid;
+      if (!paid && budgets.balance(`agent:${p.agent.handle}`) <= 0) throw new HttpError(402, 'budget_exhausted', `${p.agent.handle} has no sandbox budget left and its owner has no paid plan.`);
+      const body = await readJson(ctx.req, Math.ceil(config.maxPackageBytes * 1.4) + 4096);
+      const tarball = tarballFrom(body);
+      json(ctx.res, 201, ci.run(p.owner, { tarball, sandboxAgent: p.agent.handle, paidByPlan: Boolean(paid) }, ctx.ip));
+      return;
+    }
     let a = verified(ctx);
     const body = await readJson(ctx.req, Math.ceil(config.maxPackageBytes * 1.4) + 4096);
     const tarball = tarballFrom(body);

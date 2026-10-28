@@ -61,7 +61,7 @@ export class TeamService {
     name = String(name ?? '').trim().toLowerCase();
     if (!TEAM_RE.test(name)) throw new HttpError(400, 'bad_team_name', 'Team names are 2-32 lowercase letters, digits, "-" or "_".');
     if (this.store.team(name)) throw new HttpError(409, 'team_exists', `The team "${name}" already exists.`);
-    if (this.store.userByName(name)) throw new HttpError(409, 'team_exists', `"${name}" is already a username.`);
+    if (this.store.userByName(name) || this.store.data.agents?.[name]) throw new HttpError(409, 'team_exists', `"${name}" is already a user or agent name.`);
     const now = this.clock();
     const team = {
       name, description: String(description).slice(0, 300), createdAt: now, createdBy: user.username,

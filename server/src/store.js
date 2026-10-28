@@ -38,6 +38,11 @@ export class Store {
     return Object.values(this.data.users).find((u) => u.username.toLowerCase() === lower) ?? null;
   }
   userCount() { return Object.keys(this.data.users).length; }
+  /** Users, teams and agents share one namespace so none can pose as another. */
+  nameInUse(name) {
+    const n = String(name).toLowerCase();
+    return Boolean(this.userByName(n) || this.data.teams[n] || this.data.agents?.[n]);
+  }
 
   // ---- sessions & device tokens -----------------------------------------
   sessionByHash(hash) { return this.data.sessions[hash] ?? null; }

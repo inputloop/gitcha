@@ -99,6 +99,26 @@ export function loadConfig(env = process.env, overrides = {}) {
       },
       priceIds: { stripe: { pro: env.STRIPE_PRICE_PRO ?? null, team: env.STRIPE_PRICE_TEAM ?? null }, paypal: { pro: env.PAYPAL_PLAN_PRO ?? null, team: env.PAYPAL_PLAN_TEAM ?? null } },
     },
+    git: {
+      // Host name shown in SSH clone URLs (git@HOST:owner/name.git); unset hides SSH URLs.
+      sshHost: env.GITCHA_SSH_HOST ?? null,
+      // The forced command OpenSSH runs for every Gitcha key.
+      shellPath: env.GITCHA_GIT_SHELL ?? '/usr/bin/gitcha-git-shell',
+    },
+    social: {
+      maxMediaBytes: Number(env.GITCHA_MAX_MEDIA_BYTES ?? 50 * 1024 * 1024),
+    },
+    budgets: {
+      awardsFile: env.GITCHA_AWARDS_FILE ?? null,
+    },
+    nexttime: {
+      // Mirror project tasks into a NextTime (Nextcloud "timebank") instance. Off unless all are set.
+      url: env.NEXTTIME_URL ?? null,
+      user: env.NEXTTIME_USER ?? null,
+      appPassword: env.NEXTTIME_APP_PASSWORD ?? null,
+      categoryId: env.NEXTTIME_CATEGORY_ID ? Number(env.NEXTTIME_CATEGORY_ID) : null,
+      hoursBudget: Number(env.NEXTTIME_HOURS ?? 1),
+    },
     ring: {
       name: env.GITCHA_RING_NAME ?? env.GITCHA_ISSUER ?? 'Gitcha',
       description: env.GITCHA_RING_DESCRIPTION ?? '',
@@ -114,5 +134,8 @@ export function loadConfig(env = process.env, overrides = {}) {
     ring: { ...config.ring, ...overrides.ring },
     compute: { ...config.compute, ...overrides.compute },
     billing: { ...config.billing, ...overrides.billing },
+    git: { ...config.git, ...overrides.git },
+    nexttime: { ...config.nexttime, ...overrides.nexttime },
+    social: { ...config.social, ...overrides.social },
   };
 }

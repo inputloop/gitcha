@@ -25,8 +25,8 @@ export function pipelineFromTarball(tarball, opts) {
 }
 
 export class CiService {
-  constructor({ store, config, teams, sites, jobs, billing, clock = Date.now }) {
-    Object.assign(this, { store, config, teams, sites, jobs, billing, clock });
+  constructor({ store, config, teams, sites, jobs, billing, budgets, clock = Date.now }) {
+    Object.assign(this, { store, config, teams, sites, jobs, billing, budgets, clock });
     jobs.onComplete = (job) => this.afterJob(job);
   }
 
@@ -50,7 +50,7 @@ export class CiService {
   }
 
   /** Queue a build. `trigger` is "manual" or "publish:<pkg>@<version>". */
-  run(user, { tarball, team, owner, trigger = 'manual' }, ip) {
+  run(user, { tarball, team, owner, trigger = 'manual', sandboxAgent = null, paidByPlan = true }, ip) {
     if (!Buffer.isBuffer(tarball) || !tarball.length) throw new HttpError(400, 'no_tarball', 'No source tarball was sent.');
     if (tarball.length > this.config.maxPackageBytes) throw new HttpError(413, 'too_large', 'Source is too large.');
     let found;
@@ -63,16 +63,18 @@ export class CiService {
     if (!found) throw new HttpError(400, 'no_pipeline', `No pipeline file found. Add one of: ${PIPELINE_FILES.join(', ')}.`);
     const o = owner ?? this.ownerFor(user, team);
     // Permission to deploy is decided now, by whoever started the build.
+    if (found.pipeline.deploy && sandboxAgent) throw new HttpError(403, 'sandbox_no_deploy', 'Sandbox runs cannot deploy sites; a person deploys.');
     if (found.pipeline.deploy) {
       const site = this.sites.get(found.pipeline.deploy.site);
       if (!this.sites.canManage(user, site)) throw new HttpError(403, 'site_forbidden', `You cannot deploy to "${site.name}".`);
     }
-    this.billing?.check(ownerKey(o), 'build_minutes');
+    if (!sandboxAgent || paidByPlan) this.billing?.check(ownerKey(o), 'build_minutes');
     const sourceSha = sha256(tarball);
     this.store.writeBlob(sourceSha, tarball);
     const job = this.jobs.enqueue({
       kind: 'ci', owner: o, createdBy: user.username, trigger, sourceSha, pipelineFile: found.file,
       spec: { pipeline: found.pipeline }, timeoutMs: found.pipeline.timeoutMs, deploy: found.pipeline.deploy, deployAllowedBy: found.pipeline.deploy ? user.username : null,
+      sandboxAgent, paidByBudget: Boolean(sandboxAgent && !paidByPlan),
     });
     this.store.tx(() => this.store.audit({ userId: user.id, event: 'ci.queued', ip, job: job.id, owner: ownerKey(o), trigger }));
     return this.jobs.view(job);
@@ -95,7 +97,13 @@ export class CiService {
     if (job.kind !== 'ci') return;
     if (job.startedAt) {
       const minutes = Math.max(1, Math.ceil(((job.finishedAt ?? this.clock()) - job.startedAt) / 60_000));
-      this.billing?.record(ownerKey(job.owner), 'build_minutes', minutes);
+      if (job.paidByBudget) {
+        // Sandbox minutes come out of the agent's earned budget (it may go to zero, not below).
+        const bal = this.budgets?.balance(`agent:${job.sandboxAgent}`) ?? 0;
+        if (bal > 0) this.budgets.entry(`agent:${job.sandboxAgent}`, -Math.min(minutes, bal), 'sandbox_minutes', `job:${job.id}`);
+      } else {
+        this.billing?.record(ownerKey(job.owner), 'build_minutes', minutes);
+      }
     }
     if (job.status !== 'succeeded' || !job.deploy || !job.deployAllowedBy) return;
     if (!job.artifactSha) {

@@ -67,7 +67,7 @@ export class AuthService {
     if (password.toLowerCase().includes(username.toLowerCase())) {
       throw new HttpError(400, 'weak_password', 'Your password must not contain your username.');
     }
-    if (this.store.team(username.toLowerCase())) throw new HttpError(409, 'username_taken', 'That name belongs to a team.');
+    if (this.store.team(username.toLowerCase()) || this.store.data.agents?.[username.toLowerCase()]) throw new HttpError(409, 'username_taken', 'That name belongs to a team or an agent.');
     const existing = this.store.userByName(username);
     if (existing && existing.status === 'active') throw new HttpError(409, 'username_taken', 'That username is taken.');
 
