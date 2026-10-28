@@ -9,6 +9,7 @@ import { HttpError } from '../errors.js';
 const TOLERANCE_S = 300;
 /** Which Stripe account the secret key belongs to: live or test (restricted keys carry the same marker). */
 export const stripeMode = (key) => (/^(sk|rk)_live_/.test(key ?? '') ? 'live' : /^(sk|rk)_test_/.test(key ?? '') ? 'test' : 'unknown');
+const SUB_ID = /^sub_\w+$/; // ids that go into a URL path are checked first
 const idOf = (x) => (typeof x === 'string' ? x : x?.id ?? undefined); // an expandable field is an id or an object
 const STATUS = { active: 'active', trialing: 'active', past_due: 'past_due', unpaid: 'past_due', canceled: 'canceled', incomplete: 'pending', incomplete_expired: 'canceled', paused: 'canceled' };
 
@@ -78,11 +79,15 @@ export class StripeProvider {
     if (sessionId) {
       if (!/^cs_[\w]+$/.test(sessionId)) return null;
       const s = await this.call('GET', `/v1/checkout/sessions/${sessionId}?expand[]=subscription`);
+      if (typeof s.subscription === 'string' && !SUB_ID.test(s.subscription)) return null;
       sub = typeof s.subscription === 'object' ? s.subscription : s.subscription ? await this.call('GET', `/v1/subscriptions/${s.subscription}`) : null;
       if (!sub) return null;
       return this.fromSubscription(sub, s.client_reference_id);
     }
-    if (subscriptionId) return this.fromSubscription(await this.call('GET', `/v1/subscriptions/${subscriptionId}`));
+    if (subscriptionId) {
+      if (!SUB_ID.test(subscriptionId)) return null;
+      return this.fromSubscription(await this.call('GET', `/v1/subscriptions/${subscriptionId}`));
+    }
     return null;
   }
 
@@ -97,7 +102,7 @@ export class StripeProvider {
   }
 
   async cancel(sub) {
-    if (!sub.subscriptionId) return;
+    if (!SUB_ID.test(sub.subscriptionId ?? '')) return;
     try { await this.call('DELETE', `/v1/subscriptions/${sub.subscriptionId}`); } catch (err) { if (err.providerStatus !== 404) throw err; } // already gone is as good as cancelled
   }
 

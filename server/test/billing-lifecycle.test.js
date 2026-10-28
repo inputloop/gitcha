@@ -284,3 +284,62 @@ test('BIL-3b: the key mode is announced once at startup, and records of the othe
     assert.equal(again.planFor('user:alice'), 'pro');
   } finally { await t2.srv.close(); }
 });
+
+test('BIL-5c: a subscription past its paid period is past due, then lapses; the provider is asked and the answer is taken', async () => {
+  const { srv, fake, token } = await setup();
+  try {
+    fake.st.periodEnd = Math.floor(srv.clock() / 1000) + 30 * 86_400;
+    const { subId } = await subscribe(srv, fake, token, { plan: 'pro' });
+    const plan = async () => (await billingOf(srv, token)).plan;
+    assert.equal(await plan(), 'pro');
+    assert.equal((await billingOf(srv, token)).subscription.status, 'active');
+
+    srv.clock.advance(31 * DAY);
+    assert.equal(await plan(), 'pro', 'a day past the period end is inside the grace');
+    assert.equal((await billingOf(srv, token)).subscription.status, 'past_due', 'and is shown as past due');
+    srv.clock.advance(7 * DAY);
+    assert.equal(await plan(), 'free', 'eight days past the period end, with no word from the provider, the paid plan lapses');
+
+    // Stripe renewed it and the webhook never came: asking Stripe puts it right.
+    fake.st.subs[subId].current_period_end = Math.floor(srv.clock() / 1000) + 20 * 86_400;
+    await srv.billing.refresh();
+    assert.equal(await plan(), 'pro');
+    assert.equal((await billingOf(srv, token)).subscription.status, 'active');
+
+    // Or it ended there and the cancel event never came.
+    srv.clock.advance(21 * DAY);
+    fake.st.subs[subId].status = 'canceled';
+    await srv.billing.refresh();
+    assert.equal(dbAccount(srv, 'user:alice').subscription.status, 'canceled');
+    assert.equal(await plan(), 'free');
+  } finally { await srv.close(); }
+});
+
+test('BIL-5c: PayPal does not announce renewals, so a lapsed period is refreshed from PayPal', async () => {
+  const { srv, fake, token } = await setup();
+  try {
+    fake.st.periodEnd = Math.floor(srv.clock() / 1000) + 30 * 86_400;
+    const { subId } = await subscribe(srv, fake, token, { plan: 'pro', provider: 'paypal' });
+    assert.ok(dbAccount(srv, 'user:alice').subscription.currentPeriodEnd, 'the period end is read');
+    srv.clock.advance(40 * DAY);
+    assert.equal((await billingOf(srv, token)).plan, 'free');
+    fake.st.pp[subId].billing_info = { next_billing_time: new Date(srv.clock() + 25 * DAY).toISOString() };
+    await srv.billing.refresh();
+    assert.equal((await billingOf(srv, token)).plan, 'pro');
+  } finally { await srv.close(); }
+});
+
+test('BIL-4b: a subscription id from the browser is checked before it goes into a Stripe URL', async () => {
+  const { srv, fake, token } = await setup();
+  try {
+    await subscribe(srv, fake, token, { plan: 'pro' });
+    const before = fake.calls.length;
+    for (const bad of ['../customers/cus_X', '../../v1/balance', 'sub_1?expand[]=customer', 'sub_1/../x', 'cus_X', 'sub_1 ', '']) {
+      const r = await confirm(srv, token, { provider: 'stripe', subscription_id: bad });
+      // An empty id falls back to the account's own subscription; anything else must be refused outright.
+      if (bad) assert.equal(r.body.error, 'not_confirmed', `refused: ${JSON.stringify(bad)} -> ${JSON.stringify(r.body)}`);
+    }
+    const sent = fake.calls.slice(before).map((c) => c.url);
+    assert.ok(!sent.some((u) => u.includes('..') || u.includes('balance') || u.includes('customers') || u.includes('expand')), `nothing odd reached Stripe: ${JSON.stringify(sent)}`);
+  } finally { await srv.close(); }
+});

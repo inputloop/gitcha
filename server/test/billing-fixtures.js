@@ -84,7 +84,7 @@ export function fakeProviders() {
     return st.subs[id];
   };
   /** The buyer approved at PayPal. */
-  st.approve = (id, status = 'ACTIVE') => { st.pp[id].status = status; return st.pp[id]; };
+  st.approve = (id, status = 'ACTIVE') => { st.pp[id].status = status; st.pp[id].billing_info = { next_billing_time: new Date(st.periodEnd * 1000).toISOString() }; return st.pp[id]; };
   return { fetchImpl, calls, st };
 }
 

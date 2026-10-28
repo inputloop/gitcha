@@ -233,6 +233,18 @@ Off unless `GITCHA_BILLING=yes`. Then:
   `BILLING.SUBSCRIPTION.*` events; put its id in `PAYPAL_WEBHOOK_ID`.
 - Plans and limits default to Free, Pro and Team; replace them with a JSON file named by
   `GITCHA_PLANS_FILE`.
+- On start the server logs which mode each provider's keys are in (Stripe from the `sk_live_` or
+  `sk_test_` prefix, PayPal from the API host). A subscription records the mode that wrote it, and
+  one written with test keys is not a paid plan once the keys are live; the log counts them.
+- An event is applied only to the subscription the account holds, found by the id Gitcha
+  recorded, and in the provider's order; a late older event, an unknown subscription or a payment
+  session Gitcha did not start is recorded as ignored (`billing.event_ignored` in the audit log).
+  Changing plan keeps the old subscription until the new one is paid, then cancels it at the
+  provider. A failed payment keeps the paid limits for seven days from the first failure, and so
+  does a paid period that ran out without word from the provider; Gitcha asks the provider about
+  those every few minutes (PayPal does not announce renewals).
+- Deleting a team closes its billing account: its subscription is cancelled at the provider (a
+  refused cancel is retried and logged) and a team that later takes the name starts on Free.
 
 Keys live only in `gitcha.env`. Status: tested against fake Stripe and PayPal endpoints;
 **not yet run against either provider's sandbox**. Do that first, with test keys.

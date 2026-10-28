@@ -58,10 +58,11 @@ export class BillingService {
     }
     const other = Object.keys(this.data.accounts).filter((k) => { const s = this.data.accounts[k].subscription; return s && !this.modeOk(s); }).length;
     if (other) this.log.info(`billing: ${other} subscription record(s) were written in the other mode and are not honoured`);
-    this.reconcile().catch((err) => this.log.error(`billing: ${err.message}`));
-    // A team deleted since the last look has its subscription cancelled within minutes even if nothing told us.
-    this.reconcileTimer = setInterval(() => this.reconcile().catch((err) => this.log.error(`billing: ${err.message}`)), 5 * 60_000);
-    this.reconcileTimer.unref?.();
+    const upkeep = () => this.reconcile().then(() => this.refresh()).catch((err) => this.log.error(`billing: ${err.message}`));
+    upkeep();
+    // A team deleted since the last look has its subscription cancelled, and a subscription past its paid period is asked about, within minutes.
+    this.upkeepTimer = setInterval(upkeep, 5 * 60_000);
+    this.upkeepTimer.unref?.();
   }
 
   get enabled() { return this.config.billing.enabled; }
@@ -170,15 +171,45 @@ export class BillingService {
     return !s.mode || !pm || pm === 'unknown' || s.mode === 'unknown' || s.mode === pm;
   }
 
+  /** Ask the provider about subscriptions whose paid period has run out: a renewal PayPal never announces, or an event that never came. */
+  async refresh() {
+    const now = this.clock();
+    for (const key of Object.keys(this.data.accounts)) {
+      const s = this.subscription(key);
+      if (!s?.subscriptionId || !['active', 'past_due'].includes(s.status) || s.currentPeriodEnd == null || s.currentPeriodEnd >= now) continue;
+      const p = this.providers[s.provider];
+      if (!p) continue;
+      try {
+        const found = await p.lookup({ subscriptionId: s.subscriptionId });
+        if (found?.owner === key && found.subscriptionId === s.subscriptionId) await this.adopt(key, 'current', { ...found, provider: s.provider }, 'refreshed', { authoritative: true });
+      } catch (err) { this.log.error(`billing: could not refresh ${key}: ${err.message}`); }
+    }
+  }
+
   subscription(key) {
     const s = this.accountOf(key)?.subscription;
     return s && this.modeOk(s) ? s : null;
   }
 
-  /** The plan whose limits apply now. Past-due accounts keep paid limits for a grace period, counted from when the spell began. */
+  /**
+   * How a subscription stands: 'paid', 'grace' (a failed payment, or a paid period that ran out with no word from the provider;
+   * paid limits stay for seven days from when that began) or 'none'. A record with no period end never runs out by itself.
+   */
+  standing(s) {
+    const now = this.clock();
+    let since;
+    if (s.status === 'past_due') since = s.pastDueSince ?? s.updatedAt;
+    else if (s.status === 'active') {
+      if (s.currentPeriodEnd == null || s.currentPeriodEnd >= now) return 'paid';
+      since = s.currentPeriodEnd;
+    } else return 'none';
+    return now - since < GRACE_MS ? 'grace' : 'none';
+  }
+
+  /** The plan whose limits apply now. */
   planFor(key) {
     const s = this.subscription(key);
-    if (s && this.plans[s.plan] && (s.status === 'active' || (s.status === 'past_due' && this.clock() - (s.pastDueSince ?? s.updatedAt) < GRACE_MS))) return s.plan;
+    if (s && Object.hasOwn(this.plans, s.plan) && this.standing(s) !== 'none') return s.plan;
     return 'free';
   }
 
@@ -216,7 +247,7 @@ export class BillingService {
     const sub = this.subscription(o.key);
     return {
       owner: o.key, enabled: this.enabled, plan, planName: this.plans[plan].name, limits: this.plans[plan].limits, usage: this.usage(o.key),
-      subscription: sub ? { provider: sub.provider, plan: sub.plan, status: sub.status, currentPeriodEnd: sub.currentPeriodEnd ?? null } : null,
+      subscription: sub ? { provider: sub.provider, plan: sub.plan, status: sub.status === 'active' && this.standing(sub) !== 'paid' ? 'past_due' : sub.status, currentPeriodEnd: sub.currentPeriodEnd ?? null } : null,
       pendingCheckout: this.accountOf(o.key)?.checkout ? { provider: this.accountOf(o.key).checkout.provider, plan: this.accountOf(o.key).checkout.plan } : null,
       plans: Object.entries(this.plans).map(([id, p]) => ({ id, name: p.name, price: p.price, limits: p.limits, paid: Boolean(p.paid) })),
       providers: Object.keys(this.providers).filter((k) => this.providers[k].canSell),
