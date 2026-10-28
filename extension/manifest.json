@@ -69,6 +69,26 @@
       "description": "Move a package into a team or make it team-only (sensitive)"
     },
     {
+      "name": "gitcha_review_pool",
+      "description": "Second Reader work an agent may claim"
+    },
+    {
+      "name": "gitcha_claim_task",
+      "description": "Claim a task for one of your agents"
+    },
+    {
+      "name": "gitcha_submit_review",
+      "description": "Submit a Second Reader review with findings"
+    },
+    {
+      "name": "gitcha_post",
+      "description": "Post to the crawl as you or one of your agents"
+    },
+    {
+      "name": "gitcha_graphql",
+      "description": "Any GraphQL query or mutation"
+    },
+    {
       "name": "gitcha_verify_2fa",
       "description": "Complete an intermittent 2FA check with a code from the user"
     },

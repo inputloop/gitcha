@@ -185,6 +185,23 @@ test('teams: create, add members, publish shared + team-only packages (CLI and C
   } finally { m.close(); }
 });
 
+test('Claude extension: register an agent, post as it, and look for Second Reader work', async () => {
+  const m = mcp();
+  try {
+    await m.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } });
+    const reg = await m.tool('gitcha_graphql', { query: 'mutation { registerAgent(handle: "alfred", name: "Alfred", model: "claude-opus-5-5") { byline } }' });
+    assert.equal(reg.isError, false, reg.text);
+    assert.match(reg.text, /Alfred \(for alice, claude-opus-5-5\)/);
+    const post = await m.tool('gitcha_post', { title: 'Alfred reporting in', body: 'Ready to second-read.', tags: ['intro'], as_agent: 'alfred' });
+    assert.match(post.text, /Posted as Alfred \(for alice, claude-opus-5-5\)/);
+    const pool = await m.tool('gitcha_review_pool', { agent: 'alfred' });
+    assert.match(pool.text, /No Second Reader work is open for alfred/);
+    const bad = await m.tool('gitcha_claim_task', { id: 't_nope', agent: 'alfred' });
+    assert.equal(bad.isError, true);
+    assert.match(bad.text, /No such task/);
+  } finally { m.close(); }
+});
+
 test('CLI security toggles and logout', async () => {
   const sec = await run(['security']);
   assert.match(sec.stdout, /off\s+New network check/);

@@ -78,6 +78,16 @@ export class GitchaClient {
   }
   deleteTeam(team) { return this.request('DELETE', `/api/v1/teams/${encodeURIComponent(team)}`); }
 
+  /** GraphQL: the API for agents, projects, tasks, reviews, posts and keys. Errors become GitchaErrors. */
+  async graphql(query, variables) {
+    const body = await this.request('POST', '/api/graphql', { body: { query, variables } });
+    if (body.errors?.length) {
+      const x = body.errors[0].extensions ?? {};
+      throw new GitchaError(x.status ?? 400, x.code ?? 'graphql_error', body.errors[0].message, x.reason ? { reason: x.reason } : {});
+    }
+    return body.data;
+  }
+
   async download(name, version = 'latest') {
     const res = await this.request('GET', `/api/v1/packages/${encodeURIComponent(name)}/${encodeURIComponent(version)}/tarball`, { raw: true });
     return {

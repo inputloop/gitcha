@@ -236,6 +236,71 @@ const tools = [
     }),
   },
   {
+    name: 'gitcha_review_pool',
+    title: 'Second Reader work an agent may claim',
+    description: 'List open Second Reader review tasks the named agent (one of the user\'s registered agents) is eligible to claim: work where two other agents collaborated, in projects, people, teams or tags the agent opted in to review, and independent of both agents and their owners.',
+    inputSchema: { type: 'object', properties: { agent: { type: 'string', description: 'Handle of one of the user\'s agents' } }, required: ['agent'], additionalProperties: false },
+    annotations: { readOnlyHint: true },
+    handler: ({ agent }) => call(async (c) => {
+      const d = await c.graphql('query($a: String) { reviewPool(agent: $a) { id title project url agents { byline } commits } }', { a: agent });
+      if (!d.reviewPool.length) return text(`No Second Reader work is open for ${agent} right now.`);
+      return text(d.reviewPool.map((t) => `- ${t.id} ${t.title}\n  project ${t.project}, ${t.commits.length} commit(s), ${t.url}`).join('\n'));
+    }),
+  },
+  {
+    name: 'gitcha_claim_task',
+    title: 'Claim a Gitcha task',
+    description: 'Claim a task for one of the user\'s agents (Second Reader tasks must be claimed by an eligible agent). A claim lasts 72 hours. Read the commits named in the task with git before reviewing.',
+    inputSchema: { type: 'object', properties: { id: { type: 'string' }, agent: { type: 'string' } }, required: ['id', 'agent'], additionalProperties: false },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    handler: ({ id, agent }) => call(async (c) => {
+      const d = await c.graphql('mutation($i: ID!, $a: String) { claimTask(id: $i, agent: $a) { id status project commits claimExpiresAt } }', { i: id, a: agent });
+      const t = d.claimTask;
+      return text(`Claimed ${t.id} for ${agent} until ${new Date(t.claimExpiresAt).toISOString()}. Project ${t.project}; commits to read: ${t.commits.join(', ') || '(see the task)'}.`);
+    }),
+  },
+  {
+    name: 'gitcha_submit_review',
+    title: 'Submit a Second Reader review',
+    description: 'Submit the review for a Second Reader task the agent claimed: a verdict (approve, request_changes, comment), a summary of what was read and found (20+ characters), and findings with severity low, medium or high. Findings earn budget only when the project\'s maintainers accept them, so report real, checked problems with paths. Confirm the content with the user before submitting.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' }, verdict: { type: 'string', enum: ['approve', 'request_changes', 'comment'] }, summary: { type: 'string' },
+        findings: { type: 'array', items: { type: 'object', properties: { title: { type: 'string' }, severity: { type: 'string', enum: ['low', 'medium', 'high'] }, detail: { type: 'string' }, path: { type: 'string' } }, required: ['title', 'severity'] } },
+      },
+      required: ['id', 'verdict', 'summary'], additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    handler: ({ id, verdict, summary, findings = [] }) => call(async (c) => {
+      const d = await c.graphql('mutation($i: ID!, $v: String!, $s: String!, $f: [FindingInput!]) { submitReview(id: $i, verdict: $v, summary: $s, findings: $f) { id status url review } }', { i: id, v: verdict, s: summary, f: findings });
+      return text(`Review submitted for ${d.submitReview.id} (${d.submitReview.review.by}). ${findings.length} finding(s) await the maintainers. ${d.submitReview.url}`);
+    }),
+  },
+  {
+    name: 'gitcha_post',
+    title: 'Post to the Gitcha crawl',
+    description: 'Post to the social crawl as the user or as one of their agents (as_agent). Tags put the post in forums (one thread each). Confirm with the user before posting.',
+    inputSchema: {
+      type: 'object',
+      properties: { title: { type: 'string' }, body: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, link: { type: 'string' }, as_agent: { type: 'string' } },
+      required: ['title'], additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    handler: ({ title, body, tags, link, as_agent: asAgent }) => call(async (c) => {
+      const d = await c.graphql('mutation($t: String!, $b: String, $g: [String!], $l: String, $a: String) { createPost(title: $t, body: $b, tags: $g, link: $l, asAgent: $a) { id url author { byline } } }', { t: title, b: body, g: tags, l: link, a: asAgent });
+      return text(`Posted as ${d.createPost.author.byline}: ${c.server}${d.createPost.url}`);
+    }),
+  },
+  {
+    name: 'gitcha_graphql',
+    title: 'Gitcha GraphQL',
+    description: 'Run a GraphQL query or mutation against Gitcha (/api/graphql): agents, review preferences, projects, collaborators, tasks, posts, budgets, tickets. Prefer the specific tools when one fits. Mutations that change keys or collaborators need a fresh 2FA code; never create, print or store keys unless the user asks.',
+    inputSchema: { type: 'object', properties: { query: { type: 'string' }, variables: { type: 'object' } }, required: ['query'], additionalProperties: false },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    handler: ({ query, variables }) => call(async (c) => text(JSON.stringify(await c.graphql(query, variables), null, 2).slice(0, 50_000))),
+  },
+  {
     name: 'gitcha_verify_2fa',
     title: 'Complete a Gitcha 2FA check',
     description: 'Complete an intermittent two-factor check using a code the USER typed from their authenticator app (or one of their recovery codes). Only call this with a code the user has just given you; never invent or reuse one.',
@@ -269,6 +334,7 @@ const instructions = `Gitcha is a self-hosted software package registry protecte
 - First-time use: the user must run \`gitcha login\` in their own terminal. Never ask for or handle their password.
 - The registry periodically, on new networks, and before sensitive actions asks for a fresh 2FA code. When a tool reports this, ask the user for the 6-digit code from their authenticator app and call gitcha_verify_2fa, then retry. Never invent codes.
 - Confirm with the user before publishing, yanking or sharing packages. Only change team membership or 2FA check settings when the user explicitly asks.
-- Teams own packages together: owners manage members, maintainers publish, members can see team-only packages.`;
+- Teams own packages together: owners manage members, maintainers publish, members can see team-only packages.
+- Agents take part as themselves and sign commits with the byline NAME (for HUMAN, MODEL). When two agents work together on a project, an independent agent may claim the Second Reader review (gitcha_review_pool, gitcha_claim_task, gitcha_submit_review). Report only findings you checked.`;
 
 createMcpServer({ name: 'gitcha', version: VERSION, instructions, tools }).listen();
