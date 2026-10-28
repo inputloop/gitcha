@@ -26,10 +26,11 @@ export const DEFAULT_PLANS = {
 
 const month = (t) => new Date(t).toISOString().slice(0, 7);
 const GRACE_MS = 7 * 86_400_000; // a failed payment keeps the paid limits this long
+const GONE = '(gone)'; // the binding of an account whose owner no longer exists
 
 export class BillingService {
-  constructor({ store, config, teams, clock = Date.now, fetchImpl = globalThis.fetch }) {
-    Object.assign(this, { store, config, teams, clock });
+  constructor({ store, config, teams, clock = Date.now, fetchImpl = globalThis.fetch, log = { info: (m) => console.log(m), error: (m) => console.error(m) } }) {
+    Object.assign(this, { store, config, teams, clock, log });
     store.data.billing ??= { accounts: {}, usage: {}, events: {} };
     this.plans = config.billing.plansFile ? JSON.parse(fs.readFileSync(config.billing.plansFile, 'utf8')) : DEFAULT_PLANS;
     if (!this.plans.free) throw new Error('The plans file must define a "free" plan.');
@@ -37,6 +38,25 @@ export class BillingService {
     this.providers = {};
     if (b.stripe.secretKey) this.providers.stripe = new StripeProvider({ ...b.stripe, prices: b.priceIds.stripe, fetchImpl, clock });
     if (b.paypal.clientId && b.paypal.clientSecret) this.providers.paypal = new PayPalProvider({ ...b.paypal, plans: b.priceIds.paypal, fetchImpl, clock, brand: config.issuer });
+    if (this.enabled) this.startUp();
+  }
+
+  /** Bind accounts that predate binding, retire those whose owner is gone, and keep checking while the server runs. */
+  startUp() {
+    let adopted = 0;
+    for (const [key, a] of Object.entries(this.data.accounts)) {
+      if (a.ownerRef !== undefined) continue;
+      a.ownerRef = this.ownerRef(key) ?? GONE;
+      adopted++;
+    }
+    if (adopted) {
+      this.log.info(`billing: bound ${adopted} billing account(s) to their owners`);
+      try { this.store.flush(); } catch (err) { this.log.error(`billing: could not save the owner bindings: ${err.message}`); }
+    }
+    this.reconcile().catch((err) => this.log.error(`billing: ${err.message}`));
+    // A team deleted since the last look has its subscription cancelled within minutes even if nothing told us.
+    this.reconcileTimer = setInterval(() => this.reconcile().catch((err) => this.log.error(`billing: ${err.message}`)), 5 * 60_000);
+    this.reconcileTimer.unref?.();
   }
 
   get enabled() { return this.config.billing.enabled; }
@@ -63,13 +83,84 @@ export class BillingService {
       const t = this.teams.get(o.name);
       this.teams.require(t, user, manage ? 'owner' : 'member');
     }
+    if (this.data.accounts[o.key] && !this.accountOf(o.key)) this.reconcile().catch((err) => this.log.error(`billing: ${err.message}`));
     return o;
   }
 
-  subscription(key) {
+  // ---- who an account belongs to ----------------------------------------------------------
+  /** What an account is bound to: the user's id, or the team as it was created (teams carry no id; creation time and creator tell a re-registered name apart). */
+  ownerRef(key) {
+    const [type, ...rest] = key.split(':');
+    const name = rest.join(':');
+    if (type === 'user') return this.store.userByName(name)?.id ?? null;
+    const t = this.store.team(name);
+    return t ? t.id ?? `${t.createdAt}:${t.createdBy}` : null;
+  }
+
+  /** The account, if it still belongs to the owner it was opened for (a team name reused by someone else gets nothing). */
+  accountOf(key) {
     const a = this.data.accounts[key];
-    if (!a?.subscription) return null;
-    return a.subscription;
+    if (!a) return null;
+    if (a.ownerRef !== undefined && a.ownerRef !== this.ownerRef(key)) return null;
+    return a;
+  }
+
+  /** The account for a write: a new one, or the existing one if it is this owner's (an old one of the same name is retired first). */
+  ensureAccount(d, key) {
+    let a = d.billing.accounts[key];
+    if (a && a.ownerRef !== undefined && a.ownerRef !== this.ownerRef(key)) { this.retireInto(d, key, 'owner_changed'); a = undefined; }
+    return (d.billing.accounts[key] ??= { ownerRef: this.ownerRef(key) });
+  }
+
+  /** Close an account: its record goes, its provider subscriptions are queued for cancellation, and the closing is logged. */
+  retireInto(d, key, reason, who = {}) {
+    const a = d.billing.accounts[key];
+    if (!a) return;
+    delete d.billing.accounts[key];
+    const s = a.subscription;
+    const live = [s && ['active', 'past_due', 'pending'].includes(s.status) ? s : null, a.checkout].filter((r) => r?.subscriptionId);
+    d.billing.pendingCancels ??= [];
+    for (const r of live) d.billing.pendingCancels.push({ key, provider: r.provider, subscriptionId: r.subscriptionId, at: this.clock() });
+    d.billing.closed = [...(d.billing.closed ?? []).slice(-199), { key, at: this.clock(), reason, provider: s?.provider, plan: s?.plan, status: s?.status, subscriptionId: s?.subscriptionId, by: who.by }];
+    this.store.audit({ userId: who.userId, event: 'billing.account_closed', owner: key, reason, provider: s?.provider, by: who.by });
+  }
+
+  /** For the team-deletion path: close the team's billing account and cancel its subscription at the provider. Never rejects. */
+  async closeAccount(key, who = {}) {
+    try {
+      this.store.tx((d) => this.retireInto(d, key, who.reason ?? 'team_deleted', who));
+    } catch (err) { this.log.error(`billing: could not close ${key}: ${err.message}`); }
+    await this.drainCancels();
+  }
+
+  /** Retire every account whose owner is gone or was replaced, then cancel what they left at the providers. */
+  async reconcile() {
+    const stale = Object.keys(this.data.accounts).filter((k) => !this.accountOf(k));
+    if (stale.length) {
+      try { this.store.tx((d) => { for (const k of stale) this.retireInto(d, k, this.ownerRef(k) === null ? 'owner_gone' : 'owner_changed'); }); } catch (err) { this.log.error(`billing: could not retire ${stale.join(', ')}: ${err.message}`); return; }
+    }
+    await this.drainCancels();
+  }
+
+  /** Cancel, at the provider, the subscriptions of closed accounts. A cancel that fails stays queued for the next pass. */
+  drainCancels() {
+    if (this.draining) return this.draining;
+    this.draining = (async () => {
+      for (const item of [...(this.data.pendingCancels ?? [])]) {
+        const p = this.providers[item.provider];
+        if (!p) continue;
+        try { await p.cancel({ subscriptionId: item.subscriptionId }); } catch (err) {
+          this.log.error(`billing: could not cancel ${item.provider} subscription ${item.subscriptionId} of closed account ${item.key}: ${err.message}`);
+          continue;
+        }
+        try { this.store.tx((d) => { d.billing.pendingCancels = d.billing.pendingCancels.filter((x) => x !== item); }); } catch (err) { this.log.error(`billing: ${err.message}`); }
+      }
+    })().finally(() => { this.draining = null; });
+    return this.draining;
+  }
+
+  subscription(key) {
+    return this.accountOf(key)?.subscription ?? null;
   }
 
   /** The plan whose limits apply now. Past-due accounts keep paid limits for a grace period, counted from when the spell began. */
@@ -114,7 +205,7 @@ export class BillingService {
     return {
       owner: o.key, enabled: this.enabled, plan, planName: this.plans[plan].name, limits: this.plans[plan].limits, usage: this.usage(o.key),
       subscription: sub ? { provider: sub.provider, plan: sub.plan, status: sub.status, currentPeriodEnd: sub.currentPeriodEnd ?? null } : null,
-      pendingCheckout: this.data.accounts[o.key]?.checkout ? { provider: this.data.accounts[o.key].checkout.provider, plan: this.data.accounts[o.key].checkout.plan } : null,
+      pendingCheckout: this.accountOf(o.key)?.checkout ? { provider: this.accountOf(o.key).checkout.provider, plan: this.accountOf(o.key).checkout.plan } : null,
       plans: Object.entries(this.plans).map(([id, p]) => ({ id, name: p.name, price: p.price, limits: p.limits, paid: Boolean(p.paid) })),
       providers: Object.keys(this.providers).filter((k) => this.providers[k].canSell),
     };
@@ -123,7 +214,7 @@ export class BillingService {
   /** Change the account's subscription record; `replace` starts a fresh one instead of merging over the old. */
   setSubscription(key, patch, event, { replace = false, clearCheckout = false } = {}) {
     this.store.tx((d) => {
-      const a = (d.billing.accounts[key] ??= {});
+      const a = this.ensureAccount(d, key);
       const before = replace ? {} : a.subscription ?? {};
       a.subscription = { ...before, ...patch, updatedAt: this.clock() };
       // The grace is counted from the first moment of a past-due spell; a write that changes nothing cannot move it.
@@ -138,7 +229,7 @@ export class BillingService {
   /** A checkout for a new plan on an account that already pays waits in its own slot; the paid record is not touched. */
   setCheckout(key, slot, event) {
     this.store.tx((d) => {
-      const a = (d.billing.accounts[key] ??= {});
+      const a = this.ensureAccount(d, key);
       a.checkout = slot;
       a.history = [...(a.history ?? []).slice(-49), { at: this.clock(), event, status: 'pending', plan: slot?.plan, provider: slot?.provider }];
       this.store.audit({ event: `billing.${event}`, owner: key, plan: slot?.plan, status: 'pending', provider: slot?.provider });
@@ -184,7 +275,7 @@ export class BillingService {
     const o = this.account(user, owner);
     const p = this.provider(provider);
     const sub = this.subscription(o.key);
-    const slot = this.data.accounts[o.key]?.checkout;
+    const slot = this.accountOf(o.key)?.checkout;
     const found = await p.lookup({ sessionId, subscriptionId: subscriptionId ?? sub?.subscriptionId ?? slot?.subscriptionId });
     if (!found || found.owner !== o.key) throw new HttpError(400, 'not_confirmed', 'The payment provider has no matching subscription for this account yet.');
     // The subscription must be one this account is waiting on or already holds: its owner field alone proves nothing.
@@ -217,7 +308,7 @@ export class BillingService {
   targetOf(key, provider, { subscriptionId, checkoutSessionId }) {
     const hit = (r) => r?.provider === provider && ((subscriptionId && r.subscriptionId === subscriptionId) || (checkoutSessionId && r.checkoutSessionId === checkoutSessionId));
     if (hit(this.subscription(key))) return 'current';
-    if (hit(this.data.accounts[key]?.checkout)) return 'checkout';
+    if (hit(this.accountOf(key)?.checkout)) return 'checkout';
     return null;
   }
 
@@ -238,7 +329,7 @@ export class BillingService {
       this.setSubscription(key, { provider: next.provider, ...patch }, event);
       return 'applied';
     }
-    const slot = this.data.accounts[key].checkout;
+    const slot = this.accountOf(key).checkout;
     if (next.status === 'canceled') { // the buyer never paid, or the provider dropped the new subscription
       this.store.tx((d) => { delete d.billing.accounts[key].checkout; });
       return 'dropped';

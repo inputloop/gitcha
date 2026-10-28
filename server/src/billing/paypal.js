@@ -44,7 +44,7 @@ export class PayPalProvider {
     });
     if (res.status === 204) return {};
     const j = await res.json().catch(() => ({}));
-    if (!res.ok) throw new HttpError(502, 'paypal_error', `PayPal refused the request: ${j.message ?? j.name ?? res.status}`);
+    if (!res.ok) throw Object.assign(new HttpError(502, 'paypal_error', `PayPal refused the request: ${j.message ?? j.name ?? res.status}`), { providerStatus: res.status });
     return j;
   }
 
@@ -77,7 +77,8 @@ export class PayPalProvider {
   }
 
   async cancel(sub) {
-    if (sub.subscriptionId) await this.call('POST', `/v1/billing/subscriptions/${sub.subscriptionId}/cancel`, { reason: 'Cancelled by the account owner in Gitcha.' });
+    if (!sub.subscriptionId) return;
+    try { await this.call('POST', `/v1/billing/subscriptions/${sub.subscriptionId}/cancel`, { reason: 'Cancelled by the account owner in Gitcha.' }); } catch (err) { if (err.providerStatus !== 404) throw err; } // already gone is as good as cancelled
   }
 
   async verifyWebhook(rawBody, headers) {

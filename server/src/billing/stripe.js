@@ -50,7 +50,7 @@ export class StripeProvider {
       body: body ? form(body) : undefined,
     });
     const json = await res.json().catch(() => ({}));
-    if (!res.ok) throw new HttpError(502, 'stripe_error', `Stripe refused the request: ${json.error?.message ?? res.status}`);
+    if (!res.ok) throw Object.assign(new HttpError(502, 'stripe_error', `Stripe refused the request: ${json.error?.message ?? res.status}`), { providerStatus: res.status });
     return json;
   }
 
@@ -94,7 +94,8 @@ export class StripeProvider {
   }
 
   async cancel(sub) {
-    if (sub.subscriptionId) await this.call('DELETE', `/v1/subscriptions/${sub.subscriptionId}`);
+    if (!sub.subscriptionId) return;
+    try { await this.call('DELETE', `/v1/subscriptions/${sub.subscriptionId}`); } catch (err) { if (err.providerStatus !== 404) throw err; } // already gone is as good as cancelled
   }
 
   async portal(customerId, returnUrl) {
