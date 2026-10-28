@@ -44,9 +44,10 @@ export class BillingService {
     this.plans = config.billing.plansFile ? JSON.parse(fs.readFileSync(config.billing.plansFile, 'utf8')) : DEFAULT_PLANS;
     if (!this.plans.free) throw new Error('The plans file must define a "free" plan.');
     const b = config.billing;
+    this.providerLog = { error: (m) => this.log.error(m) }; // follows this.log, which a test may swap
     this.providers = {};
-    if (b.stripe.secretKey) this.providers.stripe = new StripeProvider({ ...b.stripe, prices: b.priceIds.stripe, fetchImpl, clock });
-    if (b.paypal.clientId && b.paypal.clientSecret) this.providers.paypal = new PayPalProvider({ ...b.paypal, plans: b.priceIds.paypal, fetchImpl, clock, brand: config.issuer });
+    if (b.stripe.secretKey) this.providers.stripe = new StripeProvider({ ...b.stripe, prices: b.priceIds.stripe, fetchImpl, clock, log: this.providerLog });
+    if (b.paypal.clientId && b.paypal.clientSecret) this.providers.paypal = new PayPalProvider({ ...b.paypal, plans: b.priceIds.paypal, fetchImpl, clock, brand: config.issuer, log: this.providerLog });
     if (this.enabled) this.startUp();
   }
 

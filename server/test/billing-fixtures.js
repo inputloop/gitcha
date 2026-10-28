@@ -17,6 +17,7 @@ export function fakeProviders() {
     n: 0, sessions: {}, subs: {}, pp: {}, ppVerify: 0, ppTokens: 0, periodEnd: 2_000_000_000,
     stripeError: null, // { status, message } makes every Stripe call answer with it
     failCancel: false, // cancelling a subscription at either provider answers 500
+    ppTokenFail: false, // PayPal refuses to issue an access token
     gate: null, // async (url, init) => ... awaited before a request is answered (to hold it open)
   };
   const priceOf = { pro: 'price_pro', team: 'price_team' };
@@ -51,7 +52,7 @@ export function fakeProviders() {
       if (u.pathname === '/v1/billing_portal/sessions') return reply(200, { url: `https://billing.stripe.test/p/${new URLSearchParams(init.body).get('customer')}` });
     }
     if (u.host === 'paypal.test') {
-      if (u.pathname === '/v1/oauth2/token') { st.ppTokens++; return reply(200, { access_token: 'A21', expires_in: 3600 }); }
+      if (u.pathname === '/v1/oauth2/token') { st.ppTokens++; return st.ppTokenFail ? reply(401, { error: 'invalid_client' }) : reply(200, { access_token: 'A21', expires_in: 3600 }); }
       if (u.pathname === '/v1/billing/subscriptions' && init.method === 'POST') {
         const b = JSON.parse(init.body);
         const id = `I-PP${++st.n}`;

@@ -5,6 +5,7 @@
 // (HMAC-SHA256 over "timestamp.payload", as Stripe documents).
 import crypto from 'node:crypto';
 import { HttpError } from '../errors.js';
+import { PROVIDER_TIMEOUT_MS, providerError, providerFetch } from './provider-call.js';
 
 const TOLERANCE_S = 300;
 /** Which Stripe account the secret key belongs to: live or test (restricted keys carry the same marker). */
@@ -36,15 +37,15 @@ export function verifyStripeSignature(rawBody, header, secret, nowS) {
 }
 
 export class StripeProvider {
-  constructor({ secretKey, webhookSecret, api, prices, fetchImpl, clock }) {
-    Object.assign(this, { secretKey, webhookSecret, api, prices, fetchImpl, clock });
+  constructor({ secretKey, webhookSecret, api, prices, fetchImpl, clock, log, timeoutMs = PROVIDER_TIMEOUT_MS }) {
+    Object.assign(this, { secretKey, webhookSecret, api, prices, fetchImpl, clock, log, timeoutMs });
     this.mode = stripeMode(secretKey);
   }
 
   get canSell() { return Object.values(this.prices).some(Boolean); }
 
   async call(method, path, body, idempotencyKey) {
-    const res = await this.fetchImpl(this.api + path, {
+    const res = await providerFetch({ fetchImpl: this.fetchImpl, name: 'Stripe', code: 'stripe_error', log: this.log, timeoutMs: this.timeoutMs, what: `${method} ${path.split('?')[0]}` }, this.api + path, {
       method,
       headers: {
         Authorization: `Bearer ${this.secretKey}`, 'Stripe-Version': '2024-06-20',
@@ -54,7 +55,7 @@ export class StripeProvider {
       body: body ? form(body) : undefined,
     });
     const json = await res.json().catch(() => ({}));
-    if (!res.ok) throw Object.assign(new HttpError(502, 'stripe_error', `Stripe refused the request: ${json.error?.message ?? res.status}`), { providerStatus: res.status });
+    if (!res.ok) throw providerError('Stripe', 'stripe_error', this.log, `${method} ${path.split('?')[0]} answered ${res.status}: ${json.error?.message ?? ''}`, res.status);
     return json;
   }
 
