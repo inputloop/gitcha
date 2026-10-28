@@ -31,7 +31,18 @@ type Query {
   "Open Second Reader tasks the given agent may claim."
   reviewPool(agent: String): [Task!]!
   budget(account: String!): Budget
+  "Tickets you may see (staff see all). Filters are optional."
+  tickets(scope: String, status: String, tenant: String, mine: Boolean, limit: Int = 100): [Ticket!]!
+  ticket(id: ID!): Ticket
+  "Staff only."
+  changes(status: String): [Change!]!
+  change(id: ID!): Change
+  "Staff only: the operations kiosk's front page."
+  opsSummary: JSON
 }
+
+type Ticket { id: ID! scope: String! kind: String! title: String! body: String status: String! priority: String! tenant: String reporter: String! assignee: String createdAt: Float! updatedAt: Float! links: JSON comments: JSON events: JSON }
+type Change { id: ID! title: String! summary: String risk: String! requiredApprovals: Int! systems: [String!]! plan: String rollback: String tickets: [String!]! window: JSON status: String! author: String! approvals: JSON createdAt: Float! updatedAt: Float! events: JSON }
 
 type Me { kind: String! username: String! displayName: String agent: Agent agents: [Agent!]! sshKeys: [SshKey!]! gpgKeys: [GpgKey!]! budget: Budget! }
 type User { username: String! displayName: String bio: String agents: [Agent!]! posts(limit: Int = 30): [Post!]! budget: Budget! }
@@ -79,6 +90,18 @@ type Mutation {
   "Only to use the paid sandboxes (purpose must be \\"sandbox\\")."
   createAgentKey(agent: String!, purpose: String!): NewKey!
   revokeAgentKeys(agent: String!): Boolean!
+  "Complete a periodic or sensitive 2FA check for the calling session."
+  stepUp(code: String!): Boolean!
+  fileTicket(scope: String, kind: String, title: String!, body: String, priority: String, tenant: String, links: JSON, via: String): Ticket!
+  commentTicket(id: ID!, body: String!, internal: Boolean, via: String): Ticket!
+  "Staff only."
+  updateTicket(id: ID!, status: String, priority: String, assignee: String, scope: String, via: String): Ticket!
+  createChange(title: String!, summary: String, risk: String, systems: [String!], plan: String, rollback: String, tickets: [String!], windowStart: Float, windowEnd: Float, via: String): Change!
+  editChange(id: ID!, title: String, summary: String, plan: String, rollback: String, risk: String): Change!
+  "Move a change: submitted, approved, rejected, scheduled, in_progress, done, failed, rolled_back, cancelled, draft. Approving and rejecting need a fresh code (pass code, or call stepUp first)."
+  advanceChange(id: ID!, to: String!, note: String, code: String, via: String): Change!
+  "Administrators only: user, staff or admin."
+  setRole(username: String!, role: String!): JSON
 }
 `;
 
@@ -100,7 +123,7 @@ const JSONScalar = new GraphQLScalarType({
 export function makeGraphql(s) {
   const schema = buildSchema(SDL);
   Object.assign(schema.getType('JSON'), { serialize: JSONScalar.serialize, parseValue: JSONScalar.parseValue, parseLiteral: JSONScalar.parseLiteral });
-  const { auth, agents, keys, budgets, projects, tasks, social, store, config } = s;
+  const { auth, agents, keys, budgets, projects, tasks, social, store, config, ops } = s;
 
   // ---- guards ----------------------------------------------------------------------------
   const anyone = (ctx) => ctx.principal;
@@ -164,6 +187,11 @@ export function makeGraphql(s) {
         if (!a) throw new HttpError(400, 'agent_required', 'Name one of your agents.');
         return tasks.pool(a).map((t) => tasks.view(t, ctx.principal));
       },
+      tickets: (args, ctx) => { const u = person(ctx).user; return ops.tickets(u, args).map((t) => ops.view(u, t)); },
+      ticket: ({ id }, ctx) => { const u = person(ctx).user; return ops.view(u, ops.ticket(u, id)); },
+      changes: ({ status }, ctx) => ops.changes(person(ctx).user, { status }),
+      change: ({ id }, ctx) => ops.change(person(ctx).user, id),
+      opsSummary: (_, ctx) => ops.summary(person(ctx).user),
       budget: ({ account }, ctx) => {
         const p = someone(ctx);
         const mine = p.kind === 'agent' ? [`agent:${p.agent.handle}`] : [`user:${p.user.username}`, ...agents.forOwner(p.user.id).map((a) => `agent:${a.handle}`)];
@@ -172,6 +200,24 @@ export function makeGraphql(s) {
       },
     },
     Mutation: {
+      stepUp: ({ code }, ctx) => {
+        const p = person(ctx);
+        if (!p.auth) throw new HttpError(400, 'no_session', 'This caller has no session to verify.');
+        auth.stepUp(p.auth, code, ctx.ip);
+        return true;
+      },
+      fileTicket: (args, ctx) => ops.view(person(ctx).user, ops.file(person(ctx).user, args)),
+      commentTicket: ({ id, ...rest }, ctx) => ops.view(person(ctx).user, ops.comment(person(ctx).user, id, rest)),
+      updateTicket: ({ id, ...rest }, ctx) => ops.view(person(ctx).user, ops.update(person(ctx).user, id, rest)),
+      createChange: (args, ctx) => ops.createChange(person(ctx).user, { ...args, systems: args.systems ?? [], tickets: args.tickets ?? [] }),
+      editChange: ({ id, ...rest }, ctx) => ops.editChange(person(ctx).user, id, rest),
+      advanceChange: ({ id, to, note, code, via }, ctx) => {
+        const p = person(ctx);
+        if (code && p.auth) auth.stepUp(p.auth, code, ctx.ip);
+        const fresh = Boolean(p.auth) && auth.clock() - (p.auth.session.mfaAt ?? 0) <= config.policy.sensitiveWindow;
+        return ops.advance(p.user, id, to, { note, fresh, via });
+      },
+      setRole: ({ username, role }, ctx) => ops.setRole(person(ctx, { fresh: true }).user, username, role, ctx.ip),
       updateProfile: (args, ctx) => { const p = person(ctx); social.updateProfile(p.user, args); return meView(ctx); },
       registerAgent: (args, ctx) => { const p = person(ctx); agents.register(p.user, args, ctx.ip); return agentView(agents.get(args.handle)); },
       setReviewPreferences: ({ agent, prefs }, ctx) => { const p = person(ctx); agents.setReviewPrefs(p.user, agent, prefs, ctx.ip); return agentView(agents.get(agent)); },

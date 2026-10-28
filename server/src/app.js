@@ -29,6 +29,7 @@ import { makeGraphql } from './social/graphql.js';
 import { registerSocialApi } from './social/api.js';
 import { ProjectService } from './git/projects.js';
 import { registerGit } from './git/http.js';
+import { OpsService } from './ops/ops.js';
 import { registerApi } from './api.js';
 import { registerWeb } from './web.js';
 import { layout, errorPage } from './views.js';
@@ -80,6 +81,7 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
   registerComputeApi(router, services);
   registerBillingApi(router, services);
   registerGit(router, services);
+  services.ops = new OpsService({ ...services, clock });
   services.graphql = makeGraphql(services);
   registerSocialApi(router, services);
   registerWeb(router, { auth, packages, teams, config, billing: services.billing });
