@@ -99,7 +99,7 @@ export function registerSocialWeb(router, s) {
   });
 
   // ---- your agents --------------------------------------------------------------------------
-  const agentsView = (ctx, a, extra = {}) => page(ctx, 'Agents', SV.agentsPage({ csrf: csrfToken(ctx), agents: myAgents(a), ...extra }), { user: a.user, wide: true, status: extra.status ?? 200 });
+  const agentsView = (ctx, a, extra = {}) => page(ctx, 'Agents', SV.agentsPage({ csrf: csrfToken(ctx), agents: myAgents(a), keys: keys.agentKeysFor(a.user), ...extra }), { user: a.user, wide: true, status: extra.status ?? 200 });
   router.get('/agents', (ctx) => { const a = requireWeb(ctx); if (a) agentsView(ctx, a, { notice: web.NOTICES[ctx.url.searchParams.get('msg')] }); });
 
   router.post('/agents', async (ctx) => {
@@ -129,6 +129,13 @@ export function registerSocialWeb(router, s) {
     }, (err) => agentsView(ctx, a, { error: err.message, status: err.status }));
   });
 
+  router.post('/agents/:handle/sandbox-key/:id/revoke', async (ctx) => {
+    await form(ctx);
+    const a = requireWeb(ctx);
+    if (!a || !requireFresh(ctx, a, '/agents?msg=confirm_again', true)) return;
+    await attempt(ctx, () => { agents.mine(a.user, ctx.params.handle); keys.revokeAgentKey(a.user, ctx.params.id, ctx.ip); redirect(ctx.res, '/agents'); }, (err) => agentsView(ctx, a, { error: err.message, status: err.status }));
+  });
+
   // ---- keys -------------------------------------------------------------------------------------
   const keysView = (ctx, a, extra = {}) => page(ctx, 'Keys', SV.keysPage({ csrf: csrfToken(ctx), ssh: keys.sshFor(a.user), gpg: keys.gpgFor(a.user), agents: myAgents(a), ...extra }), { user: a.user, wide: true, status: extra.status ?? 200 });
   router.get('/keys', (ctx) => { const a = requireWeb(ctx); if (a) keysView(ctx, a, { notice: web.NOTICES[ctx.url.searchParams.get('msg')] }); });
@@ -142,7 +149,7 @@ export function registerSocialWeb(router, s) {
   router.post('/keys/gpg', keyPost((ctx, a, f) => { keys.addGpg(a.user, keys.holder(a.user, f.agent || null, agents), { key: f.key }, ctx.ip); redirect(ctx.res, '/keys'); }));
   router.post('/keys/ssh/remove', keyPost((ctx, a, f) => { keys.removeKey(a.user, 'ssh', f.id, ctx.ip); redirect(ctx.res, '/keys'); }));
   router.post('/keys/gpg/remove', keyPost((ctx, a, f) => { keys.removeKey(a.user, 'gpg', f.id, ctx.ip); redirect(ctx.res, '/keys'); }));
-  router.post('/keys/console', keyPost((ctx, a, f) => { keysView(ctx, a, { newKey: keys.createConsoleKey(a.user, { name: f.name }, ctx.ip) }); }));
+  router.post('/keys/console', keyPost((ctx, a, f) => { keysView(ctx, a, { newKey: keys.createConsoleKey(a.user, { name: f.name }, ctx.ip, { mfaAt: a.session.mfaAt }) }); }));
 
   // ---- projects -----------------------------------------------------------------------------------
   const projectsView = (ctx, a, extra = {}) => page(ctx, 'Projects', SV.projectsPage({

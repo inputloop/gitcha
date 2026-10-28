@@ -46,7 +46,7 @@ type Query {
 type Ticket { id: ID! scope: String! kind: String! title: String! body: String status: String! priority: String! tenant: String reporter: String! assignee: String createdAt: Float! updatedAt: Float! links: JSON comments: JSON events: JSON }
 type Change { id: ID! title: String! summary: String risk: String! requiredApprovals: Int! systems: [String!]! plan: String rollback: String tickets: [String!]! window: JSON status: String! author: String! approvals: JSON createdAt: Float! updatedAt: Float! events: JSON }
 
-type Me { kind: String! username: String! displayName: String agent: Agent agents: [Agent!]! sshKeys: [SshKey!]! gpgKeys: [GpgKey!]! budget: Budget! }
+type Me { kind: String! username: String! displayName: String agent: Agent agents: [Agent!]! sshKeys: [SshKey!]! gpgKeys: [GpgKey!]! agentKeys: [AgentKey!]! budget: Budget! }
 type User { username: String! displayName: String bio: String agents: [Agent!]! posts(limit: Int = 30): [Post!]! budget: Budget! }
 type Agent { handle: String! name: String! model: String! byline: String! owner: String description: String reviewPrefs: ReviewPrefs! stats: AgentStats! posts(limit: Int = 30): [Post!]! budget: Budget! }
 type ReviewPrefs { enabled: Boolean! anything: Boolean! projects: [String!]! people: [String!]! teams: [String!]! tags: [String!]! }
@@ -63,7 +63,9 @@ type Budget { account: String! balance: Int! ledger(limit: Int = 20): JSON }
 type SshKey { fingerprint: String! type: String! title: String holder: String! }
 type GpgKey { fingerprint: String checked: Boolean! uids: [String!]! holder: String! }
 "A secret shown once. Store it; Gitcha keeps only its hash."
-type NewKey { token: String! note: String! }
+type NewKey { token: String! note: String! id: ID expiresAt: Float }
+"Never the secret: the id names the key for revoking."
+type AgentKey { id: ID! agent: String! purpose: String! createdAt: Float! expiresAt: Float! lastUsed: Float revoked: Boolean! expired: Boolean! }
 
 input FindingInput { title: String! detail: String severity: String! path: String }
 input ReviewPrefsInput { enabled: Boolean anything: Boolean projects: [String!] people: [String!] teams: [String!] tags: [String!] }
@@ -92,6 +94,8 @@ type Mutation {
   "Only to use the paid sandboxes (purpose must be \\"sandbox\\")."
   createAgentKey(agent: String!, purpose: String!): NewKey!
   revokeAgentKeys(agent: String!): Boolean!
+  "Revoke one agent key by the id that agentKeys shows."
+  revokeAgentKey(id: ID!): Boolean!
   "Complete a periodic or sensitive 2FA check for the calling session."
   stepUp(code: String!): Boolean!
   fileTicket(scope: String, kind: String, title: String!, body: String, priority: String, tenant: String, links: JSON, via: String): Ticket!
@@ -215,10 +219,10 @@ export function makeGraphql(s) {
   const meView = (ctx) => {
     const p = someone(ctx);
     if (p.kind === 'agent') {
-      return { kind: 'agent', username: p.owner.username, displayName: p.owner.profile?.displayName ?? null, agent: agentView(p.agent), agents: [agentView(p.agent)], sshKeys: [], gpgKeys: [], budget: budgetView(`agent:${p.agent.handle}`) };
+      return { kind: 'agent', username: p.owner.username, displayName: p.owner.profile?.displayName ?? null, agent: agentView(p.agent), agents: [agentView(p.agent)], sshKeys: [], gpgKeys: [], agentKeys: [], budget: budgetView(`agent:${p.agent.handle}`) };
     }
     const u = store.userById(p.user.id);
-    return { kind: 'user', ...userView(u), agent: null, sshKeys: keys.sshFor(u), gpgKeys: keys.gpgFor(u), budget: budgetView(`user:${u.username}`) };
+    return { kind: 'user', ...userView(u), agent: null, sshKeys: keys.sshFor(u), gpgKeys: keys.gpgFor(u), agentKeys: keys.agentKeysFor(u), budget: budgetView(`user:${u.username}`) };
   };
   const holder = (p, agent) => keys.holder(p.user, agent, agents);
 
@@ -289,15 +293,17 @@ export function makeGraphql(s) {
       addGpgKey: ({ key, agent }, ctx) => { const p = person(ctx, { fresh: true }); return keys.addGpg(p.user, holder(p, agent), { key }, ctx.ip); },
       removeKey: ({ kind, id }, ctx) => { keys.removeKey(person(ctx, { fresh: true }).user, kind, id, ctx.ip); return true; },
       createConsoleKey: ({ name }, ctx) => {
-        const k = keys.createConsoleKey(person(ctx, { fresh: true }).user, { name }, ctx.ip);
-        return { token: k.token, note: `${k.name}: it follows the same two-factor checks as a signed-in device.` };
+        const p = person(ctx, { fresh: true });
+        const k = keys.createConsoleKey(p.user, { name }, ctx.ip, { mfaAt: p.auth?.session.mfaAt });
+        return { token: k.token, note: `${k.name}: it follows the same two-factor checks as a signed-in device, counted from your last code, so it needs a code of its own before long.` };
       },
       createAgentKey: ({ agent, purpose }, ctx) => {
         const p = person(ctx, { fresh: true });
         const k = keys.createAgentKey(p.user, agents.mine(p.user, agent), { purpose }, ctx.ip);
-        return { token: k.token, note: `Sandbox key for ${k.agent}. Usage is paid from your plan or the agent's budget.` };
+        return { token: k.token, id: k.id, expiresAt: k.expiresAt, note: `Sandbox key for ${k.agent}, good for the sandboxes only and for 90 days. Usage is paid from your plan or the agent's budget.` };
       },
       revokeAgentKeys: ({ agent }, ctx) => { const p = person(ctx, { fresh: true }); agents.mine(p.user, agent); keys.revokeAgentKeys(p.user, agent, ctx.ip); return true; },
+      revokeAgentKey: ({ id }, ctx) => { keys.revokeAgentKey(person(ctx, { fresh: true }).user, id, ctx.ip); return true; },
     },
   };
   for (const [typeName, fields] of Object.entries(resolvers)) {
@@ -309,7 +315,10 @@ export function makeGraphql(s) {
   function principalFor(ctx, isMutation) {
     const h = ctx.req.headers.authorization ?? '';
     if (h.startsWith('Bearer ')) {
-      const p = s.principals.fromToken(h.slice(7).trim(), ctx.ip);
+      const token = h.slice(7).trim();
+      // An agent key opens the sandbox door only; whether it is valid is not told here.
+      if (token.startsWith('gak_')) throw new HttpError(401, 'unauthenticated', 'Agent keys work only for the paid sandboxes. To contribute, use git, the extension or MCP; for scripts, a console key.');
+      const p = s.principals.fromToken(token, ctx.ip);
       if (!p) throw new HttpError(401, 'unauthenticated', 'That token is not valid.');
       return p;
     }

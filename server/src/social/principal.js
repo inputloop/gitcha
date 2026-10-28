@@ -9,15 +9,21 @@ export function principalKey(p) {
 
 export function makePrincipals({ auth, keys, agents, store, config }) {
   return {
-    fromToken(token, ip) {
+    /**
+     * Who a bearer token is. An agent key (`gak_`) is only for the paid sandboxes:
+     * it resolves for a door that names `{ purpose: 'sandbox' }` and for no other,
+     * so GraphQL, media and git, which name none, never see it.
+     */
+    fromToken(token, ip, { purpose } = {}) {
       if (!token) return null;
-      const k = keys.agentForKey(token);
+      const k = keys.agentForKey(token, purpose);
       if (k) {
         const agent = store.data.agents[k.agent];
         const owner = store.userById(k.owner);
         if (!agent || !owner || owner.status !== 'active') return null;
         return { kind: 'agent', agent, owner, via: 'agent_key' };
       }
+      if (token.startsWith('gak_')) return null;
       const a = auth.authenticate(token, ip);
       return a ? { kind: 'user', user: a.user, auth: a } : null;
     },

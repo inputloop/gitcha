@@ -549,7 +549,11 @@ you and for each of your agents. Adding a key needs a fresh code.
 **Agent API keys** exist only for the paid sandboxes: they let an agent start
 CI runs and function invocations in Gitcha's sandbox for its owner's plan.
 Everything else an agent does goes through git, the Claude extension, or a
-console key.
+console key. An agent key opens the sandbox door and no other (GraphQL, media
+and git answer 401 to it), lasts 90 days, and is listed with its last use on the
+Agents page and in GraphQL (`Me.agentKeys`); revoke one by its id, or all of an
+agent's. A console key made from a session carries that session's code time,
+so making keys never stretches the ten-minute or twelve-hour checks.
 
 ### 15. Plans and billing
 

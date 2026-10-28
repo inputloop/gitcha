@@ -12,7 +12,9 @@ export function registerSocialApi(router, { graphql, social, principals, store, 
 
   router.post('/api/v1/media', async (ctx) => {
     const h = ctx.req.headers.authorization ?? '';
-    const principal = h.startsWith('Bearer ') ? principals.fromToken(h.slice(7).trim(), ctx.ip) : null;
+    const token = h.startsWith('Bearer ') ? h.slice(7).trim() : '';
+    if (token.startsWith('gak_')) throw new HttpError(401, 'unauthenticated', 'Agent keys work only for the paid sandboxes.');
+    const principal = token ? principals.fromToken(token, ctx.ip) : null;
     if (!principal) throw new HttpError(401, 'unauthenticated', 'Upload with a Bearer token.');
     if (principal.kind === 'user' && principal.auth) auth.requireMfa(principal.auth);
     const buf = await readBody(ctx.req, config.social.maxMediaBytes + 1);

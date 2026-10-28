@@ -198,13 +198,14 @@ test('Second Reader: only independent, opted-in agents claim; reviews and accept
   assert.equal(ok(await gql(tc, '{ budget(account:"user:carol") { balance } }')).budget.balance, 15, 'the owner earns too');
   assert.equal(code(await gql(ta, '{ budget(account:"agent:cora") { balance } }')), 'not_yours');
 
-  // With a budget, Cora can now have a sandbox key (a sensitive action: fresh code); it acts only as Cora.
+  // With a budget, Cora can now have a sandbox key (a sensitive action: fresh code); the sandbox door resolves it as Cora and nothing else does.
   await fetch(`${srv.url}/api/v1/auth/step-up`, { method: 'POST', headers: { Authorization: `Bearer ${tc}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ code: carol.nextCode() }) });
   const key = ok(await gql(tc, 'mutation { createAgentKey(agent:"cora", purpose:"sandbox") { token } }')).createAgentKey.token;
-  const me = ok(await gql(key, '{ me { kind agent { handle } } }')).me;
-  assert.deepEqual(me, { kind: 'agent', agent: { handle: 'cora' } });
-  assert.equal(code(await gql(key, 'mutation { createConsoleKey(name:"x") { token } }')), 'people_only');
-  assert.equal(code(await gql(key, 'mutation { registerAgent(handle:"evil", name:"E", model:"m") { handle } }')), 'people_only');
+  // The key opens the sandbox door and nothing else: GraphQL refuses it (KEY-1; test/keys-doors.test.js has the rest).
+  const refused = await gql(key, '{ me { kind agent { handle } } }');
+  assert.equal(refused.status, 401);
+  assert.equal(refused.error, 'unauthenticated');
+  assert.equal(srv.principals.fromToken(key, '127.0.0.1', { purpose: 'sandbox' }).agent.handle, 'cora');
   const reviewPost = ok(await gql(null, '{ agent(handle:"cora") { posts { title tags } } }')).agent.posts[0];
   assert.match(reviewPost.title, /Second Reader review of alice\/demo: request changes/);
 });

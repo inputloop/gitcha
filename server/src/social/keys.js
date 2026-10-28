@@ -4,10 +4,16 @@
 //
 //   console keys   for a person's scripts and terminal; they are sessions of
 //                  kind "console", so the 2FA policy applies to them as to any
-//                  device. Created with a fresh 2FA code.
+//                  device. Created with a fresh 2FA code. A key carries the
+//                  code time of the session that minted it, never a fresh one:
+//                  only a login or a typed code opens a window, so a chain of
+//                  keys cannot keep one open.
 //   agent keys     ("agentic API keys") exist only to let a registered agent use
-//                  the paid sandboxes (runners). They are never issued otherwise:
-//                  agents contribute for free over git, the extension or MCP.
+//                  the paid sandboxes (runners), and open no other door: the
+//                  caller of `principals.fromToken` names the purpose it serves.
+//                  They are never issued otherwise: agents contribute for free
+//                  over git, the extension or MCP. They expire (90 days), can be
+//                  listed, and are revoked one at a time or all at once.
 //   SSH keys       git over SSH, for a person or one of their agents.
 //   GPG keys       to check commit signatures, for a person or one of their agents.
 import crypto from 'node:crypto';
@@ -17,6 +23,10 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { HttpError } from '../errors.js';
 import { randomToken, sha256 } from '../crypto.js';
+
+const AGENT_KEY_TTL = 90 * 86_400_000;
+/** The public name of an agent key: a prefix of the hash Gitcha keeps, so it can name the key without being able to use it. */
+const keyId = (hash) => hash.slice(0, 12);
 
 const SSH_TYPES = new Set(['ssh-ed25519', 'ecdsa-sha2-nistp256', 'ecdsa-sha2-nistp384', 'ecdsa-sha2-nistp521', 'sk-ssh-ed25519@openssh.com', 'sk-ecdsa-sha2-nistp256@openssh.com', 'ssh-rsa']);
 
@@ -79,8 +89,14 @@ export class KeyService {
   }
 
   // ---- console keys --------------------------------------------------------------------
-  createConsoleKey(user, { name }, ip) {
+  /**
+   * `mfaAt` is the code time of the session that asked for the key. The new key
+   * gets that time, not "now" (createSession stamps a login), so minting a key
+   * never renews the sensitive window or the 12-hour check. No parent time, no window.
+   */
+  createConsoleKey(user, { name }, ip, { mfaAt } = {}) {
     const { token, session } = this.auth.createSession(user, { kind: 'console', name: `console: ${String(name ?? 'key').slice(0, 60)}`, ip, userAgent: 'console key' });
+    this.store.tx((d) => { d.sessions[sha256(token)].mfaAt = Number.isFinite(mfaAt) ? mfaAt : 0; });
     return { token, name: session.name, createdAt: session.createdAt };
   }
 
@@ -96,24 +112,47 @@ export class KeyService {
       throw new HttpError(402, 'sandbox_not_paid', `Sandbox keys need a paid plan or a positive budget; ${agent.handle} has ${budget} credits. Budgets grow with reviews and accepted findings.`);
     }
     const token = randomToken('gak_');
+    const hash = sha256(token);
+    const createdAt = this.clock();
     this.store.tx((d) => {
-      d.keys.agent[sha256(token)] = { agent: agent.handle, owner: user.id, createdAt: this.clock(), purpose: 'sandbox' };
-      this.store.audit({ userId: user.id, event: 'agent_key.created', ip, agent: agent.handle });
+      d.keys.agent[hash] = { agent: agent.handle, owner: user.id, createdAt, expiresAt: createdAt + AGENT_KEY_TTL, purpose: 'sandbox' };
+      this.store.audit({ userId: user.id, event: 'agent_key.created', ip, agent: agent.handle, key: keyId(hash) });
     });
-    return { token, agent: agent.handle, purpose: 'sandbox' };
+    return { token, agent: agent.handle, purpose: 'sandbox', id: keyId(hash), expiresAt: createdAt + AGENT_KEY_TTL };
   }
 
-  agentForKey(token) {
+  /** A key made before keys expired counts its 90 days from the day it was made. */
+  expiresAt(k) { return k.expiresAt ?? k.createdAt + AGENT_KEY_TTL; }
+
+  /** The key behind a token, if it is live and was issued for `purpose`. A door that names no purpose gets nothing. */
+  agentForKey(token, purpose) {
     if (!token?.startsWith('gak_')) return null;
     const k = this.data.agent[sha256(token)];
-    if (!k || k.revoked) return null;
+    if (!k || k.revoked || k.purpose !== purpose || this.expiresAt(k) < this.clock()) return null;
     k.lastUsed = this.clock();
     return k;
   }
 
+  /** The owner's agent keys, newest first. Never the secret. */
+  agentKeysFor(user) {
+    return Object.entries(this.data.agent).filter(([, k]) => k.owner === user.id).sort(([, a], [, b]) => b.createdAt - a.createdAt)
+      .map(([hash, k]) => ({ id: keyId(hash), agent: k.agent, purpose: k.purpose, createdAt: k.createdAt, expiresAt: this.expiresAt(k), lastUsed: k.lastUsed ?? null, revoked: Boolean(k.revoked), expired: this.expiresAt(k) < this.clock() }));
+  }
+
+  revokeAgentKey(user, id, ip) {
+    const hash = Object.keys(this.data.agent).find((h) => keyId(h) === String(id));
+    const k = hash && this.data.agent[hash];
+    if (!k || k.owner !== user.id) throw new HttpError(404, 'agent_key_not_found', 'No such agent key.');
+    this.store.tx((d) => {
+      d.keys.agent[hash].revoked ??= this.clock();
+      this.store.audit({ userId: user.id, event: 'agent_key.revoked', ip, agent: k.agent, key: keyId(hash) });
+    });
+    return { revoked: keyId(hash) };
+  }
+
   revokeAgentKeys(user, agentHandle, ip) {
     this.store.tx((d) => {
-      for (const k of Object.values(d.keys.agent)) if (k.agent === agentHandle && k.owner === user.id) k.revoked = this.clock();
+      for (const k of Object.values(d.keys.agent)) if (k.agent === agentHandle && k.owner === user.id) k.revoked ??= this.clock();
       this.store.audit({ userId: user.id, event: 'agent_key.revoked', ip, agent: agentHandle });
     });
   }
