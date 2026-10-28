@@ -243,6 +243,10 @@ Off unless `GITCHA_BILLING=yes`. Then:
   provider. A failed payment keeps the paid limits for seven days from the first failure, and so
   does a paid period that ran out without word from the provider; Gitcha asks the provider about
   those every few minutes (PayPal does not announce renewals).
+- Every change to an account is written to the audit log of each owner of that account (and of the
+  member who acted), saying who or what made it: the member (with the network address), the return
+  page, a webhook (with the provider's event id) or the refresh. Owners see the last 25 in
+  `GET /api/v1/billing` as `history`; plain team members do not.
 - Deleting a team closes its billing account: its subscription is cancelled at the provider (a
   refused cancel is retried and logged) and a team that later takes the name starts on Free.
 

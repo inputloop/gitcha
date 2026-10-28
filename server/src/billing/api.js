@@ -22,7 +22,7 @@ export function registerBillingApi(router, { auth, billing, config }) {
   router.post('/api/v1/billing/confirm', async (ctx) => {
     const a = verified(ctx);
     const body = await readJson(ctx.req);
-    json(ctx.res, 200, await billing.confirmReturn(a.user, { owner: body.owner, provider: body.provider, sessionId: body.session_id, subscriptionId: body.subscription_id }));
+    json(ctx.res, 200, await billing.confirmReturn(a.user, { owner: body.owner, provider: body.provider, sessionId: body.session_id, subscriptionId: body.subscription_id }, ctx.ip));
   });
 
   router.post('/api/v1/billing/cancel', async (ctx) => {
