@@ -28,9 +28,18 @@ const month = (t) => new Date(t).toISOString().slice(0, 7);
 const GRACE_MS = 7 * 86_400_000; // a failed payment keeps the paid limits this long
 const GONE = '(gone)'; // the binding of an account whose owner no longer exists
 
+// Services holding usage that is not on disk yet; a stop signal ends in process.exit, which writes them (flushOnExit).
+const unflushed = new Set();
+let exitHooked = false;
+function hookExit() {
+  if (exitHooked) return;
+  exitHooked = true;
+  process.on('exit', () => { for (const b of unflushed) { try { b.flushNow(); } catch { /* the process is ending: nothing more can be done */ } } });
+}
+
 export class BillingService {
   constructor({ store, config, teams, clock = Date.now, fetchImpl = globalThis.fetch, log = { info: (m) => console.log(m), error: (m) => console.error(m) } }) {
-    Object.assign(this, { store, config, teams, clock, log });
+    Object.assign(this, { store, config, teams, clock, log, flushMs: 2000, flushFailures: 0 });
     store.data.billing ??= { accounts: {}, usage: {}, events: {} };
     this.plans = config.billing.plansFile ? JSON.parse(fs.readFileSync(config.billing.plansFile, 'utf8')) : DEFAULT_PLANS;
     if (!this.plans.free) throw new Error('The plans file must define a "free" plan.');
@@ -217,29 +226,73 @@ export class BillingService {
     return { ...(this.data.usage[key]?.[month(t)] ?? {}) };
   }
 
-  record(key, metric, n = 1) {
+  /** Add `n` (may be negative, never below zero) to this month's count, or to the month `at` falls in. */
+  record(key, metric, n = 1, at = this.clock()) {
     if (!METRICS[metric]) return;
-    const m = month(this.clock());
+    const m = month(at);
     const u = (this.data.usage[key] ??= {});
-    (u[m] ??= {})[metric] = (u[m][metric] ?? 0) + n;
-    // Usage is flushed with the next write; a crash loses at most a few seconds of counts.
-    if (!this.flushTimer) {
-      this.flushTimer = setTimeout(() => { this.flushTimer = null; this.store.flush(); }, 2000);
-      this.flushTimer.unref?.();
-    }
+    (u[m] ??= {})[metric] = Math.max(0, (u[m][metric] ?? 0) + n);
+    // Usage is flushed soon after, not with every count; a stop signal writes it too (see flushOnExit).
+    unflushed.add(this);
+    hookExit();
+    this.scheduleFlush();
   }
 
-  /** Throw 402 when the owner is at their plan's limit. `current` overrides the monthly count (e.g. number of sites). */
-  check(key, metric, current) {
+  scheduleFlush(delay = this.flushMs) {
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      try { this.flushNow(); this.flushFailures = 0; } catch (err) {
+        // A disk that is unwell must not end the process: say so, and try again a little later.
+        this.log.error(`billing: could not save usage (${err.message}); trying again`);
+        this.scheduleFlush(Math.min(this.flushMs * 2 ** Math.min(++this.flushFailures, 8), 60_000));
+      }
+    }, delay);
+    this.flushTimer.unref?.();
+  }
+
+  /** Write the store now (usage counts included). */
+  flushNow() {
+    clearTimeout(this.flushTimer);
+    this.flushTimer = null;
+    this.store.flush();
+    unflushed.delete(this);
+  }
+
+  /**
+   * Throw 402 when taking `n` more would pass the owner's plan limit. `current` overrides the monthly count (e.g. number of sites).
+   */
+  check(key, metric, current, n = 1) {
     if (!this.enabled) return;
     const plan = this.plans[this.planFor(key)];
     const limit = plan.limits?.[metric];
     if (limit === undefined || limit === null) return;
     const used = current ?? this.usage(key)[metric] ?? 0;
-    if (used >= limit) {
+    if (used + n > limit) {
       throw new HttpError(402, 'quota_exceeded', `${key} has used ${used} of ${limit} ${METRICS[metric]} on the ${plan.name} plan${current === undefined ? ' this month' : ''}. Upgrade at ${this.config.publicUrl}/billing.`, { metric, limit, used, plan: this.planFor(key) });
     }
   }
+
+  /**
+   * Take `n` of a metered resource before the work starts: refuse (402) if that passes the limit, and count it now, so work
+   * admitted together counts together. Returns plain data to keep with the job; give it to settle() when the work ends.
+   */
+  reserve(key, metric, n = 1) {
+    this.check(key, metric, undefined, n);
+    this.record(key, metric, n);
+    return { key, metric, n, at: this.clock() };
+  }
+
+  /** The work ended having used `actual` (0 if it never ran): correct the count made at reserve(). Once per reservation; a second call does nothing. */
+  settle(reservation, actual) {
+    if (!reservation || reservation.settled) return;
+    reservation.settled = true;
+    const diff = Math.max(0, actual) - reservation.n;
+    if (diff) this.record(reservation.key, reservation.metric, diff, reservation.at);
+  }
+
+  /** The work never ran (a platform failure, a job that never started). */
+  release(reservation) { this.settle(reservation, 0); }
 
   view(user, owner) {
     const o = this.account(user, owner);
