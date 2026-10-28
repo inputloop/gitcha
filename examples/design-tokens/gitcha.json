@@ -1,0 +1,9 @@
+{
+  "name": "design-tokens",
+  "version": "1.4.0",
+  "description": "Acme's shared colours, spacing and type scale. Visible to the acme team only.",
+  "license": "CC-BY-SA-4.0",
+  "team": "acme",
+  "private": true,
+  "files": ["tokens.json"]
+}

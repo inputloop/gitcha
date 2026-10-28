@@ -149,6 +149,42 @@ test('Claude extension: search/install, 2FA check via gitcha_verify_2fa, securit
   } finally { m.close(); }
 });
 
+test('teams: create, add members, publish shared + team-only packages (CLI and Claude)', async () => {
+  createUser(srv, 'bob', 'second long passphrase');
+  srv.clock.advance(31_000);
+  // Fresh code for the sensitive team operations below.
+  assert.equal((await run(['verify', user.nextCode()])).code, 0);
+  const c = await run(['team', 'create', 'acme', '--description', 'Acme tools']);
+  assert.equal(c.code, 0, c.stderr);
+  assert.equal((await run(['team', 'add', 'acme', 'bob', '--role', 'maintainer'])).code, 0);
+  const info = await run(['team', 'info', 'acme']);
+  assert.match(info.stdout, /bob\s+maintainer/);
+
+  const pkg = path.join(project, 'acme-secret');
+  fs.mkdirSync(pkg);
+  fs.writeFileSync(path.join(pkg, 'gitcha.json'), JSON.stringify({ name: 'acme-secret', version: '1.0.0', description: 'Internal' }));
+  const pub = await run(['publish', 'acme-secret', '--team', 'acme', '--private']);
+  assert.equal(pub.code, 0, pub.stderr);
+  assert.match(pub.stdout, /to team acme \(team only\)/);
+  assert.equal((await run(['transfer', 'hello', 'acme'])).code, 0, 'share an existing personal package');
+
+  const m = mcp();
+  try {
+    await m.request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } });
+    const teams = await m.tool('gitcha_teams');
+    assert.match(teams.text, /acme \(you are owner\)/);
+    const shared = await m.tool('gitcha_search', { team: 'acme' });
+    assert.match(shared.text, /acme-secret@1\.0\.0.*team acme, team-only/);
+    assert.match(shared.text, /hello@1\.0\.0/);
+    const vis = await m.tool('gitcha_share_package', { name: 'acme-secret', private: false });
+    assert.match(vis.text, /visible to every registry user/);
+    const t = await m.tool('gitcha_team_create', { name: 'design' });
+    assert.match(t.text, /Created team design/);
+    const mem = await m.tool('gitcha_team_member', { team: 'design', username: 'bob', role: 'member' });
+    assert.match(mem.text, /bob is now member of team design/);
+  } finally { m.close(); }
+});
+
 test('CLI security toggles and logout', async () => {
   const sec = await run(['security']);
   assert.match(sec.stdout, /off\s+New network check/);

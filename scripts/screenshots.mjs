@@ -114,7 +114,7 @@ async function cli(args, { input = '', cwd = project, show = [] } = {}) {
   }
   for (const [prompt, typed] of show) text = text.replace(`${prompt}\x1b[0m: \n`, `${prompt}\x1b[0m: ${typed}\n`);
   if (r.status !== 0) throw new Error(`gitcha ${args.join(' ')} failed:\n${text}`);
-  return { cmd: `gitcha ${args.join(' ')}`, text };
+  return { cmd: `gitcha ${args.map((x) => (/\s/.test(x) ? `"${x}"` : x)).join(' ')}`, text };
 }
 
 const cliCode = await freshCode(secret);
@@ -125,6 +125,20 @@ const statusRun = await cli(['status']);
 const publishRuns = [];
 for (const p of ['hello-world', 'tiny-logger', 'color-utils']) publishRuns.push(await cli(['publish', path.join(root, 'examples', p)], { cwd: root }));
 publishRuns.forEach((r) => { r.cmd = r.cmd.replace(root + path.sep, ''); });
+// Teams: a second and third user, a shared team, and a team-only package.
+for (const [name, pw] of [['bob', 'blue whale passphrase'], ['carol', 'green field passphrase']]) {
+  const r = app.auth.register({ username: name, password: pw, ip: '127.0.0.1' });
+  app.auth.confirmEnrollment({ enrollToken: r.enrollToken, code: totp(r.secret), ip: '127.0.0.1' });
+}
+const teamRuns = [
+  await cli(['team', 'create', 'acme', '--description', 'Acme platform team']),
+  await cli(['team', 'add', 'acme', 'bob', '--role', 'maintainer']),
+  await cli(['team', 'add', 'acme', 'carol']),
+  await cli(['publish', path.join(root, 'examples', 'design-tokens')], { cwd: root }),
+  await cli(['transfer', 'color-utils', 'acme']),
+  await cli(['team', 'info', 'acme']),
+];
+teamRuns[3].cmd = teamRuns[3].cmd.replace(root + path.sep, '');
 const searchRun = await cli(['search']);
 const installRun = await cli(['install', 'tiny-logger']);
 const securityRun = await cli(['security']);
@@ -136,6 +150,10 @@ await page.goto(`${URL_}/packages/tiny-logger`);
 await shot('08-package', { fullPage: true });
 await page.goto(`${URL_}/account`);
 await shot('09-account', { fullPage: true });
+await page.goto(`${URL_}/teams`);
+await shot('15-teams');
+await page.goto(`${URL_}/teams/acme`);
+await shot('16-team', { fullPage: true });
 await page.goto(`${URL_}/verify?reason=interval&next=/packages`);
 await shot('10-step-up');
 
@@ -210,6 +228,7 @@ async function renderTerminal(name, title, runs) {
 await renderTerminal('11-cli-login', 'Terminal: first run', [loginRun, statusRun]);
 await renderTerminal('12-cli-publish-install', 'Terminal: publish & install', [...publishRuns.slice(0, 2), searchRun, installRun]);
 await renderTerminal('13-cli-security', 'Terminal: 2FA check settings', [securityRun]);
+await renderTerminal('17-cli-teams', 'Terminal: teams', teamRuns);
 
 const TX_CSS = `body{margin:0;padding:28px;background:#e9ebf3;font-family:Inter,system-ui,sans-serif;color:#151a2d}
 .panel{width:860px;background:#fff;border-radius:14px;box-shadow:0 18px 50px rgba(20,26,45,.18);overflow:hidden}

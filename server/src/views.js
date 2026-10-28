@@ -33,7 +33,7 @@ export function layout({ title, user, csrf, body, wide = false }) {
 <header class="topbar">
   <a class="brand" href="/"><img src="/static/logo.svg" alt="" width="28" height="28"> Gitcha</a>
   <nav>
-    ${user ? `<a href="/packages">Packages</a><a href="/account">Account</a>
+    ${user ? `<a href="/packages">Packages</a><a href="/teams">Teams</a><a href="/account">Account</a>
     <form method="post" action="/logout" class="inline"><input type="hidden" name="_csrf" value="${esc(csrf)}"><button class="link">Sign out (${esc(user.username)})</button></form>`
     : `<a href="/login">Sign in</a><a class="btn small" href="/register">Create account</a>`}
   </nav>
@@ -149,7 +149,7 @@ ${results.length === 0 ? h`<div class="empty card"><p>No packages ${q ? h`match 
 ${results.map((p) => h`<a class="pkg card" href="/packages/${encodeURIComponent(p.name)}">
   <div class="pkg-top"><strong class="pkg-name">${p.name}</strong><span class="badge">v${p.latest ?? '—'}</span></div>
   <p>${p.description || 'No description.'}</p>
-  <div class="meta"><span>by ${p.owner}</span><span>${p.license}</span><span>${p.downloads} install${p.downloads === 1 ? '' : 's'}</span><span>updated ${ago(p.updatedAt)}</span></div>
+  <div class="meta"><span>${p.team ? h`👥 ${p.team}` : h`by ${p.owner}`}</span>${p.visibility === 'team' ? h`<span>🔒 team only</span>` : ''}<span>${p.license}</span><span>${p.downloads} install${p.downloads === 1 ? '' : 's'}</span><span>updated ${ago(p.updatedAt)}</span></div>
 </a>`)}
 </div>`;
 
@@ -178,9 +178,9 @@ export function markdown(src) {
   return raw(html);
 }
 
-export const packagePage = ({ pkg, serverUrl }) => h`
+export const packagePage = ({ pkg, serverUrl, share }) => h`
 <div class="pkg-header">
-  <div><h1>${pkg.name} <span class="badge big">v${pkg.latest ?? '—'}</span></h1><p class="lead">${pkg.description}</p></div>
+  <div><h1>${pkg.name} <span class="badge big">v${pkg.latest ?? '—'}</span>${pkg.visibility === 'team' ? h`<span class="badge big lock">🔒 team only</span>` : ''}</h1><p class="lead">${pkg.description}</p></div>
 </div>
 <div class="pkg-grid">
   <article class="card readme">${pkg.readme ? markdown(pkg.readme) : h`<p class="muted">This package has no README.</p>`}</article>
@@ -192,7 +192,7 @@ export const packagePage = ({ pkg, serverUrl }) => h`
     </div>
     <div class="card">
       <dl class="kv">
-        <dt>Owner</dt><dd>${pkg.owner}</dd>
+        <dt>Owner</dt><dd>${pkg.team ? h`👥 <a href="/teams/${pkg.team}">${pkg.team}</a> (team)` : pkg.owner}</dd>
         <dt>License</dt><dd>${pkg.license}</dd>
         <dt>Installs</dt><dd>${pkg.downloads}</dd>
         <dt>Registry</dt><dd>${serverUrl}</dd>
@@ -206,6 +206,7 @@ export const packagePage = ({ pkg, serverUrl }) => h`
       <tr class="sha ${v.yanked ? 'yanked' : ''}"><td colspan="3"><code title="${v.integrity}">${v.integrity.slice(0, 23)}…</code></td></tr>`)}
       </tbody></table>
     </div>
+    ${share ?? ''}
   </aside>
 </div>`;
 
@@ -266,3 +267,101 @@ ${alert(notice, 'info')}${alert(error)}
 </section>`;
 
 export const errorPage = ({ status, message }) => h`<div class="auth-card"><h1>${status}</h1><p>${message}</p><a class="btn" href="/">Home</a></div>`;
+
+// ---- teams -------------------------------------------------------------------
+const ROLE_HELP = {
+  owner: 'Manage members and roles, delete the team, and everything maintainers can do.',
+  maintainer: 'Publish, yank and transfer the team’s packages.',
+  member: 'See and install the team’s private packages.',
+};
+
+export const teamsPage = ({ csrf, teams, error, notice, name = '', description = '' }) => h`
+<div class="page-head"><h1>Teams</h1></div>
+${alert(notice, 'info')}${alert(error)}
+<div class="account-grid">
+  <section>
+    ${teams.length === 0 ? h`<div class="card empty"><p>You are not in any teams yet.</p><p class="muted">Create one to share packages with other people.</p></div>` : ''}
+    <div class="pkg-list single">
+    ${teams.map((t) => h`<a class="pkg card" href="/teams/${t.name}">
+      <div class="pkg-top"><strong class="pkg-name">👥 ${t.name}</strong><span class="badge">${t.role}</span></div>
+      <p>${t.description || 'No description.'}</p>
+      <div class="meta"><span>${t.members} member${t.members === 1 ? '' : 's'}</span><span>${t.packages} package${t.packages === 1 ? '' : 's'}</span><span>created ${ago(t.createdAt)}</span></div>
+    </a>`)}
+    </div>
+  </section>
+  <section class="card">
+    <h2>Create a team</h2>
+    <p class="muted small">Teams own packages together. You become the team’s first owner.</p>
+    <form method="post" action="/teams">
+      ${csrfField(csrf)}
+      <label>Team name <input name="name" value="${name}" required minlength="2" maxlength="32" placeholder="acme-tools"></label>
+      <label>Description <input name="description" value="${description}" maxlength="300" placeholder="What this team builds"></label>
+      <button class="btn block">Create team</button>
+    </form>
+  </section>
+</div>`;
+
+export const teamPage = ({ csrf, team, me, packages, error, notice }) => {
+  const isOwner = team.role === 'owner';
+  return h`
+<div class="page-head">
+  <div><h1>👥 ${team.name}</h1><p class="lead">${team.description || ''}</p></div>
+  <span class="badge big">you are ${team.role}</span>
+</div>
+${alert(notice, 'info')}${alert(error)}
+<div class="account-grid">
+  <section class="card">
+    <h2>Shared packages</h2>
+    ${packages.length === 0 ? h`<p class="muted">No packages yet. Publish with <code>gitcha publish --team ${team.name}</code>, or open one of your packages and choose <em>Share with a team</em>.</p>` : ''}
+    <table class="table"><tbody>
+    ${packages.map((p) => h`<tr><td><a href="/packages/${p.name}"><strong>${p.name}</strong></a> <span class="badge">v${p.latest ?? '—'}</span>${p.visibility === 'team' ? h` <span class="badge lock">🔒 team only</span>` : ''}<br><span class="muted small">${p.description}</span></td><td class="muted small">${p.downloads} install${p.downloads === 1 ? '' : 's'}</td></tr>`)}
+    </tbody></table>
+  </section>
+  <section class="card">
+    <h2>Roles</h2>
+    <dl class="kv roles">${Object.entries(ROLE_HELP).reverse().map(([r, t]) => h`<dt><strong>${r}</strong></dt><dd class="small">${t}</dd>`)}</dl>
+  </section>
+</div>
+<section class="card">
+  <h2>Members</h2>
+  <table class="table">
+    <thead><tr><th>User</th><th>Role</th><th>Added</th><th></th></tr></thead>
+    <tbody>
+    ${team.members.map((m) => h`<tr>
+      <td><strong>${m.username}</strong>${m.username === me.username ? h` <span class="badge">you</span>` : ''}</td>
+      <td>${isOwner ? h`<form method="post" action="/teams/${team.name}/members" class="row">${csrfField(csrf)}<input type="hidden" name="username" value="${m.username}">
+        <select name="role" aria-label="Role for ${m.username}">${['member', 'maintainer', 'owner'].map((r) => h`<option value="${r}" ${r === m.role ? raw('selected') : ''}>${r}</option>`)}</select>
+        <button class="btn ghost small">Save</button></form>` : m.role}</td>
+      <td class="muted small">${ago(m.addedAt)}${m.addedBy && m.addedBy !== m.username ? ` by ${m.addedBy}` : ''}</td>
+      <td>${isOwner || m.username === me.username ? h`<form method="post" action="/teams/${team.name}/members/${m.username}/remove">${csrfField(csrf)}<button class="btn danger small">${m.username === me.username ? 'Leave' : 'Remove'}</button></form>` : ''}</td>
+    </tr>`)}
+    </tbody>
+  </table>
+  ${isOwner ? h`<form method="post" action="/teams/${team.name}/members" class="add-member">
+    ${csrfField(csrf)}
+    <label>Add a member <input name="username" placeholder="username" required></label>
+    <label>Role <select name="role"><option value="member">member</option><option value="maintainer">maintainer</option><option value="owner">owner</option></select></label>
+    <button class="btn">Add member</button>
+  </form>
+  <p class="small muted">Adding, removing or changing members needs a fresh authenticator code.</p>` : ''}
+</section>
+${isOwner ? h`<section class="card danger-zone">
+  <h2>Delete team</h2>
+  <p class="muted">Transfer or remove the team’s packages first.</p>
+  <form method="post" action="/teams/${team.name}/delete">${csrfField(csrf)}<button class="btn danger">Delete ${team.name}</button></form>
+</section>` : ''}`;
+};
+
+export const shareCard = ({ csrf, pkg, teams }) => h`
+<div class="card">
+  <h3>${pkg.team ? 'Team sharing' : 'Share with a team'}</h3>
+  ${pkg.team ? h`<p class="small">Owned by team <a href="/teams/${pkg.team}">${pkg.team}</a>. Its maintainers can publish new versions.</p>
+    <form method="post" action="/packages/${pkg.name}/visibility">${csrfField(csrf)}
+      <input type="hidden" name="private" value="${pkg.visibility === 'team' ? 'off' : 'on'}">
+      <button class="btn ghost small">${pkg.visibility === 'team' ? 'Make visible to everyone' : '🔒 Make team-only'}</button>
+    </form>` : h`<p class="small muted">Move this package into a team so its maintainers can publish too.</p>`}
+  ${teams.length ? h`<form method="post" action="/packages/${pkg.name}/transfer" class="row">${csrfField(csrf)}
+    <select name="team" aria-label="Team">${teams.map((t) => h`<option value="${t.name}">${t.name}</option>`)}</select>
+    <button class="btn small">${pkg.team ? 'Move' : 'Transfer'}</button>
+  </form>` : h`<p class="small"><a href="/teams">Create a team</a> first.</p>`}
+</div>`;

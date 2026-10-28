@@ -140,3 +140,17 @@ pre.install { margin: 0 0 8px; }
   .hero h1 { font-size: 32px; }
   .table { display: block; overflow-x: auto; }
 }
+
+/* teams */
+.pkg-list.single { grid-template-columns: 1fr; }
+.badge.lock { background: #fff4dc; color: #8a5a00; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .badge.lock { background: #3a2c0a; color: #f5c95b; } }
+select { padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; }
+form.row { display: flex; gap: 8px; align-items: center; margin: 0; }
+form.row > .btn { margin-top: 0; }
+.add-member { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-top: 16px; }
+.add-member label { margin: 0; }
+.add-member select { display: block; margin-top: 6px; padding: 10px 12px; }
+.add-member > .btn { margin-top: 0; }
+.roles { grid-template-columns: auto 1fr; }
+.danger-zone { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }

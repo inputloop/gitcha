@@ -17,6 +17,14 @@ const NOTICES = {
   signed_out: 'You have been signed out.',
   checks_saved: 'Two-factor check settings saved.',
   revoked: 'Device signed out.',
+  team_created: 'Team created. Add members below.',
+  member_saved: 'Team member saved.',
+  member_removed: 'Member removed.',
+  left: 'You left the team.',
+  team_deleted: 'Team deleted.',
+  transferred: 'Package moved to the team.',
+  visibility: 'Package visibility updated.',
+  confirm_again: 'Verified. Please submit your change again.',
 };
 const REASONS = {
   interval: 'It has been a while since you last confirmed it was you.',
@@ -27,7 +35,7 @@ const REASONS = {
 /** Only allow same-site relative redirects. */
 const safeNext = (n) => (typeof n === 'string' && /^\/(?![/\\])/.test(n) ? n : '/packages');
 
-export function registerWeb(router, { auth, packages, config }) {
+export function registerWeb(router, { auth, packages, teams, config }) {
   const secure = config.secureCookies;
 
   const csrfToken = (ctx) => {
@@ -62,7 +70,7 @@ export function registerWeb(router, { auth, packages, config }) {
     return a;
   };
 
-  /** For POSTs needing a fresh code: send through /verify, then back to `back`. */
+  /** For POSTs needing a fresh code: send through /verify, then back to the `back` page. */
   const requireFresh = (ctx, a, back, force = false) => {
     const age = auth.clock() - (a.session.mfaAt ?? 0);
     const needs = force || auth.checkSettings(a.user).sensitive;
@@ -174,8 +182,7 @@ export function registerWeb(router, { auth, packages, config }) {
     if (!a) return redirect(ctx.res, '/login');
     try {
       auth.stepUp(a, f.code, ctx.ip);
-      // A POST target can't be replayed by redirect, so land on its page instead.
-      redirect(ctx.res, safeNext(f.next).replace(/\/(checks|recovery-codes|sessions\/[^/]+\/revoke)$/, ''));
+      redirect(ctx.res, safeNext(f.next));
     } catch (err) {
       if (!(err instanceof HttpError)) throw err;
       verifyView(ctx, { error: err.message, next: f.next, status: err.status });
@@ -194,15 +201,97 @@ export function registerWeb(router, { auth, packages, config }) {
     const a = config.publicRead ? current(ctx) : requireWeb(ctx);
     if (!a && !config.publicRead) return;
     const q = ctx.url.searchParams.get('q') ?? '';
-    page(ctx, 'Packages', V.packagesPage({ q, results: packages.search(q) }), { user: a?.user, wide: true });
+    page(ctx, 'Packages', V.packagesPage({ q, results: packages.search(q, a?.user) }), { user: a?.user, wide: true });
   });
+
+  const packageView = (ctx, a, name, { status = 200 } = {}) => {
+    const pkg = packages.info(name, a?.user);
+    const myTeams = a ? teams.forUser(a.user).filter((t) => t.role !== 'member' && t.name !== pkg.team) : [];
+    const share = a && pkg.canPublish ? V.shareCard({ csrf: csrfToken(ctx), pkg, teams: myTeams }) : '';
+    page(ctx, pkg.name, V.packagePage({ pkg, serverUrl: config.publicUrl, share }), { user: a?.user, wide: true, status });
+  };
 
   router.get('/packages/:name', (ctx) => {
     const a = config.publicRead ? current(ctx) : requireWeb(ctx);
     if (!a && !config.publicRead) return;
-    const pkg = packages.info(ctx.params.name);
-    page(ctx, pkg.name, V.packagePage({ pkg, serverUrl: config.publicUrl }), { user: a?.user, wide: true });
+    packageView(ctx, a, ctx.params.name);
   });
+
+  /** Shared shape for team/package POST forms that need a fresh code. */
+  const sensitivePost = (back, fn) => async (ctx) => {
+    const f = await form(ctx);
+    const a = requireWeb(ctx);
+    if (!a || !requireFresh(ctx, a, `${back(ctx)}?msg=confirm_again`)) return;
+    await fn(ctx, a, f);
+  };
+
+  router.post('/packages/:name/transfer', sensitivePost((ctx) => `/packages/${ctx.params.name}`, (ctx, a, f) => {
+    packages.transfer(a.user, ctx.params.name, f.team, ctx.ip);
+    redirect(ctx.res, `/teams/${encodeURIComponent(f.team)}?msg=transferred`);
+  }));
+
+  router.post('/packages/:name/visibility', sensitivePost((ctx) => `/packages/${ctx.params.name}`, (ctx, a, f) => {
+    packages.setVisibility(a.user, ctx.params.name, f.private === 'on', ctx.ip);
+    redirect(ctx.res, `/packages/${encodeURIComponent(ctx.params.name)}`);
+  }));
+
+  // ---- teams --------------------------------------------------------------------
+  router.get('/teams', (ctx) => {
+    const a = requireWeb(ctx);
+    if (a) page(ctx, 'Teams', V.teamsPage({ csrf: csrfToken(ctx), teams: teams.forUser(a.user), notice: NOTICES[ctx.url.searchParams.get('msg')] }), { user: a.user, wide: true });
+  });
+
+  router.post('/teams', async (ctx) => {
+    const f = await form(ctx);
+    const a = requireWeb(ctx);
+    if (!a) return;
+    try {
+      const t = teams.create(a.user, { name: f.name, description: f.description }, ctx.ip);
+      redirect(ctx.res, `/teams/${t.name}?msg=team_created`);
+    } catch (err) {
+      if (!(err instanceof HttpError)) throw err;
+      page(ctx, 'Teams', V.teamsPage({ csrf: csrfToken(ctx), teams: teams.forUser(a.user), error: err.message, name: f.name, description: f.description }),
+        { user: a.user, wide: true, status: err.status });
+    }
+  });
+
+  const teamView = (ctx, a, name, { error, notice, status = 200 } = {}) => {
+    const team = teams.view(teams.get(name), a.user);
+    page(ctx, team.name, V.teamPage({
+      csrf: csrfToken(ctx), team, me: a.user, error, notice, packages: packages.search('', a.user, { team: team.name }),
+    }), { user: a.user, wide: true, status });
+  };
+
+  router.get('/teams/:team', (ctx) => {
+    const a = requireWeb(ctx);
+    if (a) teamView(ctx, a, ctx.params.team, { notice: NOTICES[ctx.url.searchParams.get('msg')] });
+  });
+
+  /** Team changes: on a rule violation, show the team page with the error. */
+  const teamPost = (fn) => sensitivePost((ctx) => `/teams/${ctx.params.team}`, async (ctx, a, f) => {
+    try {
+      await fn(ctx, a, f);
+    } catch (err) {
+      if (!(err instanceof HttpError) || err.code === 'team_not_found') throw err;
+      teamView(ctx, a, ctx.params.team, { error: err.message, status: err.status });
+    }
+  });
+
+  router.post('/teams/:team/members', teamPost((ctx, a, f) => {
+    teams.setMember(a.user, ctx.params.team, f.username, f.role, ctx.ip);
+    redirect(ctx.res, `/teams/${ctx.params.team}?msg=member_saved`);
+  }));
+
+  router.post('/teams/:team/members/:username/remove', teamPost((ctx, a) => {
+    const self = ctx.params.username.toLowerCase() === a.user.username.toLowerCase();
+    teams.removeMember(a.user, ctx.params.team, ctx.params.username, ctx.ip);
+    redirect(ctx.res, self ? '/teams?msg=left' : `/teams/${ctx.params.team}?msg=member_removed`);
+  }));
+
+  router.post('/teams/:team/delete', teamPost((ctx, a) => {
+    teams.delete(a.user, ctx.params.team, ctx.ip);
+    redirect(ctx.res, '/teams?msg=team_deleted');
+  }));
 
   // ---- account security -----------------------------------------------------
   const accountView = (ctx, a, { notice, error, status = 200 } = {}) => {
@@ -223,7 +312,7 @@ export function registerWeb(router, { auth, packages, config }) {
   router.post('/account/checks', async (ctx) => {
     const f = await form(ctx);
     const a = requireWeb(ctx);
-    if (!a || !requireFresh(ctx, a, '/account/checks', true)) return;
+    if (!a || !requireFresh(ctx, a, '/account?msg=confirm_again', true)) return;
     try {
       auth.updateCheckSettings(a.user, { interval: f.interval === 'on', new_network: f.new_network === 'on', sensitive: f.sensitive === 'on' }, ctx.ip);
       redirect(ctx.res, '/account?msg=checks_saved');
@@ -236,14 +325,14 @@ export function registerWeb(router, { auth, packages, config }) {
   router.post('/account/recovery-codes', async (ctx) => {
     await form(ctx);
     const a = requireWeb(ctx);
-    if (!a || !requireFresh(ctx, a, '/account/recovery-codes', true)) return;
+    if (!a || !requireFresh(ctx, a, '/account?msg=confirm_again', true)) return;
     page(ctx, 'Recovery codes', V.recoveryCodesPage({ codes: auth.regenerateRecoveryCodes(a.user, ctx.ip), fresh: false }), { user: a.user });
   });
 
   router.post('/account/sessions/:id/revoke', async (ctx) => {
     await form(ctx);
     const a = requireWeb(ctx);
-    if (!a || !requireFresh(ctx, a, `/account/sessions/${ctx.params.id}/revoke`)) return;
+    if (!a || !requireFresh(ctx, a, '/account?msg=confirm_again')) return;
     const target = auth.store.sessionsForUser(a.user.id).find((s) => s.hash.startsWith(ctx.params.id) && ctx.params.id.length === 16);
     if (target) auth.revoke(target.hash, a.user.username, ctx.ip);
     redirect(ctx.res, '/account?msg=revoked');

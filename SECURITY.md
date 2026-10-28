@@ -53,6 +53,22 @@ manipulated AI assistant is not enough** to publish or install code as you.
 - Every security-relevant event is written to a per-user audit log shown on
   the Account page.
 
+## Teams
+
+- Permissions are checked server-side on every request. Owners manage
+  membership, maintainers publish/yank/transfer team packages, and members can
+  read team-only packages.
+- Team-only packages return `404` to non-members (search, info, download), and
+  publishing over a hidden name returns a neutral "name not available" error,
+  so outsiders can't discover them.
+- Adding, removing or re-roling members, transferring packages and changing
+  visibility are sensitive actions that need a fresh 2FA code. Each change is
+  written to the audit log of both the acting user and the affected user.
+- A team can't lose its last owner, and a team that still owns packages can't
+  be deleted.
+- Team names and usernames share one namespace, so a team can't impersonate a
+  user.
+
 ## The Claude extension and your secrets
 
 - The extension never asks for, receives or stores your password. First-time

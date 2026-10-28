@@ -28,8 +28,19 @@ ${bold('Packages')}
   gitcha search [query]                         find packages
   gitcha info <name>                            show a package and its versions
   gitcha install [name[@version]] [--dir DIR]   install one package, or all from gitcha.json
-  gitcha publish [DIR]                          publish the package in DIR (default: .)
+  gitcha publish [DIR] [--team T] [--private]  publish DIR (default: .), optionally owned by team T
   gitcha yank <name@version> [--undo]           hide a broken version from installs
+  gitcha transfer <name> <team>                 share a package by moving it into a team
+  gitcha access <name> team-only|public         who can see a team package
+
+${bold('Teams')}
+  gitcha team list                              teams you belong to
+  gitcha team create <name> [--description D]   start a team (you become its owner)
+  gitcha team info <name>                       members, roles and shared packages
+  gitcha team add <team> <user> [--role R]      add a member or change their role
+                                                (R = member | maintainer | owner)
+  gitcha team remove <team> <user>              remove a member (or yourself, to leave)
+  gitcha team delete <name>                     delete an empty team
 
 ${bold('Security')}
   gitcha status                                 who you are and when the next 2FA check is due
@@ -50,7 +61,7 @@ function parseArgs(argv) {
     if (a.startsWith('--')) {
       const [k, v] = a.slice(2).split('=');
       if (v !== undefined) args.flags[k] = v;
-      else if (argv[i + 1] && !argv[i + 1].startsWith('--') && !['json', 'undo', 'help', 'version', 'hook'].includes(k)) args.flags[k] = argv[++i];
+      else if (argv[i + 1] && !argv[i + 1].startsWith('--') && !['json', 'undo', 'help', 'version', 'hook', 'private'].includes(k)) args.flags[k] = argv[++i];
       else args.flags[k] = true;
     } else args._.push(a);
   }
@@ -93,6 +104,10 @@ async function withStepUp(client, fn) {
 }
 
 const when = (t) => (t ? new Date(t).toLocaleString() : 'never');
+const packageLine = (p) => {
+  const by = p.team ? `team ${p.team}${p.visibility === 'team' ? ' 🔒' : ''}` : `by ${p.owner}`;
+  return `${bold(cyan(p.name))} ${green('v' + p.latest)}  ${p.description || dim('no description')}  ${dim(`${by} · ${p.downloads} install${p.downloads === 1 ? '' : 's'}`)}`;
+};
 
 const commands = {
   async login({ flags }) {
@@ -176,10 +191,10 @@ const commands = {
 
   async search({ _, flags }) {
     const client = authedClient(flags);
-    const { packages } = await withStepUp(client, () => client.search(_.slice(1).join(' ')));
+    const { packages } = await withStepUp(client, () => client.search(_.slice(1).join(' '), { team: flags.team }));
     if (flags.json) return out(JSON.stringify(packages, null, 2));
     if (!packages.length) return out(dim('No packages found.'));
-    for (const p of packages) out(`${bold(cyan(p.name))} ${green('v' + p.latest)}  ${p.description || dim('no description')}  ${dim(`by ${p.owner} · ${p.downloads} install${p.downloads === 1 ? '' : 's'}`)}`);
+    for (const p of packages) out(packageLine(p));
   },
 
   async info({ _, flags }) {
@@ -189,7 +204,7 @@ const commands = {
     if (flags.json) return out(JSON.stringify(p, null, 2));
     out(`${bold(cyan(p.name))} ${green('v' + p.latest)}  ${dim(p.license)}`);
     if (p.description) out(p.description);
-    out(dim(`owner ${p.owner} · ${p.downloads} install${p.downloads === 1 ? '' : 's'}`));
+    out(dim(`${p.team ? `team ${p.team}${p.visibility === 'team' ? ' · team only' : ''}` : `owner ${p.owner}`} · ${p.downloads} install${p.downloads === 1 ? '' : 's'}`));
     out(bold('\nVersions'));
     for (const v of p.versions) out(`  ${v.yanked ? red(v.version + ' (yanked)') : v.version}  ${dim(v.integrity.slice(0, 30) + '…')}  ${dim(when(v.publishedAt))}`);
   },
@@ -210,9 +225,75 @@ const commands = {
     const dir = path.resolve(_[1] || '.');
     const { manifest, files, tarball } = pack(dir);
     out(`${magenta('◆')} Packing ${bold(`${manifest.name}@${manifest.version}`)} ${dim(`(${files.length} files, ${(tarball.length / 1024).toFixed(1)} KB)`)}`);
-    const res = await withStepUp(client, () => client.publish(tarball));
+    const opts = { team: typeof flags.team === 'string' ? flags.team : undefined, private: flags.private ? true : undefined };
+    const res = await withStepUp(client, () => client.publish(tarball, opts));
     if (flags.json) return out(JSON.stringify(res, null, 2));
-    out(green(`✓ Published ${bold(`${res.name}@${res.version}`)}`) + dim(`  ${res.integrity}`));
+    out(green(`✓ Published ${bold(`${res.name}@${res.version}`)}`) + (res.team ? ` to team ${bold(res.team)}${res.visibility === 'team' ? ' (team only)' : ''}` : '') + dim(`  ${res.integrity}`));
+  },
+
+  async transfer({ _, flags }) {
+    if (!_[1] || !_[2]) throw new Error('Usage: gitcha transfer <package> <team>');
+    const client = authedClient(flags);
+    const res = await withStepUp(client, () => client.transfer(_[1], _[2]));
+    out(green(`✓ ${bold(res.name)} now belongs to team ${bold(res.team)}.`) + dim(' Team maintainers can publish new versions.'));
+  },
+
+  async access({ _, flags }) {
+    if (!_[1] || !['team-only', 'public'].includes(_[2])) throw new Error('Usage: gitcha access <package> team-only|public');
+    const client = authedClient(flags);
+    const res = await withStepUp(client, () => client.setVisibility(_[1], _[2] === 'team-only'));
+    out(green(`✓ ${bold(res.name)} is now ${res.visibility === 'team' ? `visible only to team ${res.team}` : 'visible to every registry user'}.`));
+  },
+
+  async team({ _, flags }) {
+    const client = authedClient(flags);
+    const [, sub, a, b] = _;
+    const roleColor = (r) => (r === 'owner' ? magenta(r) : r === 'maintainer' ? cyan(r) : r);
+    switch (sub) {
+      case undefined:
+      case 'list': {
+        const { teams } = await withStepUp(client, () => client.teams());
+        if (flags.json) return out(JSON.stringify(teams, null, 2));
+        if (!teams.length) return out(dim('You are not in any teams. Start one with `gitcha team create <name>`.'));
+        for (const t of teams) out(`${bold(cyan(t.name))}  ${roleColor(t.role)}  ${dim(`${t.members} members · ${t.packages} packages`)}  ${t.description}`);
+        return;
+      }
+      case 'create': {
+        if (!a) throw new Error('Usage: gitcha team create <name> [--description D]');
+        const t = await withStepUp(client, () => client.createTeam(a, typeof flags.description === 'string' ? flags.description : ''));
+        return out(green(`✓ Created team ${bold(t.name)}.`) + ` You are its owner. Add people with ${cyan(`gitcha team add ${t.name} <user>`)}.`);
+      }
+      case 'info': {
+        if (!a) throw new Error('Usage: gitcha team info <name>');
+        const t = await withStepUp(client, () => client.team(a));
+        if (flags.json) return out(JSON.stringify(t, null, 2));
+        out(`${bold(cyan(t.name))}  ${dim(t.description || '')}`);
+        out(bold('\nMembers'));
+        for (const m of t.members) out(`  ${m.username.padEnd(20)} ${roleColor(m.role)}`);
+        out(bold('\nShared packages'));
+        if (!t.packageNames.length) out(dim(`  none yet: gitcha publish --team ${t.name}`));
+        for (const p of t.packageNames) out(`  ${p}`);
+        return;
+      }
+      case 'add': {
+        if (!a || !b) throw new Error('Usage: gitcha team add <team> <user> [--role member|maintainer|owner]');
+        const role = typeof flags.role === 'string' ? flags.role : 'member';
+        await withStepUp(client, () => client.setMember(a, b, role));
+        return out(green(`✓ ${bold(b)} is now ${role === 'owner' ? 'an' : 'a'} ${role} of ${bold(a)}.`));
+      }
+      case 'remove': {
+        if (!a || !b) throw new Error('Usage: gitcha team remove <team> <user>');
+        await withStepUp(client, () => client.removeMember(a, b));
+        return out(green(`✓ Removed ${bold(b)} from ${bold(a)}.`));
+      }
+      case 'delete': {
+        if (!a) throw new Error('Usage: gitcha team delete <name>');
+        await withStepUp(client, () => client.deleteTeam(a));
+        return out(green(`✓ Deleted team ${bold(a)}.`));
+      }
+      default:
+        throw new Error(`Unknown team command "${sub}". Use list, create, info, add, remove or delete.`);
+    }
   },
 
   async yank({ _, flags }) {

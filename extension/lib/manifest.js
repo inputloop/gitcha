@@ -12,6 +12,9 @@ export function validateManifest(m) {
     errors.push('"description" must be a string of at most 500 characters');
   }
   if (m.license !== undefined && typeof m.license !== 'string') errors.push('"license" must be an SPDX identifier string');
+  if (m.team !== undefined && !/^[a-z0-9][a-z0-9_-]{1,31}$/.test(m.team)) errors.push('"team" must be a team name');
+  if (m.private !== undefined && typeof m.private !== 'boolean') errors.push('"private" must be true or false');
+  if (m.private && !m.team) errors.push('"private" packages must belong to a team (set "team")');
   if (m.files !== undefined && !(Array.isArray(m.files) && m.files.every((f) => typeof f === 'string'))) {
     errors.push('"files" must be an array of paths');
   }

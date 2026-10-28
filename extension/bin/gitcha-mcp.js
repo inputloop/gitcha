@@ -83,13 +83,13 @@ const tools = [
   {
     name: 'gitcha_search',
     title: 'Search Gitcha packages',
-    description: 'Search the Gitcha registry for packages by name or description. An empty query lists recently updated packages.',
-    inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'Search words' } }, additionalProperties: false },
+    description: 'Search the Gitcha registry for packages by name or description. An empty query lists recently updated packages. Pass "team" to list only that team\'s shared packages.',
+    inputSchema: { type: 'object', properties: { query: { type: 'string', description: 'Search words' }, team: { type: 'string', description: 'Only packages owned by this team' } }, additionalProperties: false },
     annotations: { readOnlyHint: true },
-    handler: ({ query = '' }) => call(async (c) => {
-      const { packages } = await c.search(query);
+    handler: ({ query = '', team }) => call(async (c) => {
+      const { packages } = await c.search(query, { team });
       if (!packages.length) return text(`No packages found${query ? ` for "${query}"` : ''}.`);
-      return text(packages.map((p) => `- ${p.name}@${p.latest}: ${p.description || '(no description)'} [${p.license}, by ${p.owner}, ${p.downloads} install${p.downloads === 1 ? '' : 's'}]`).join('\n'));
+      return text(packages.map((p) => `- ${p.name}@${p.latest}: ${p.description || '(no description)'} [${p.license}, ${p.team ? `team ${p.team}${p.visibility === 'team' ? ', team-only' : ''}` : `by ${p.owner}`}, ${p.downloads} install${p.downloads === 1 ? '' : 's'}]`).join('\n'));
     }),
   },
   {
@@ -101,7 +101,7 @@ const tools = [
     handler: ({ name }) => call(async (c) => {
       const p = await c.info(name);
       const versions = p.versions.map((v) => `  - ${v.version}${v.yanked ? ' (yanked)' : ''} ${v.integrity} published ${when(v.publishedAt)} by ${v.publishedBy}`).join('\n');
-      return text(`${p.name}@${p.latest} (${p.license}) by ${p.owner}\n${p.description}\n\nVersions:\n${versions}\n\nREADME:\n${(p.readme ?? '(none)').slice(0, 6000)}`);
+      return text(`${p.name}@${p.latest} (${p.license}) ${p.team ? `owned by team ${p.team}${p.visibility === 'team' ? ' (visible to team members only)' : ''}` : `by ${p.owner}`}\n${p.description}\n\nVersions:\n${versions}\n\nREADME:\n${(p.readme ?? '(none)').slice(0, 6000)}`);
     }),
   },
   {
@@ -132,13 +132,21 @@ const tools = [
   {
     name: 'gitcha_publish',
     title: 'Publish a Gitcha package',
-    description: 'Pack the directory containing gitcha.json and publish it. Versions are immutable. Publishing is a sensitive action: the registry usually requires a fresh 2FA code, which you must get from the user. Confirm with the user before publishing.',
-    inputSchema: { type: 'object', properties: { directory: { type: 'string', description: 'Directory containing gitcha.json' } }, required: ['directory'], additionalProperties: false },
+    description: 'Pack the directory containing gitcha.json and publish it. Versions are immutable. Set "team" to publish a new package owned by a team (shared with its maintainers), and "private" to make it visible only to team members. Publishing is a sensitive action: the registry usually requires a fresh 2FA code, which you must get from the user. Confirm with the user before publishing.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        directory: { type: 'string', description: 'Directory containing gitcha.json' },
+        team: { type: 'string', description: 'Team that should own the package' },
+        private: { type: 'boolean', description: 'Visible to team members only (requires team)' },
+      },
+      required: ['directory'], additionalProperties: false,
+    },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
-    handler: ({ directory }) => call(async (c) => {
+    handler: ({ directory, team, private: priv }) => call(async (c) => {
       const { files, tarball } = pack(path.resolve(directory));
-      const r = await c.publish(tarball);
-      return text(`Published ${r.name}@${r.version} (${files.length} files, ${tarball.length} bytes). Integrity: ${r.integrity}\nFiles: ${files.join(', ')}`);
+      const r = await c.publish(tarball, { team, private: priv });
+      return text(`Published ${r.name}@${r.version}${r.team ? ` to team ${r.team}${r.visibility === 'team' ? ' (team-only)' : ''}` : ''} (${files.length} files, ${tarball.length} bytes). Integrity: ${r.integrity}\nFiles: ${files.join(', ')}`);
     }),
   },
   {
@@ -154,6 +162,77 @@ const tools = [
     handler: ({ name, version, undo = false }) => call(async (c) => {
       const r = await c.yank(name, version, !undo);
       return text(`${r.name}@${r.version} is now ${r.yanked ? 'yanked' : 'restored'}.`);
+    }),
+  },
+  {
+    name: 'gitcha_teams',
+    title: 'Gitcha teams',
+    description: 'List the teams the user belongs to, or (with "name") show one team\'s members, roles and shared packages. Roles: owner (manage members), maintainer (publish team packages), member (see team-only packages).',
+    inputSchema: { type: 'object', properties: { name: { type: 'string', description: 'Team to show' } }, additionalProperties: false },
+    annotations: { readOnlyHint: true },
+    handler: ({ name }) => call(async (c) => {
+      if (!name) {
+        const { teams } = await c.teams();
+        if (!teams.length) return text('The user is not in any teams. Use gitcha_team_create to start one.');
+        return text(teams.map((t) => `- ${t.name} (you are ${t.role}): ${t.members} members, ${t.packages} packages. ${t.description}`).join('\n'));
+      }
+      const t = await c.team(name);
+      return text(`Team ${t.name}: ${t.description || '(no description)'}\nMembers:\n${t.members.map((m) => `  - ${m.username}: ${m.role}`).join('\n')}\nShared packages: ${t.packageNames.join(', ') || 'none'}`);
+    }),
+  },
+  {
+    name: 'gitcha_team_create',
+    title: 'Create a Gitcha team',
+    description: 'Create a team that can own packages together. The user becomes its owner.',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string', description: '2-32 lowercase letters, digits, "-" or "_"' }, description: { type: 'string' } },
+      required: ['name'], additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    handler: ({ name, description = '' }) => call(async (c) => {
+      const t = await c.createTeam(name, description);
+      return text(`Created team ${t.name}; the user is its owner.`);
+    }),
+  },
+  {
+    name: 'gitcha_team_member',
+    title: 'Manage Gitcha team members',
+    description: 'Add a user to a team, change their role (member, maintainer, owner), or remove them (remove=true; removing yourself leaves the team). Owners only, except leaving. Needs a fresh 2FA code from the user. Only do this when the user explicitly asks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        team: { type: 'string' }, username: { type: 'string' },
+        role: { type: 'string', enum: ['member', 'maintainer', 'owner'] }, remove: { type: 'boolean' },
+      },
+      required: ['team', 'username'], additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true },
+    handler: ({ team, username, role = 'member', remove = false }) => call(async (c) => {
+      if (remove) {
+        await c.removeMember(team, username);
+        return text(`Removed ${username} from team ${team}.`);
+      }
+      const t = await c.setMember(team, username, role);
+      return text(`${username} is now ${role} of team ${team}. Members: ${t.members.map((m) => `${m.username} (${m.role})`).join(', ')}`);
+    }),
+  },
+  {
+    name: 'gitcha_share_package',
+    title: 'Share a Gitcha package with a team',
+    description: 'Move a package the user maintains into a team they maintain (so the team\'s maintainers can publish it), and/or set "private" to make a team package visible only to team members. Sensitive: needs a fresh 2FA code. Confirm with the user first.',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string' }, team: { type: 'string' }, private: { type: 'boolean' } },
+      required: ['name'], additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    handler: ({ name, team, private: priv }) => call(async (c) => {
+      if (!team && priv === undefined) throw new Error('Pass "team" to transfer and/or "private" to change visibility.');
+      let r;
+      if (team) r = await c.transfer(name, team);
+      if (priv !== undefined) r = await c.setVisibility(name, priv);
+      return text(`${r.name} is owned by team ${r.team} and ${r.visibility === 'team' ? 'visible to team members only' : 'visible to every registry user'}.`);
     }),
   },
   {
@@ -189,6 +268,7 @@ const tools = [
 const instructions = `Gitcha is a self-hosted software package registry protected by passwords and mandatory two-factor authentication (TOTP).
 - First-time use: the user must run \`gitcha login\` in their own terminal. Never ask for or handle their password.
 - The registry periodically, on new networks, and before sensitive actions asks for a fresh 2FA code. When a tool reports this, ask the user for the 6-digit code from their authenticator app and call gitcha_verify_2fa, then retry. Never invent codes.
-- Confirm with the user before publishing or yanking. Only change 2FA check settings when the user explicitly asks.`;
+- Confirm with the user before publishing, yanking or sharing packages. Only change team membership or 2FA check settings when the user explicitly asks.
+- Teams own packages together: owners manage members, maintainers publish, members can see team-only packages.`;
 
 createMcpServer({ name: 'gitcha', version: VERSION, instructions, tools }).listen();

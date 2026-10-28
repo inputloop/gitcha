@@ -22,7 +22,7 @@ function sessionView(auth, state) {
   };
 }
 
-export function registerApi(router, { auth: authSvc, packages, config, version }) {
+export function registerApi(router, { auth: authSvc, packages, teams, config, version }) {
   const authed = (ctx) => {
     const a = authSvc.authenticate(bearer(ctx.req), ctx.ip);
     if (!a) throw new HttpError(401, 'unauthenticated', 'Not logged in. Run `gitcha login` first.');
@@ -98,13 +98,14 @@ export function registerApi(router, { auth: authSvc, packages, config, version }
 
   // ---- packages -------------------------------------------------------------
   router.get('/api/v1/packages', (ctx) => {
-    reader(ctx);
-    json(ctx.res, 200, { packages: packages.search(ctx.url.searchParams.get('q') ?? '') });
+    const a = reader(ctx);
+    const q = ctx.url.searchParams;
+    json(ctx.res, 200, { packages: packages.search(q.get('q') ?? '', a?.user, { team: q.get('team') || undefined }) });
   });
 
   router.get('/api/v1/packages/:name', (ctx) => {
-    reader(ctx);
-    json(ctx.res, 200, packages.info(ctx.params.name));
+    const a = reader(ctx);
+    json(ctx.res, 200, packages.info(ctx.params.name, a?.user));
   });
 
   router.get('/api/v1/packages/:name/:version/tarball', (ctx) => {
@@ -122,12 +123,59 @@ export function registerApi(router, { auth: authSvc, packages, config, version }
     const a = verified(ctx, { sensitive: true });
     const body = await readJson(ctx.req, Math.ceil(config.maxPackageBytes * 1.4) + 4096);
     const tarball = Buffer.from(String(body.tarball ?? ''), 'base64');
-    json(ctx.res, 201, packages.publish(a.user, { tarball, integrity: body.integrity }, ctx.ip));
+    const priv = typeof body.private === 'boolean' ? body.private : undefined;
+    json(ctx.res, 201, packages.publish(a.user, { tarball, integrity: body.integrity, team: body.team || undefined, private: priv }, ctx.ip));
   });
 
   router.post('/api/v1/packages/:name/:version/yank', async (ctx) => {
     const a = verified(ctx, { sensitive: true });
     const { yanked = true } = await readJson(ctx.req);
     json(ctx.res, 200, packages.yank(a.user, ctx.params.name, ctx.params.version, Boolean(yanked), ctx.ip));
+  });
+
+  router.post('/api/v1/packages/:name/transfer', async (ctx) => {
+    const a = verified(ctx, { sensitive: true });
+    const { team } = await readJson(ctx.req);
+    json(ctx.res, 200, packages.transfer(a.user, ctx.params.name, team, ctx.ip));
+  });
+
+  router.post('/api/v1/packages/:name/visibility', async (ctx) => {
+    const a = verified(ctx, { sensitive: true });
+    const body = await readJson(ctx.req);
+    json(ctx.res, 200, packages.setVisibility(a.user, ctx.params.name, Boolean(body.private), ctx.ip));
+  });
+
+  // ---- teams --------------------------------------------------------------------
+  router.get('/api/v1/teams', (ctx) => {
+    const a = verified(ctx);
+    json(ctx.res, 200, { teams: teams.forUser(a.user) });
+  });
+
+  router.post('/api/v1/teams', async (ctx) => {
+    const a = verified(ctx);
+    const { name, description } = await readJson(ctx.req);
+    const team = teams.create(a.user, { name, description }, ctx.ip);
+    json(ctx.res, 201, teams.view(team, a.user));
+  });
+
+  router.get('/api/v1/teams/:team', (ctx) => {
+    const a = verified(ctx);
+    json(ctx.res, 200, teams.view(teams.get(ctx.params.team), a.user));
+  });
+
+  router.put('/api/v1/teams/:team/members/:username', async (ctx) => {
+    const a = verified(ctx, { sensitive: true });
+    const { role = 'member' } = await readJson(ctx.req);
+    json(ctx.res, 200, teams.setMember(a.user, ctx.params.team, ctx.params.username, role, ctx.ip));
+  });
+
+  router.delete('/api/v1/teams/:team/members/:username', (ctx) => {
+    const a = verified(ctx, { sensitive: true });
+    json(ctx.res, 200, teams.removeMember(a.user, ctx.params.team, ctx.params.username, ctx.ip));
+  });
+
+  router.delete('/api/v1/teams/:team', (ctx) => {
+    const a = verified(ctx, { sensitive: true });
+    json(ctx.res, 200, teams.delete(a.user, ctx.params.team, ctx.ip));
   });
 }

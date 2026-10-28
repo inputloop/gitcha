@@ -1,6 +1,6 @@
 ---
 name: gitcha
-description: Use when the user wants to find, install, publish or yank packages on their Gitcha registry, check their Gitcha sign-in, or change Gitcha two-factor check settings. Explains the 2FA rules the gitcha_* tools enforce.
+description: Use when the user wants to find, install, publish or yank packages on their Gitcha registry, manage Gitcha teams or share packages with a team, check their Gitcha sign-in, or change Gitcha two-factor check settings. Explains the 2FA rules the gitcha_* tools enforce.
 ---
 
 # Working with a Gitcha registry
@@ -49,6 +49,18 @@ about 30 seconds, so ask right before you need it.
 
 `gitcha_install` downloads into `gitcha_modules/<name>`, verifies SHA-256
 integrity and records it in `gitcha-lock.json`. Commit the lockfile.
+
+## Teams and shared packages
+
+- `gitcha_teams` lists the user's teams; pass `name` to see members and packages.
+- `gitcha_team_create` starts a team; the user becomes its owner.
+- `gitcha_team_member` adds, re-roles (`member`, `maintainer`, `owner`) or removes
+  people. Only do this when the user names the person and role. It needs a
+  fresh 2FA code.
+- To share a package: publish with `team` (and `private: true` for team-only),
+  or move an existing one with `gitcha_share_package`. Confirm first.
+- Owners manage members, maintainers publish, members can see team-only
+  packages. A team always keeps at least one owner.
 
 ## Toggling follow-up checks
 

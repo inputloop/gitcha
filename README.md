@@ -18,7 +18,10 @@
 ![Gitcha landing page](docs/screenshots/01-landing.png)
 
 Gitcha lets a team or community host its own packages: publish tarballs,
-browse them on the web, and install them with integrity checking. Every
+browse them on the web, and install them with integrity checking. Anyone can
+start a **team**, invite people with owner, maintainer or member roles, and
+share packages that the whole team maintains, optionally visible to team
+members only. Every
 account needs a password **and** an authenticator app (Google Authenticator,
 Authy, Aegis, 1Password…) to sign in and to install for the first time. After
 that, the registry asks for a fresh code from time to time. Each user can turn
@@ -43,7 +46,8 @@ a 2FA check, Claude has to ask *you* for the code.
   - [5. Browse the registry](#5-browse-the-registry)
   - [6. Intermittent 2FA checks](#6-intermittent-2fa-checks)
   - [7. Toggle the follow-up checks](#7-toggle-the-follow-up-checks)
-  - [8. Use it from Claude](#8-use-it-from-claude)
+  - [8. Teams and shared packages](#8-teams-and-shared-packages)
+  - [9. Use it from Claude](#9-use-it-from-claude)
 - [Installing the Claude extension](#installing-the-claude-extension)
 - [CLI reference](#cli-reference)
 - [Package format](#package-format)
@@ -71,6 +75,10 @@ a 2FA check, Claude has to ask *you* for the code.
   each user can switch the three follow-up checks on or off. Changing them
   needs a fresh code, and admins can lock checks on with
   `GITCHA_LOCKED_CHECKS`.
+- 👥 **Teams.** Anyone can start a team and manage it. Owners manage members
+  and roles, maintainers publish and yank the team's packages, and members can
+  see team-only packages. Move personal packages into a team to share them, or
+  publish straight into one.
 - 🔒 **Secrets encrypted at rest.** Passwords are hashed with scrypt *and then*
   encrypted with AES-256-GCM. TOTP secrets are AES-256-GCM encrypted. Session
   and device tokens and recovery codes are stored only as hashes.
@@ -86,11 +94,10 @@ a 2FA check, Claude has to ask *you* for the code.
 
 - A Claude Code plugin (MCP server, skill, slash commands and a
   session-start status hook), plus a Claude Desktop extension manifest.
-- Eight tools: `gitcha_status`, `gitcha_search`, `gitcha_package_info`,
-  `gitcha_install`, `gitcha_publish`, `gitcha_yank`, `gitcha_verify_2fa`,
-  `gitcha_security_settings`.
-- The `gitcha` CLI handles first-run sign-in, publish/install, `verify`,
-  `security` and `logout`.
+- Twelve tools covering search, install, publish, yank, teams, sharing, 2FA
+  checks and check settings (listed [below](#tools)).
+- The `gitcha` CLI handles first-run sign-in, publish/install, teams,
+  `verify`, `security` and `logout`.
 
 ---
 
@@ -223,7 +230,44 @@ The same settings are available from the terminal:
 gitcha security --new-network off --interval on
 ```
 
-### 8. Use it from Claude
+### 8. Teams and shared packages
+
+Open **Teams**, give the team a name, and you become its first owner. Teams
+are listed with your role, member count and shared packages:
+
+![Teams list](docs/screenshots/15-teams.png)
+
+On the team page, owners add people by username and set roles. The page also
+lists everything the team owns. Packages marked 🔒 **team only** are invisible
+to anyone outside the team: they don't appear in search, and their names
+can't be squatted.
+
+![Team page with members, roles and shared packages](docs/screenshots/16-team.png)
+
+| Role | Can |
+|---|---|
+| **owner** | Add and remove members, change roles, delete the (empty) team, plus everything below |
+| **maintainer** | Publish new versions, yank versions, move packages into the team, change team-only visibility |
+| **member** | See and install the team's team-only packages |
+
+Teams always keep at least one owner. Members can leave on their own. Adding,
+removing or re-roling members needs a fresh 2FA code (the sensitive-action
+check), and every change appears in the audit log of both the owner and the
+affected user.
+
+There are three ways to share a package with a team:
+
+- publish straight into it: `gitcha publish --team acme [--private]`, or put
+  `"team": "acme"` (and optionally `"private": true`) in `gitcha.json`;
+- move an existing package in: `gitcha transfer my-pkg acme`, or use **Share
+  with a team** on the package page;
+- change who can see it: `gitcha access my-pkg team-only|public`.
+
+The same workflow from the terminal:
+
+![Team commands in the CLI](docs/screenshots/17-cli-teams.png)
+
+### 9. Use it from Claude
 
 Once `gitcha login` has run, Claude can search, install and publish for you.
 When the registry asks for a 2FA check, the tool result tells Claude to ask
@@ -309,6 +353,10 @@ Or add the server to `claude_desktop_config.json` by hand:
 | `gitcha_install` | Download, verify, extract and lock (or install all from `gitcha.json`) | Periodic / new-network checks |
 | `gitcha_publish` | Pack and publish a directory | **Fresh code** (sensitive) |
 | `gitcha_yank` | Yank or restore a version | **Fresh code** (sensitive) |
+| `gitcha_teams` | List your teams, or show a team's members and shared packages | Periodic / new-network checks |
+| `gitcha_team_create` | Start a team (you become owner) | Periodic / new-network checks |
+| `gitcha_team_member` | Add, re-role or remove a member, or leave | **Fresh code** (sensitive) |
+| `gitcha_share_package` | Move a package into a team and/or make it team-only | **Fresh code** (sensitive) |
 | `gitcha_verify_2fa` | Complete a check with a code the user typed | n/a |
 | `gitcha_security_settings` | View or toggle follow-up checks | **Fresh code** to change |
 
@@ -328,8 +376,16 @@ gitcha security [--interval on|off] [--new-network on|off] [--sensitive on|off]
 gitcha search [query]
 gitcha info <name>
 gitcha install [name[@version]] [--dir DIR]   one package, or everything in gitcha.json
-gitcha publish [DIR]
+gitcha publish [DIR] [--team T] [--private]
 gitcha yank <name@version> [--undo]
+gitcha transfer <name> <team>                 move a package into a team to share it
+gitcha access <name> team-only|public
+gitcha team list
+gitcha team create <name> [--description D]
+gitcha team info <name>
+gitcha team add <team> <user> [--role member|maintainer|owner]
+gitcha team remove <team> <user>              remove a member, or yourself to leave
+gitcha team delete <name>
 gitcha logout                                 revoke this device's token
 gitcha mcp                                    run the Claude extension on stdio
 ```
@@ -356,12 +412,18 @@ A package is any directory with a `gitcha.json`:
   "license": "GPL-3.0-or-later",
   "homepage": "https://example.org/tiny-logger",
   "files": ["src/"],
+  "team": "acme",
+  "private": false,
   "dependencies": { "color-utils": "^0.3.2" }
 }
 ```
 
 - `name`: lowercase letters, digits, `.`, `_`, `-` (max 64). The first person
-  to publish a name owns it.
+  (or team) to publish a name owns it.
+- `team` (optional): publish a new package owned by this team (you must be a
+  maintainer or owner of it).
+- `private` (optional, team packages only): `true` makes it visible to team
+  members only.
 - `version`: semantic version. Published versions are immutable; yank a bad
   one instead of overwriting it.
 - `files` (optional): globs to include. `gitcha.json`, README and LICENSE are
@@ -425,8 +487,15 @@ All endpoints are under `/api/v1` and use `Authorization: Bearer <device token>`
 | `GET` | `/packages?q=` | Search |
 | `GET` | `/packages/:name` | Details and versions |
 | `GET` | `/packages/:name/:version/tarball` | `version` may be `latest`; sends `X-Gitcha-Integrity` |
-| `PUT` | `/packages` | `{tarball: base64, integrity}`; sensitive |
+| `PUT` | `/packages` | `{tarball: base64, integrity, team?, private?}`; sensitive |
 | `POST` | `/packages/:name/:version/yank` | `{yanked: true\|false}`; sensitive |
+| `POST` | `/packages/:name/transfer` | `{team}`: move into a team; sensitive |
+| `POST` | `/packages/:name/visibility` | `{private: true\|false}` for team packages; sensitive |
+| `GET` / `POST` | `/teams` | List your teams / create `{name, description}` |
+| `GET` | `/teams/:team` | Members, roles and packages (members only) |
+| `PUT` | `/teams/:team/members/:username` | `{role}`: add or change; owners; sensitive |
+| `DELETE` | `/teams/:team/members/:username` | Remove (owners) or leave (self); sensitive |
+| `DELETE` | `/teams/:team` | Delete an empty team; owners; sensitive |
 
 When a check is due, the API answers:
 
@@ -448,6 +517,9 @@ See [SECURITY.md](SECURITY.md) for the full model. In short:
 - **2FA:** required to sign in on the web and in the CLI, and to set up any
   device, including the Claude extension's. Follow-up checks are
   server-enforced, user-toggleable with a fresh code, and admin-lockable.
+- **Teams:** role-checked on every request; team-only packages answer 404 to
+  outsiders; membership changes need a fresh code and are audit-logged for
+  both sides.
 - **Claude:** never handles passwords, can't produce 2FA codes, and can't turn
   checks off without a code from you.
 
@@ -464,7 +536,8 @@ gitcha/
 │   │   ├── auth.js            accounts, 2FA, sessions, intermittent-check policy
 │   │   ├── totp.js            RFC 6238 TOTP (Google Authenticator compatible)
 │   │   ├── crypto.js          scrypt, AES-256-GCM secret box, tokens
-│   │   ├── packages.js        publish / search / download / yank
+│   │   ├── packages.js        publish / search / download / yank / transfer
+│   │   ├── teams.js           teams, roles and membership
 │   │   ├── api.js             JSON API
 │   │   ├── web.js, views.js   web UI
 │   │   └── store.js           atomic JSON store + blob storage
@@ -499,8 +572,9 @@ npm run screenshots
 
 The tests cover RFC 4226/6238 TOTP vectors, encryption at rest, replay
 protection, rate limiting, enrollment, interval and new-network checks, check
-toggles and admin locks, recovery codes, maintainer permissions, malicious
-tarballs, and an end-to-end run of the CLI and MCP server against a live
+toggles and admin locks, recovery codes, maintainer permissions, team roles,
+team-only visibility, transfers, last-owner protection, malicious tarballs,
+and an end-to-end run of the CLI and MCP server against a live
 server. Screenshot generation needs Playwright with Chromium and takes about
 two minutes, because each 2FA code must come from a new 30-second window.
 

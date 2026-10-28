@@ -7,6 +7,7 @@ import { HttpError } from './errors.js';
 import { Store } from './store.js';
 import { AuthService } from './auth.js';
 import { PackageService } from './packages.js';
+import { TeamService } from './teams.js';
 import { registerApi } from './api.js';
 import { registerWeb } from './web.js';
 import { layout, errorPage } from './views.js';
@@ -19,10 +20,11 @@ const MIME = { '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png
 export function createApp(config, { clock = Date.now } = {}) {
   const store = new Store(config.dataDir);
   const auth = new AuthService({ store, config, clock });
-  const packages = new PackageService({ store, config, clock });
+  const teams = new TeamService({ store, clock });
+  const packages = new PackageService({ store, config, teams, clock });
   const router = new Router();
-  registerApi(router, { auth, packages, config, version: VERSION });
-  registerWeb(router, { auth, packages, config });
+  registerApi(router, { auth, packages, teams, config, version: VERSION });
+  registerWeb(router, { auth, packages, teams, config });
 
   router.get('/static/:file', (ctx) => {
     const file = path.basename(ctx.params.file);
@@ -60,5 +62,5 @@ export function createApp(config, { clock = Date.now } = {}) {
   }
 
   const server = http.createServer(handle);
-  return { server, store, auth, packages, config, version: VERSION };
+  return { server, store, auth, packages, teams, config, version: VERSION };
 }

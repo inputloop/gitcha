@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const EMPTY = () => ({ version: 1, users: {}, sessions: {}, packages: {}, audit: [] });
+const EMPTY = () => ({ version: 1, users: {}, sessions: {}, packages: {}, teams: {}, audit: [] });
 const AUDIT_LIMIT = 10_000;
 
 export class Store {
@@ -12,7 +12,7 @@ export class Store {
     this.file = path.join(dataDir, 'db.json');
     this.blobDir = path.join(dataDir, 'blobs');
     fs.mkdirSync(this.blobDir, { recursive: true, mode: 0o700 });
-    this.data = fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file, 'utf8')) : EMPTY();
+    this.data = { ...EMPTY(), ...(fs.existsSync(this.file) ? JSON.parse(fs.readFileSync(this.file, 'utf8')) : {}) };
   }
 
   /** Run `fn` against the data and persist the result. */
@@ -43,6 +43,10 @@ export class Store {
       .filter(([, s]) => s.userId === userId)
       .map(([hash, s]) => ({ hash, ...s }));
   }
+
+  // ---- teams --------------------------------------------------------------
+  team(name) { return this.data.teams[name] ?? null; }
+  teams() { return Object.values(this.data.teams); }
 
   // ---- packages -----------------------------------------------------------
   pkg(name) { return this.data.packages[name] ?? null; }

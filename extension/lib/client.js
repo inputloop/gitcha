@@ -50,16 +50,33 @@ export class GitchaClient {
   logout() { return this.request('POST', '/api/v1/auth/logout'); }
   getSecurity() { return this.request('GET', '/api/v1/security'); }
   setSecurity(checks) { return this.request('PUT', '/api/v1/security', { body: { checks } }); }
-  search(q = '') { return this.request('GET', `/api/v1/packages?q=${encodeURIComponent(q)}`); }
+  search(q = '', { team } = {}) {
+    return this.request('GET', `/api/v1/packages?q=${encodeURIComponent(q)}${team ? `&team=${encodeURIComponent(team)}` : ''}`);
+  }
   info(name) { return this.request('GET', `/api/v1/packages/${encodeURIComponent(name)}`); }
   yank(name, version, yanked = true) {
     return this.request('POST', `/api/v1/packages/${encodeURIComponent(name)}/${encodeURIComponent(version)}/yank`, { body: { yanked } });
   }
 
-  publish(tarball) {
+  publish(tarball, { team, private: priv } = {}) {
     const integrity = `sha256-${crypto.createHash('sha256').update(tarball).digest('hex')}`;
-    return this.request('PUT', '/api/v1/packages', { body: { tarball: tarball.toString('base64'), integrity } });
+    return this.request('PUT', '/api/v1/packages', { body: { tarball: tarball.toString('base64'), integrity, team, private: priv } });
   }
+
+  transfer(name, team) { return this.request('POST', `/api/v1/packages/${encodeURIComponent(name)}/transfer`, { body: { team } }); }
+  setVisibility(name, priv) { return this.request('POST', `/api/v1/packages/${encodeURIComponent(name)}/visibility`, { body: { private: priv } }); }
+
+  // ---- teams ----
+  teams() { return this.request('GET', '/api/v1/teams'); }
+  team(name) { return this.request('GET', `/api/v1/teams/${encodeURIComponent(name)}`); }
+  createTeam(name, description) { return this.request('POST', '/api/v1/teams', { body: { name, description } }); }
+  setMember(team, username, role) {
+    return this.request('PUT', `/api/v1/teams/${encodeURIComponent(team)}/members/${encodeURIComponent(username)}`, { body: { role } });
+  }
+  removeMember(team, username) {
+    return this.request('DELETE', `/api/v1/teams/${encodeURIComponent(team)}/members/${encodeURIComponent(username)}`);
+  }
+  deleteTeam(team) { return this.request('DELETE', `/api/v1/teams/${encodeURIComponent(team)}`); }
 
   async download(name, version = 'latest') {
     const res = await this.request('GET', `/api/v1/packages/${encodeURIComponent(name)}/${encodeURIComponent(version)}/tarball`, { raw: true });
