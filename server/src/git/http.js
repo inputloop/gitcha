@@ -53,6 +53,18 @@ function mfaOk(auth, principal) {
   return auth.mfaState(principal.auth);
 }
 
+/**
+ * SSH carries no session, so the periodic check is read from the person's devices: the newest code entered on any of
+ * them must be inside the step-up interval (when the person's own settings keep that check on). Agents act as
+ * themselves, as with an agent key over HTTPS.
+ */
+function sshMfaOk(auth, principal) {
+  if (principal.kind !== 'user') return { ok: true };
+  if (!auth.checkSettings(principal.user).interval) return { ok: true };
+  const newest = Math.max(0, ...auth.store.sessionsForUser(principal.user.id).filter((s) => s.kind !== 'enroll').map((s) => s.mfaAt ?? 0));
+  return auth.clock() - newest > auth.config.policy.stepUpInterval ? { ok: false, reason: 'interval' } : { ok: true };
+}
+
 export function internalSecret(config) {
   const file = path.join(config.dataDir, 'internal.key');
   if (!fs.existsSync(file)) fs.writeFileSync(file, crypto.randomBytes(32).toString('hex') + '\n', { mode: 0o600 });
@@ -139,17 +151,25 @@ export function registerGit(router, { auth, projects, principals, config }) {
   const secret = internalSecret(config);
   const internal = (ctx) => {
     const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(ctx.req.socket.remoteAddress);
-    const given = String(ctx.req.headers['x-gitcha-internal'] ?? '');
-    if (!local || given.length !== secret.length || !crypto.timingSafeEqual(Buffer.from(given), Buffer.from(secret))) throw new HttpError(404, 'not_found', 'Not found.');
+    const given = Buffer.from(String(ctx.req.headers['x-gitcha-internal'] ?? ''));
+    const want = Buffer.from(secret);
+    if (!local || given.length !== want.length || !crypto.timingSafeEqual(given, want)) throw new HttpError(404, 'not_found', 'Not found.');
+  };
+  // The helpers read JSON, so a refusal says why instead of rendering a page they cannot read.
+  const helper = (fn) => async (ctx) => {
+    try { await fn(ctx); } catch (err) {
+      if (!(err instanceof HttpError)) throw err;
+      json(ctx.res, err.status, { error: err.code, message: err.message });
+    }
   };
 
-  router.get('/internal/ssh/keys', (ctx) => {
+  router.get('/internal/ssh/keys', helper((ctx) => {
     internal(ctx);
     const line = principals.keysLine(ctx.url.searchParams.get('fingerprint'));
     send(ctx.res, 200, line, { 'Content-Type': 'text/plain' });
-  });
+  }));
 
-  router.post('/internal/git/authorize', async (ctx) => {
+  router.post('/internal/git/authorize', helper(async (ctx) => {
     internal(ctx);
     const { fingerprint, command } = await readJson(ctx.req);
     const m = /^(git-upload-pack|git-receive-pack) '?\/?([^'/]+)\/([^'/]+?)(?:\.git)?\/?'?$/.exec(String(command ?? ''));
@@ -159,16 +179,19 @@ export function registerGit(router, { auth, projects, principals, config }) {
     const p = projects.find(parseOwnerLabel(m[2]), m[3]);
     const write = m[1] === 'git-receive-pack';
     if (!p || !projects.canRead(principal, p)) throw new HttpError(404, 'not_found', 'Repository not found.');
+    // The same periodic check an HTTPS push meets; a git client cannot answer a challenge, so say what to run.
+    const m2 = sshMfaOk(auth, principal);
+    if (!m2.ok) throw new HttpError(403, 'stepup_due', `Your periodic two-factor check is due (${m2.reason}). Run \`gitcha verify\`, then try again.`);
     if (write && !projects.canWrite(principal, p)) throw new HttpError(403, 'forbidden', `You cannot push to ${projects.key(p.owner, p.name)}.`);
     json(ctx.res, 200, { service: m[1], repo: projects.repoDir(p), project: projects.key(p.owner, p.name), principal: principalKey(principal), before: write ? projects.refs(p) : null });
-  });
+  }));
 
-  router.post('/internal/git/pushed', async (ctx) => {
+  router.post('/internal/git/pushed', helper(async (ctx) => {
     internal(ctx);
     const { fingerprint, project, before } = await readJson(ctx.req);
     const p = projects.store.data.projects[project];
     const principal = principals.fromSsh(fingerprint);
     if (!p || !principal || !projects.canWrite(principal, p)) throw new HttpError(403, 'forbidden', 'Not allowed.');
     json(ctx.res, 200, projects.afterPush(p, principal, before ?? {}));
-  });
+  }));
 }

@@ -2,13 +2,18 @@
 # Copyright 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Corwin Brust <corwin@bru.st> and Contributors.
 # SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 #
-# Clone URLs read gitcha@HOST:owner/name.git (GITCHA_SSH_USER=gitcha).  Keys are looked up by fingerprint in
+# Clone URLs read git@HOST:owner/name.git (GITCHA_SSH_USER=git).  Keys are looked up by fingerprint in
 # Gitcha; each is forced through gitcha-git-shell, which runs only git-upload-pack / git-receive-pack, and only
 # where that person or agent may read or write.
-Match User gitcha
+#
+# Two accounts, not one.  The server runs as `gitcha` and owns the database and every secret.  SSH-served git
+# runs outside the server's sandbox as whoever sshd runs it as, so that must be a different account, `git`,
+# in group `gitcha`, which can read internal.key and the repositories and nothing else (see DEPLOY.md).
+# Never put `gitcha` here.
+Match User git
 	AuthorizedKeysFile none
 	AuthorizedKeysCommand /usr/bin/gitcha-ssh-keys %f
-	AuthorizedKeysCommandUser gitcha
+	AuthorizedKeysCommandUser git
 	PasswordAuthentication no
 	KbdInteractiveAuthentication no
 	AllowTcpForwarding no

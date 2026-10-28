@@ -4,10 +4,13 @@
 // endpoints, push records, and signature checks (real git and gpg).
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import http from 'node:http';
+import crypto from 'node:crypto';
 import { startServer, createUser, deviceLogin, api } from './helpers.js';
 
-let srv, ta, tb, port;
+let srv, ta, tb, port, alice, bob;
 // An uncaught exception ends the real server, so a test that sees one has seen the outage.
 const crashes = [];
 process.on('uncaughtException', (err) => { crashes.push(err); });
@@ -31,8 +34,8 @@ function raw(method, p, { headers = {}, body, abortAfter } = {}) {
 before(async () => {
   srv = await startServer({ env: { GITCHA_HOSTING_DOMAINS: 'pages.test' } });
   port = new URL(srv.url).port;
-  const alice = createUser(srv, 'alice', 'first long pass!');
-  const bob = createUser(srv, 'bob', 'second long pass');
+  alice = createUser(srv, 'alice', 'first long pass!');
+  bob = createUser(srv, 'bob', 'second long pass');
   ta = await deviceLogin(srv, alice);
   tb = await deviceLogin(srv, bob);
   srv.projects.create(srv.store.userByName('alice'), { name: 'epipe', visibility: 'public' }, '127.0.0.1');
@@ -65,4 +68,40 @@ test('GIT-1: a client that closes early does not stop the server', async () => {
   await new Promise((res) => setTimeout(res, 300));
   assert.deepEqual(crashes.map((e) => e.code ?? e.message), []);
   assert.equal((await api(srv.url, 'GET', '/api/v1/health')).status, 200);
+});
+
+// ---- SSH helper endpoints (what gitcha-git-shell asks) -----------------------------------------------------
+const sshLine = () => {
+  const { publicKey } = crypto.generateKeyPairSync('ed25519');
+  const raw = publicKey.export({ format: 'der', type: 'spki' }).subarray(-32);
+  const str = (b) => { const l = Buffer.alloc(4); l.writeUInt32BE(b.length); return Buffer.concat([l, b]); };
+  return `ssh-ed25519 ${Buffer.concat([str(Buffer.from('ssh-ed25519')), str(raw)]).toString('base64')} test@host`;
+};
+const internal = (p, body) => fetch(`${srv.url}${p}`, {
+  method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Gitcha-Internal': fs.readFileSync(path.join(srv.config.dataDir, 'internal.key'), 'utf8').trim() }, body: JSON.stringify(body),
+}).then(async (res) => ({ status: res.status, body: await res.json().catch(() => null) }));
+
+test('GIT-2: an SSH key is held to the same periodic 2FA check as an HTTPS token', async () => {
+  const bobRec = srv.store.userByName('bob');
+  const k = srv.keys.addSsh(bobRec, { kind: 'user', id: bobRec.id, name: 'bob' }, { key: sshLine() }, '127.0.0.1');
+  srv.projects.create(bobRec, { name: 'sshrepo', visibility: 'private' }, '127.0.0.1');
+  const ask = () => internal('/internal/git/authorize', { fingerprint: k.fingerprint, command: "git-receive-pack 'bob/sshrepo.git'" });
+  assert.equal((await ask()).status, 200, 'a fresh check lets the push through');
+  srv.clock.advance(13 * 3600_000); // past the 12 h interval
+  const late = await ask();
+  assert.equal(late.status, 403, JSON.stringify(late.body));
+  assert.equal(late.body.error, 'stepup_due');
+  assert.match(late.body.message, /gitcha verify/, 'the helper can print what to run');
+  const read = await internal('/internal/git/authorize', { fingerprint: k.fingerprint, command: "git-upload-pack 'bob/sshrepo.git'" });
+  assert.equal(read.status, 403, 'reads of a private repository are checked too');
+  await api(srv.url, 'POST', '/api/v1/auth/step-up', { token: tb, body: { code: bob.nextCode() } });
+  assert.equal((await ask()).status, 200, 'a new code on any of the person\'s devices opens the window again');
+});
+
+test('INT-1: /internal answers JSON and a 64-character non-ASCII header is a 404, not a 500', async () => {
+  const wrong = await fetch(`${srv.url}/internal/ssh/keys?fingerprint=x`, { headers: { 'X-Gitcha-Internal': 'é'.repeat(64) } });
+  assert.equal(wrong.status, 404);
+  const none = await fetch(`${srv.url}/internal/git/authorize`, { method: 'POST', body: '{}' });
+  assert.equal(none.status, 404);
+  assert.match(none.headers.get('content-type'), /json/);
 });

@@ -110,14 +110,30 @@ resolves, they press verify, and only then is the domain served and allowed a ce
 ### Git over SSH
 
 Copy `/usr/share/doc/inputloop-gitcha/sshd-gitcha.conf.example` to
-`/etc/ssh/sshd_config.d/gitcha.conf`, set `GITCHA_SSH_HOST` and `GITCHA_SSH_USER=gitcha` in
+`/etc/ssh/sshd_config.d/gitcha.conf`, set `GITCHA_SSH_HOST` and `GITCHA_SSH_USER=git` in
 `gitcha.env`, and reload sshd. OpenSSH asks `gitcha-ssh-keys` for the offered key's
 fingerprint; a known key is forced through `gitcha-git-shell`, which runs only
 `git-upload-pack` or `git-receive-pack`, and only where that person or agent may. Both
 helpers talk to the server on loopback with a secret from `/var/lib/gitcha/internal.key`.
+Port 22 must be open in the firewall for this (the proxy's 443 and 80 are not enough).
 
-Status: built and unit-checked; **not yet run against a real sshd** (the machine this was
-written on had none).
+**The SSH user must not be the account the server runs as.** SSH-served git runs outside the
+server unit's sandbox, as whoever sshd runs it as; as `gitcha` that is the account that owns
+`db.json`, `secret.key` and `internal.key`. Use two: `gitcha` runs the daemon and owns the
+data; `git`, a system account in group `gitcha` with no password, is the SSH login. It needs
+to read `internal.key` (mode 640, group `gitcha`) and to read and write the repositories under
+`/var/lib/gitcha/git` (group-writable, set-gid, repositories `core.sharedRepository=group`),
+and `/var/lib/gitcha` itself must be traversable by the group (750). Nothing else in that
+directory should be group-readable. If git refuses a repository as "dubious ownership", set
+`safe.directory` in the `git` account's own git config, not in the server's.
+
+Pushes and reads over SSH meet the same periodic two-factor check as HTTPS: when it is due
+(no code entered on any of the person's devices within the step-up interval), the helper
+prints "run `gitcha verify`" and refuses. An agent's SSH key acts as the agent, as an agent
+key does.
+
+Status: built and unit-checked; **not yet run against a real sshd, nor with the two
+accounts** (the machine this was written on had no sshd).
 
 ### Backups
 
