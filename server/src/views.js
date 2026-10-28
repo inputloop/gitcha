@@ -230,7 +230,7 @@ ${alert(notice, 'info')}${alert(error)}
   <section class="card">
     <h2>Two-factor checks after sign-in</h2>
     <p class="muted">A code is always required to sign in and to set up a new device. These switches control the <em>follow-up</em> checks.
-    Changing them requires a fresh code.</p>
+    Changing them takes a code typed with this form; a code you gave for something else does not count.</p>
     <form method="post" action="/account/checks">
       ${csrfField(csrf)}
       ${Object.entries(CHECK_LABELS).map(([key, [label, help]]) => {
@@ -241,6 +241,7 @@ ${alert(notice, 'info')}${alert(error)}
           <span><strong>${label}</strong>${key === 'interval' ? h` <span class="muted">(every ${hours(checks.intervalMs)})</span>` : ''}${locked ? h` <span class="badge">required by admin</span>` : ''}<br><span class="muted small">${help}</span></span>
         </label>`;
       })}
+      <label>Authenticator code <input class="otp" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="16" required></label>
       <button class="btn">Save check settings</button>
     </form>
     <p class="small muted">This browser last verified ${ago(mfaState.verifiedAt)}${mfaState.nextCheckAt ? h`; next check ${ago(mfaState.nextCheckAt)}` : ''}.</p>
@@ -347,6 +348,7 @@ ${alert(notice, 'info')}${alert(error)}
       <td><strong>${m.username}</strong>${m.username === me.username ? h` <span class="badge">you</span>` : ''}</td>
       <td>${isOwner ? h`<form method="post" action="/teams/${team.name}/members" class="row">${csrfField(csrf)}<input type="hidden" name="username" value="${m.username}">
         <select name="role" aria-label="Role for ${m.username}">${['member', 'maintainer', 'owner'].map((r) => h`<option value="${r}" ${r === m.role ? raw('selected') : ''}>${r}</option>`)}</select>
+        <input name="code" class="otp" placeholder="code (owner)" inputmode="numeric" autocomplete="one-time-code" maxlength="16" aria-label="Authenticator code, needed to make ${m.username} an owner">
         <button class="btn ghost small">Save</button></form>` : m.role}</td>
       <td class="muted small">${ago(m.addedAt)}${m.addedBy && m.addedBy !== m.username ? ` by ${m.addedBy}` : ''}</td>
       <td>${isOwner || m.username === me.username ? h`<form method="post" action="/teams/${team.name}/members/${m.username}/remove">${csrfField(csrf)}<button class="btn danger small">${m.username === me.username ? 'Leave' : 'Remove'}</button></form>` : ''}</td>
@@ -357,9 +359,10 @@ ${alert(notice, 'info')}${alert(error)}
     ${csrfField(csrf)}
     <label>Add a member <input name="username" placeholder="username" required></label>
     <label>Role <select name="role"><option value="member">member</option><option value="maintainer">maintainer</option><option value="owner">owner</option></select></label>
+    <label>Code <input name="code" class="otp" placeholder="owners only" inputmode="numeric" autocomplete="one-time-code" maxlength="16"></label>
     <button class="btn">Add member</button>
   </form>
-  <p class="small muted">Adding, removing or changing members needs a fresh authenticator code.</p>` : ''}
+  <p class="small muted">Adding, removing or changing members needs a fresh authenticator code. Making someone an owner needs a code typed here, with the change.</p>` : ''}
 </section>
 ${isOwner ? h`<section class="card danger-zone">
   <h2>Delete team</h2>

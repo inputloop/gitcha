@@ -113,7 +113,7 @@ test('recovery codes work once for step-up', async () => {
     const reg = srv.auth.register({ username: 'dave', password: 'another passphrase', ip: 'x' });
     const { recoveryCodes } = srv.auth.confirmEnrollment({ enrollToken: reg.enrollToken, code: totp(reg.secret, { now: srv.clock() }), ip: 'x' });
     srv.clock.advance(31_000);
-    const t = srv.auth.completeLogin({ ...srv.auth.beginLogin({ username: 'dave', password: 'another passphrase', ip: 'x' }), code: totp(reg.secret, { now: srv.clock() }), ip: 'x' });
+    const t = srv.auth.completeLogin({ ...(await srv.auth.beginLogin({ username: 'dave', password: 'another passphrase', ip: 'x' })), code: totp(reg.secret, { now: srv.clock() }), ip: 'x' });
     srv.clock.advance(13 * HOUR);
     const token = t.token;
     assert.equal((await api(srv.url, 'POST', '/api/v1/auth/step-up', { token, body: { code: recoveryCodes[0] } })).body.method, 'recovery');
@@ -132,9 +132,16 @@ test('2FA follow-up checks can be toggled (with a fresh code), but sign-in alway
     assert.equal(stale.status, 401, 'toggling needs a fresh code');
     assert.equal(stale.body.reason, 'sensitive_action');
     await api(srv.url, 'POST', '/api/v1/auth/step-up', { token, body: { code: u.nextCode() } });
-    const off = await api(srv.url, 'PUT', '/api/v1/security', { token, body: { checks: { interval: false, sensitive: false } } });
+    // A code typed for something else (a step-up) is not a code for this change (AUTH-4 / EXT-3).
+    const noCode = await api(srv.url, 'PUT', '/api/v1/security', { token, body: { checks: { interval: false, sensitive: false } } });
+    assert.equal(noCode.status, 401, 'the change carries its own code');
+    assert.equal(noCode.body.reason, 'sensitive_action');
+    const code = u.nextCode();
+    const off = await api(srv.url, 'PUT', '/api/v1/security', { token, body: { code, checks: { interval: false, sensitive: false } } });
     assert.equal(off.status, 200);
     assert.equal(off.body.checks.interval, false);
+    const replay = await api(srv.url, 'PUT', '/api/v1/security', { token, body: { code, checks: { interval: true } } });
+    assert.equal(replay.status, 401, 'a code works once');
     srv.clock.advance(48 * HOUR);
     assert.equal((await api(srv.url, 'GET', '/api/v1/packages', { token })).status, 200, 'no periodic check when off');
     // Sign-in still requires a TOTP code.
@@ -150,10 +157,10 @@ test('admins can lock checks so users cannot turn them off', async () => {
   try {
     const u = createUser(srv);
     const token = await deviceLogin(srv, u);
-    const r = await api(srv.url, 'PUT', '/api/v1/security', { token, body: { checks: { interval: false } } });
+    const r = await api(srv.url, 'PUT', '/api/v1/security', { token, body: { code: u.nextCode(), checks: { interval: false } } });
     assert.equal(r.status, 403);
     assert.equal(r.body.error, 'check_locked');
-    const ok = await api(srv.url, 'PUT', '/api/v1/security', { token, body: { checks: { new_network: false } } });
+    const ok = await api(srv.url, 'PUT', '/api/v1/security', { token, body: { code: u.nextCode(), checks: { new_network: false } } });
     assert.equal(ok.status, 200);
     assert.deepEqual(ok.body.checks.locked, ['interval']);
   } finally { await srv.close(); }
@@ -164,7 +171,7 @@ test('new network triggers a step-up for device tokens', async () => {
   try {
     const u = createUser(srv);
     const { token } = srv.auth.completeLogin({
-      ...srv.auth.beginLogin({ username: u.username, password: u.password, ip: '10.0.0.5' }), code: u.nextCode(), ip: '10.0.0.5',
+      ...(await srv.auth.beginLogin({ username: u.username, password: u.password, ip: '10.0.0.5' })), code: u.nextCode(), ip: '10.0.0.5',
     });
     const a = srv.auth.authenticate(token, '10.0.0.9');
     assert.equal(srv.auth.mfaState(a).ok, true, 'same /24 is the same network');
@@ -192,5 +199,71 @@ test('logout revokes the device token', async () => {
     const token = await deviceLogin(srv, u);
     assert.equal((await api(srv.url, 'POST', '/api/v1/auth/logout', { token })).status, 200);
     assert.equal((await api(srv.url, 'GET', '/api/v1/auth/whoami', { token })).status, 401);
+  } finally { await srv.close(); }
+});
+
+const HOUR_MS = 3600_000;
+
+async function teamWithMember(srv, owner, member, token) {
+  const t = await api(srv.url, 'POST', '/api/v1/teams', { token, body: { name: 'acme' } });
+  assert.equal(t.status, 201);
+  void owner; void member;
+}
+
+test('AUTH-4: the security change and an owner grant each consume a code sent with the request', async () => {
+  const srv = await startServer();
+  try {
+    const u = createUser(srv, 'alice');
+    createUser(srv, 'bobby');
+    const token = await deviceLogin(srv, u);
+    await teamWithMember(srv, u, 'bobby', token);
+    // The step-up window is open (we just signed in): ordinary sensitive work goes through ...
+    const m = await api(srv.url, 'PUT', '/api/v1/teams/acme/members/bobby', { token, body: { role: 'maintainer' } });
+    assert.equal(m.status, 200, 'a maintainer grant keeps the 10-minute window');
+    // ... but naming an owner needs a code in the request, and the window does not stand in for it.
+    const noCode = await api(srv.url, 'PUT', '/api/v1/teams/acme/members/bobby', { token, body: { role: 'owner' } });
+    assert.equal(noCode.status, 401);
+    assert.equal(noCode.body.reason, 'sensitive_action');
+    const code = u.nextCode();
+    const ok = await api(srv.url, 'PUT', '/api/v1/teams/acme/members/bobby', { token, body: { role: 'owner', code } });
+    assert.equal(ok.status, 200);
+    const back = await api(srv.url, 'PUT', '/api/v1/teams/acme/members/bobby', { token, body: { role: 'owner', code } });
+    assert.equal(back.status, 401, 'the same code is not accepted twice');
+    const wrong = await api(srv.url, 'PUT', '/api/v1/teams/acme/members/bobby', { token, body: { role: 'owner', code: '000000' } });
+    assert.equal(wrong.status, 401);
+  } finally { await srv.close(); }
+});
+
+test('AUTH-4 / EXT-3: a code spent on the change does not open the window for the next action', async () => {
+  const srv = await startServer();
+  try {
+    const u = createUser(srv, 'alice');
+    createUser(srv, 'bobby');
+    const token = await deviceLogin(srv, u);
+    await teamWithMember(srv, u, 'bobby', token);
+    srv.clock.advance(11 * 60_000); // the sign-in window has lapsed
+    const stale = await api(srv.url, 'PUT', '/api/v1/teams/acme/members/bobby', { token, body: { role: 'maintainer' } });
+    assert.equal(stale.status, 401);
+    const off = await api(srv.url, 'PUT', '/api/v1/security', { token, body: { code: u.nextCode(), checks: { new_network: false } } });
+    assert.equal(off.status, 200, 'the change itself needs only its own code');
+    const after = await api(srv.url, 'PUT', '/api/v1/teams/acme/members/bobby', { token, body: { role: 'maintainer' } });
+    assert.equal(after.status, 401, 'that code opened no window for other work');
+    assert.equal(after.body.reason, 'sensitive_action');
+  } finally { await srv.close(); }
+});
+
+test('AUTH-4: the security route runs the new-network check like every other route', async () => {
+  const srv = await startServer({ overrides: { trustProxy: true } });
+  try {
+    const u = createUser(srv, 'alice');
+    const { token } = srv.auth.completeLogin({ ...(await srv.auth.beginLogin({ username: 'alice', password: u.password, ip: '10.0.0.5' })), code: u.nextCode(), ip: '10.0.0.5' });
+    const from = (ip, body) => fetch(`${srv.url}/api/v1/security`, {
+      method: 'PUT', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'X-Forwarded-For': ip }, body: JSON.stringify(body),
+    }).then(async (r) => ({ status: r.status, body: await r.json() }));
+    const elsewhere = await from('198.51.100.9', { code: u.nextCode(), checks: { interval: false } });
+    assert.equal(elsewhere.status, 401);
+    assert.equal(elsewhere.body.reason, 'new_network');
+    const home = await from('10.0.0.77', { code: u.nextCode(), checks: { interval: false } });
+    assert.equal(home.status, 200);
   } finally { await srv.close(); }
 });

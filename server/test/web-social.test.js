@@ -6,7 +6,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startServer, createUser } from './helpers.js';
 
-let srv, cookieA, cookieB;
+let srv, cookieA, cookieB, userB;
 const CSRF = 'test-csrf-token-0123456789abcdef';
 
 function browser(cookie) {
@@ -24,6 +24,7 @@ before(async () => {
   srv = await startServer({ env: { GITCHA_HOSTING_DOMAINS: 'pages.test' } });
   const a = createUser(srv, 'alice', 'first long pass!');
   const b = createUser(srv, 'bob', 'second long pass');
+  userB = b;
   cookieA = `gitcha_sid=${srv.auth.createSession(srv.store.userByName('alice'), { kind: 'web', name: 't', ip: '127.0.0.1' }).token}`;
   cookieB = `gitcha_sid=${srv.auth.createSession(srv.store.userByName('bob'), { kind: 'web', name: 't', ip: '127.0.0.1' }).token}`;
   void a; void b;
@@ -130,7 +131,8 @@ test('the account page answers, and its forms work: email, check toggles, recove
   const ok = await B.post('/account/email', { email: 'bob@example.org', email_confirm: 'bob@example.org' });
   assert.equal(ok.location, '/account?msg=email_saved');
   assert.match((await B.get('/account?msg=email_saved')).text, /On file: <strong>bob@example\.org<\/strong>/);
-  assert.equal((await B.post('/account/checks', { interval: 'on', sensitive: 'on' })).location, '/account?msg=checks_saved');
+  assert.equal((await B.post('/account/checks', { interval: 'on', sensitive: 'on' })).status, 401, 'the form needs its own code');
+  assert.equal((await B.post('/account/checks', { interval: 'on', sensitive: 'on', code: userB.nextCode() })).location, '/account?msg=checks_saved');
   assert.equal(srv.auth.checkSettings(srv.store.userByName('bob')).new_network, false);
   assert.match((await B.post('/account/recovery-codes', {})).text, /recovery codes/i);
 });

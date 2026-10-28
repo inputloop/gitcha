@@ -412,7 +412,7 @@ The CLI prompts for a code, and the Claude extension asks you for one.
 
 The **Account** page lets you switch the follow-up checks on or off, see every
 signed-in browser and device (and revoke them), regenerate recovery codes, and
-read your security activity log. Changing a switch needs a fresh code. Checks
+read your security activity log. Saving the switches takes a code typed with the form, used up by it. Checks
 your administrator has locked show as "required by admin" and can't be turned
 off.
 
@@ -448,8 +448,8 @@ can't be squatted.
 
 Teams always keep at least one owner. Members can leave on their own. Adding,
 removing or re-roling members needs a fresh 2FA code (the sensitive-action
-check), and every change appears in the audit log of both the owner and the
-affected user.
+check), naming an owner takes a code sent with that change, and every change
+appears in the audit log of both the owner and the affected user.
 
 There are three ways to share a package with a team:
 
@@ -848,7 +848,7 @@ Or add the server to `claude_desktop_config.json` by hand:
 | `gitcha_team_member` | Add, re-role or remove a member, or leave | **Fresh code** (sensitive) |
 | `gitcha_share_package` | Move a package into a team and/or make it team-only | **Fresh code** (sensitive) |
 | `gitcha_verify_2fa` | Complete a check with the 6-digit authenticator code the user typed (a recovery code is refused; it stays in the terminal) | n/a |
-| `gitcha_security_settings` | View or toggle follow-up checks | **Fresh code** to change |
+| `gitcha_security_settings` | View or toggle follow-up checks | **A code sent with the change** (used up by it) |
 | `gitcha_review_pool` | Review tasks one of your agents may take | Periodic / new-network checks |
 | `gitcha_claim_task` | Claim a task for an agent | Periodic / new-network checks |
 | `gitcha_submit_review` | Submit a Second Reader verdict, summary and findings | Periodic / new-network checks |
@@ -1059,7 +1059,7 @@ GraphQL (above) covers the social, task, key, ticket and change parts.
 | `POST` | `/auth/step-up` | `{code}`: completes an intermittent check |
 | `GET` | `/auth/whoami` | Always allowed; reports whether a check is due |
 | `POST` | `/auth/logout` | Revokes the token |
-| `GET` / `PUT` | `/security` | `{checks: {interval, new_network, sensitive}}`; `PUT` needs a fresh code |
+| `GET` / `PUT` | `/security` | `{checks: {interval, new_network, sensitive}}`; `PUT` also takes `code`, a code used up by the change |
 | `GET` | `/packages?q=` | Search |
 | `GET` | `/packages/:name` | Details and versions |
 | `GET` | `/packages/:name/:version/tarball` | `version` may be `latest`; sends `X-Gitcha-Integrity` |
@@ -1069,7 +1069,7 @@ GraphQL (above) covers the social, task, key, ticket and change parts.
 | `POST` | `/packages/:name/visibility` | `{private: true\|false}` for team packages; sensitive |
 | `GET` / `POST` | `/teams` | List your teams / create `{name, description}` |
 | `GET` | `/teams/:team` | Members, roles and packages (members only) |
-| `PUT` / `DELETE` | `/teams/:team/members/:username` | Add, re-role or remove; sensitive |
+| `PUT` / `DELETE` | `/teams/:team/members/:username` | Add, re-role or remove; sensitive; `PUT` with `role: owner` also takes `code` |
 | `DELETE` | `/teams/:team` | Delete an empty team; owners; sensitive |
 | `POST` | `/media` | Upload an image, video or audio file for a post |
 

@@ -296,6 +296,8 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
   });
 
   router.post('/teams/:team/members', teamPost((ctx, a, f) => {
+    // Naming an owner hands over the whole team: it takes a code of its own, not just the open window.
+    if (f.role === 'owner') auth.confirmAction(a, f.code, ctx.ip, 'Making someone an owner');
     teams.setMember(a.user, ctx.params.team, f.username, f.role, ctx.ip);
     redirect(ctx.res, `/teams/${ctx.params.team}?msg=member_saved`);
   }));
@@ -386,9 +388,14 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
   router.post('/account/checks', async (ctx) => {
     const f = await form(ctx);
     const a = requireWeb(ctx);
-    if (!a || !requireFresh(ctx, a, '/account?msg=confirm_again', true)) return;
+    if (!a) return;
+    // The code travels with the form and is used up by it. A locked box is shown disabled, so a browser never
+    // sends it: leave locked keys out of the change instead of reading their absence as "off" (AUTH-8).
+    const locked = auth.checkSettings(a.user).locked;
+    const changes = {};
+    for (const key of ['interval', 'new_network', 'sensitive']) if (!locked.includes(key)) changes[key] = f[key] === 'on';
     try {
-      auth.updateCheckSettings(a.user, { interval: f.interval === 'on', new_network: f.new_network === 'on', sensitive: f.sensitive === 'on' }, ctx.ip);
+      auth.changeChecks(a, { changes, code: f.code }, ctx.ip);
       redirect(ctx.res, '/account?msg=checks_saved');
     } catch (err) {
       if (!(err instanceof HttpError)) throw err;

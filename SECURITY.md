@@ -42,9 +42,13 @@ Gitcha server**.
      `GITCHA_SENSITIVE_WINDOW` (default 10 min).
 4. **Toggling checks**: each user can switch the three follow-up checks on or
    off (web Account page, `gitcha security`, or the `gitcha_security_settings`
-   tool). Changing them **always** needs a fresh code, so a stolen token or a
-   prompt-injected assistant cannot quietly disable them. Administrators can
-   lock checks on with `GITCHA_LOCKED_CHECKS=interval,new_network,sensitive`.
+   tool). Changing them **always** takes a code sent with that very change
+   and used up by it; a code you gave for a publish or a step-up does not
+   count, so a stolen token or a prompt-injected assistant cannot quietly
+   disable them. Naming a team owner works the same way. Every other sensitive
+   action uses the window above: any code typed for a step-up opens it for
+   `GITCHA_SENSITIVE_WINDOW`. Administrators can lock checks on with
+   `GITCHA_LOCKED_CHECKS=interval,new_network,sensitive`.
 
 ## Other protections
 

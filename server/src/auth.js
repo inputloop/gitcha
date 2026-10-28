@@ -278,8 +278,8 @@ export class AuthService {
     return { ...s, locked: [...policy.lockedChecks], intervalMs: policy.stepUpInterval };
   }
 
-  /** Toggle follow-up checks. Requires a fresh code (enforced by the caller). */
-  updateCheckSettings(user, changes, ip) {
+  /** Validate a requested change to the follow-up checks; returns what the user's settings would become. */
+  planCheckChanges(user, changes) {
     const allowed = ['interval', 'new_network', 'sensitive'];
     const next = { ...(user.mfaChecks ?? {}) };
     for (const [k, v] of Object.entries(changes ?? {})) {
@@ -290,11 +290,36 @@ export class AuthService {
       }
       next[k] = v;
     }
+    return next;
+  }
+
+  /** Toggle follow-up checks. The caller must have spent a code for it: see changeChecks. */
+  updateCheckSettings(user, changes, ip) {
+    const next = this.planCheckChanges(user, changes);
     this.store.tx((d) => {
       d.users[user.id].mfaChecks = next;
       this.store.audit({ userId: user.id, event: 'mfa.checks_updated', ip, checks: next });
     });
     return this.checkSettings(this.store.userById(user.id));
+  }
+
+  /**
+   * A code sent with ONE request: asked for, checked and used up there. Unlike a step-up it opens no window for
+   * other work, so a code typed for some other reason cannot be spent on this (AUTH-4 / EXT-3).
+   */
+  confirmAction(auth, code, ip, what) {
+    if (String(code ?? '').trim() === '') {
+      throw mfaRequired('sensitive_action', `${what} needs a code from your authenticator app, sent with this request.`);
+    }
+    this.verifySecondFactor(auth.user, code, ip);
+  }
+
+  /** Change the follow-up checks: the code must be in the request; a bad request spends none. */
+  changeChecks(auth, { changes, code }, ip) {
+    if (String(code ?? '').trim() === '') this.confirmAction(auth, code, ip, 'Changing security settings');
+    this.planCheckChanges(auth.user, changes);
+    this.confirmAction(auth, code, ip, 'Changing security settings');
+    return this.updateCheckSettings(auth.user, changes, ip);
   }
 
   /**

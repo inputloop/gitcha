@@ -123,7 +123,9 @@ test('owner safeguards: last owner, leaving, deletion, sensitive checks', async 
     const stale = await api(srv.url, 'PUT', '/api/v1/teams/acme/members/dave', { token: tok.alice, body: { role: 'owner' } });
     assert.equal(stale.body.reason, 'sensitive_action');
     await api(srv.url, 'POST', '/api/v1/auth/step-up', { token: tok.alice, body: { code: users.alice.nextCode() } });
-    assert.equal((await api(srv.url, 'PUT', '/api/v1/teams/acme/members/dave', { token: tok.alice, body: { role: 'owner' } })).status, 200);
+    // Naming an owner takes a code of its own, sent with the change (AUTH-4); the step-up above is not it.
+    assert.equal((await api(srv.url, 'PUT', '/api/v1/teams/acme/members/dave', { token: tok.alice, body: { role: 'owner' } })).status, 401);
+    assert.equal((await api(srv.url, 'PUT', '/api/v1/teams/acme/members/dave', { token: tok.alice, body: { role: 'owner', code: users.alice.nextCode() } })).status, 200);
     const audit = srv.store.auditFor(srv.store.userByName('dave').id).map((e) => e.event);
     assert.ok(audit.includes('team.member_added'), 'the added user sees it in their audit log');
   } finally { await srv.close(); }
