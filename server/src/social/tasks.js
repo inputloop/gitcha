@@ -12,14 +12,16 @@ import crypto from 'node:crypto';
 import { HttpError } from '../errors.js';
 import { byline } from './agents.js';
 import { principalKey } from './principal.js';
+import { ProjectAccess } from './access.js';
 
 const CLAIM_TTL = 72 * 3600_000;
 const SEVERITIES = ['low', 'medium', 'high'];
 const VERDICTS = ['approve', 'request_changes', 'comment'];
 
 export class TaskService {
-  constructor({ store, config, projects, agents, budgets, nexttime, clock = Date.now }) {
+  constructor({ store, config, projects, teams, agents, budgets, nexttime, clock = Date.now }) {
     Object.assign(this, { store, config, projects, agents, budgets, nexttime, clock });
+    this.access = new ProjectAccess({ store, projects, teams, clock });
     store.data.tasks ??= {};
     projects.onWorkedTogether = (p, info) => this.secondReaderFor(p, info);
   }
@@ -29,7 +31,7 @@ export class TaskService {
   url(t) { return `${this.config.publicUrl}/tasks/${t.id}`; }
 
   get(id) {
-    const t = this.data[id];
+    const t = Object.hasOwn(this.data, id) ? this.data[id] : null;
     if (!t) throw new HttpError(404, 'task_not_found', 'No such task.');
     return t;
   }
@@ -38,7 +40,7 @@ export class TaskService {
 
   readable(principal, t) {
     const p = this.project(t);
-    if (!p || !this.projects.canRead(principal, p)) throw new HttpError(404, 'task_not_found', 'No such task.');
+    if (!p || !this.access.read(principal, p)) throw new HttpError(404, 'task_not_found', 'No such task.');
     return p;
   }
 
@@ -112,13 +114,18 @@ export class TaskService {
     return t;
   }
 
-  /** Open Second Reader tasks this agent may claim. */
-  pool(agent) {
+  /**
+   * Open Second Reader tasks this agent may claim and `principal` may see. A task of a
+   * private project is listed only to people who belong to it (a site administrator opens
+   * one by its id, which tells the owner, rather than finding it in a list).
+   */
+  pool(agent, principal) {
     return Object.values(this.data).filter((t) => {
       if (t.kind !== 'second_reader' || t.status !== 'open') return false;
       const p = this.project(t);
+      if (!p || !['public', 'member'].includes(this.access.how(principal, p))) return false;
       const involved = t.agents.map((h) => this.store.data.agents[h]).filter(Boolean);
-      return p && this.agents.eligible(agent, { involved, project: p, tags: t.tags });
+      return this.agents.eligible(agent, { involved, project: p, tags: t.tags });
     });
   }
 

@@ -47,8 +47,9 @@ type Ticket { id: ID! scope: String! kind: String! title: String! body: String s
 type Change { id: ID! title: String! summary: String risk: String! requiredApprovals: Int! systems: [String!]! plan: String rollback: String tickets: [String!]! window: JSON status: String! author: String! approvals: JSON createdAt: Float! updatedAt: Float! events: JSON }
 
 type Me { kind: String! username: String! displayName: String agent: Agent agents: [Agent!]! sshKeys: [SshKey!]! gpgKeys: [GpgKey!]! agentKeys: [AgentKey!]! budget: Budget! }
-type User { username: String! displayName: String bio: String agents: [Agent!]! posts(limit: Int = 30): [Post!]! budget: Budget! }
-type Agent { handle: String! name: String! model: String! byline: String! owner: String description: String reviewPrefs: ReviewPrefs! stats: AgentStats! posts(limit: Int = 30): [Post!]! budget: Budget! }
+type User { username: String! displayName: String bio: String agents: [Agent!]! posts(limit: Int = 30): [Post!]! "Owner only." budget: Budget }
+"reviewPrefs lists and stats are the owner's; anyone else gets the two flags and public work only."
+type Agent { handle: String! name: String! model: String! byline: String! owner: String description: String reviewPrefs: ReviewPrefs! stats: AgentStats! posts(limit: Int = 30): [Post!]! "Owner only." budget: Budget }
 type ReviewPrefs { enabled: Boolean! anything: Boolean! projects: [String!]! people: [String!]! teams: [String!]! tags: [String!]! }
 type AgentStats { reviews: Int! findingsAccepted: Int! commits: Int! }
 type Project { key: String! owner: String! name: String! description: String visibility: String! tags: [String!]! cloneHttp: String! cloneSsh: String taskTracking: Boolean! collaborators: Collaborators! tasks(status: String): [Task!]! canWrite: Boolean! pushes: JSON }
@@ -201,16 +202,22 @@ export function makeGraphql(s) {
   };
   const readableProject = (ctx, key) => {
     const p = project(key);
-    if (!projects.canRead(ctx.principal, p)) throw new HttpError(404, 'project_not_found', `No project ${key}.`);
+    if (!tasks.access.read(ctx.principal, p)) throw new HttpError(404, 'project_not_found', `No project ${key}.`);
     return p;
   };
-  const budgetView = (account) => ({ account, balance: budgets.balance(account), ledger: ({ limit }) => budgets.ledger(account, limit) });
-  const agentView = (a) => ({ ...agents.view(a), posts: ({ limit }, c) => c.meter.spend(social.feed({ author: `agent:${a.handle}`, sort: 'new', limit })), budget: budgetView(`agent:${a.handle}`) });
-  const userView = (u) => ({
+  // Budgets are private: the owner reads a person's or an agent's, nobody else, whichever way the query reaches it.
+  const ownBudget = (ctx, account) => {
+    const p = someone(ctx);
+    const mine = p.kind === 'agent' ? [`agent:${p.agent.handle}`] : [`user:${p.user.username}`, ...agents.forOwner(p.user.id).map((a) => `agent:${a.handle}`)];
+    if (!mine.includes(account)) throw new HttpError(403, 'not_yours', 'You can read your own budget and your agents\' budgets.');
+    return { account, balance: budgets.balance(account), ledger: ({ limit }) => budgets.ledger(account, limit) };
+  };
+  const isOwnerOf = (ctx, a) => (ctx.principal?.kind === 'user' ? ctx.principal.user.id === a.owner : ctx.principal?.kind === 'agent' && ctx.principal.agent.handle === a.handle);
+  const agentView = (ctx) => (a) => ({ ...agents.view(a, { owner: isOwnerOf(ctx, a) }), posts: ({ limit }, c) => c.meter.spend(social.feed({ author: `agent:${a.handle}`, sort: 'new', limit })), budget: () => ownBudget(ctx, `agent:${a.handle}`) });
+  const userView = (ctx) => (u) => ({
     username: u.username, displayName: u.profile?.displayName ?? null, bio: u.profile?.bio ?? null,
-    agents: (_, c) => c.meter.spend(agents.forOwner(u.id)).map(agentView), posts: ({ limit }, c) => c.meter.spend(social.feed({ author: `user:${u.username}`, sort: 'new', limit })), budget: budgetView(`user:${u.username}`),
+    agents: (_, c) => c.meter.spend(agents.forOwner(u.id)).map(agentView(ctx)), posts: ({ limit }, c) => c.meter.spend(social.feed({ author: `user:${u.username}`, sort: 'new', limit })), budget: () => ownBudget(ctx, `user:${u.username}`),
   });
-  // `html` and `thread` are functions so nothing is rendered or fetched unless the query asks.
   const postView = (ctx) => (p) => ({
     ...social.view(p, ctx.principal), html: () => markdown(p.body).__html,
     thread: () => ctx.meter.spend(social.replies(p.id)).map(postView(ctx)),
@@ -219,20 +226,21 @@ export function makeGraphql(s) {
   const meView = (ctx) => {
     const p = someone(ctx);
     if (p.kind === 'agent') {
-      return { kind: 'agent', username: p.owner.username, displayName: p.owner.profile?.displayName ?? null, agent: agentView(p.agent), agents: [agentView(p.agent)], sshKeys: [], gpgKeys: [], agentKeys: [], budget: budgetView(`agent:${p.agent.handle}`) };
+      return { kind: 'agent', username: p.owner.username, displayName: p.owner.profile?.displayName ?? null, agent: agentView(ctx)(p.agent), agents: [agentView(ctx)(p.agent)], sshKeys: [], gpgKeys: [], agentKeys: [], budget: ownBudget(ctx, `agent:${p.agent.handle}`) };
     }
     const u = store.userById(p.user.id);
-    return { kind: 'user', ...userView(u), agent: null, sshKeys: keys.sshFor(u), gpgKeys: keys.gpgFor(u), agentKeys: keys.agentKeysFor(u), budget: budgetView(`user:${u.username}`) };
+    return { kind: 'user', ...userView(ctx)(u), agent: null, sshKeys: keys.sshFor(u), gpgKeys: keys.gpgFor(u), agentKeys: keys.agentKeysFor(u), budget: ownBudget(ctx, `user:${u.username}`) };
   };
   const holder = (p, agent) => keys.holder(p.user, agent, agents);
 
   const resolvers = {
     Query: {
       me: (_, ctx) => (ctx.principal ? meView(ctx) : null),
-      user: ({ username }, ctx) => { anyone(ctx); const u = store.userByName(username); return u && u.status === 'active' ? userView(u) : null; },
-      agent: ({ handle }) => { const a = store.data.agents[String(handle).toLowerCase()]; return a ? agentView(a) : null; },
-      project: ({ owner, name }, ctx) => { const p = projects.find(owner, name); return p && projects.canRead(ctx.principal, p) ? projectView(ctx)(p) : null; },
-      projects: (_, ctx) => ctx.meter.spend(projects.list(ctx.principal)).map(projectView(ctx)),
+      user: ({ username }, ctx) => { anyone(ctx); const u = store.userByName(username); return u && u.status === 'active' ? userView(ctx)(u) : null; },
+      agent: ({ handle }, ctx) => { const a = agents.find(handle); return a ? agentView(ctx)(a) : null; },
+      project: ({ owner, name }, ctx) => { const p = projects.find(owner, name); return p && tasks.access.read(ctx.principal, p) ? projectView(ctx)(p) : null; },
+      // A list shows what you belong to or the public; an administrator opens a private project by its name, which tells its owner.
+      projects: (_, ctx) => ctx.meter.spend(projects.list(ctx.principal).filter((p) => tasks.access.how(ctx.principal, p) !== 'admin')).map(projectView(ctx)),
       post: ({ id }, ctx) => { const p = social.posts[id]; return p ? postView(ctx)(p) : null; },
       feed: ({ tag, author, sort, limit, before }, ctx) => ctx.meter.spend(social.feed({ tag, author, sort: sort.toLowerCase(), limit, before })).map(postView(ctx)),
       topics: ({ limit }, ctx) => ctx.meter.spend(social.topics(limit)),
@@ -240,19 +248,14 @@ export function makeGraphql(s) {
       reviewPool: ({ agent }, ctx) => {
         const a = tasks.actingAgent(someone(ctx), agent);
         if (!a) throw new HttpError(400, 'agent_required', 'Name one of your agents.');
-        return ctx.meter.spend(tasks.pool(a)).map((t) => tasks.view(t, ctx.principal));
+        return ctx.meter.spend(tasks.pool(a, ctx.principal)).map((t) => tasks.view(t, ctx.principal));
       },
       tickets: (args, ctx) => { const u = person(ctx).user; return ctx.meter.spend(ops.tickets(u, args)).map((t) => ops.view(u, t)); },
       ticket: ({ id }, ctx) => { const u = person(ctx).user; return ops.view(u, ops.ticket(u, id)); },
       changes: ({ status }, ctx) => ctx.meter.spend(ops.changes(person(ctx).user, { status })),
       change: ({ id }, ctx) => ops.change(person(ctx).user, id),
       opsSummary: (_, ctx) => ops.summary(person(ctx).user),
-      budget: ({ account }, ctx) => {
-        const p = someone(ctx);
-        const mine = p.kind === 'agent' ? [`agent:${p.agent.handle}`] : [`user:${p.user.username}`, ...agents.forOwner(p.user.id).map((a) => `agent:${a.handle}`)];
-        if (!mine.includes(account)) throw new HttpError(403, 'not_yours', 'You can read your own budget and your agents\' budgets.');
-        return budgetView(account);
-      },
+      budget: ({ account }, ctx) => ownBudget(ctx, account),
     },
     Mutation: {
       stepUp: ({ code }, ctx) => {
@@ -274,8 +277,8 @@ export function makeGraphql(s) {
       },
       setRole: ({ username, role }, ctx) => ops.setRole(person(ctx, { fresh: true }).user, username, role, ctx.ip),
       updateProfile: (args, ctx) => { const p = person(ctx); social.updateProfile(p.user, args); return meView(ctx); },
-      registerAgent: (args, ctx) => { const p = person(ctx); agents.register(p.user, args, ctx.ip); return agentView(agents.get(args.handle)); },
-      setReviewPreferences: ({ agent, prefs }, ctx) => { const p = person(ctx); agents.setReviewPrefs(p.user, agent, prefs, ctx.ip); return agentView(agents.get(agent)); },
+      registerAgent: (args, ctx) => { const p = person(ctx); agents.register(p.user, args, ctx.ip); return agentView(ctx)(agents.get(args.handle)); },
+      setReviewPreferences: ({ agent, prefs }, ctx) => { const p = person(ctx); agents.setReviewPrefs(p.user, agent, prefs, ctx.ip); return agentView(ctx)(agents.get(agent)); },
       createPost: (args, ctx) => postView(ctx)(social.create(someone(ctx), args)),
       reply: ({ to, body, media, asAgent }, ctx) => postView(ctx)(social.create(someone(ctx), { parent: to, body, media: media ?? [], asAgent })),
       vote: ({ post, value }, ctx) => postView(ctx)(social.vote(someone(ctx), post, value)),

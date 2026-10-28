@@ -53,13 +53,19 @@ export class AgentService {
       d.agents[handle] = agent;
       this.store.audit({ userId: user.id, event: 'agent.registered', ip, agent: handle, model });
     });
-    return this.view(agent);
+    return this.view(agent, { owner: true });
   }
 
   get(handle) {
-    const a = this.data[String(handle ?? '').toLowerCase()];
+    const a = this.find(handle);
     if (!a) throw new HttpError(404, 'agent_not_found', `No agent "${handle}".`);
     return a;
+  }
+
+  /** The agent with this handle, or null. */
+  find(handle) {
+    const key = String(handle ?? '').toLowerCase();
+    return Object.hasOwn(this.data, key) ? this.data[key] : null;
   }
 
   /** One of this user's own agents. */
@@ -71,12 +77,41 @@ export class AgentService {
 
   ownerOf(agent) { return this.store.userById(agent.owner); }
 
-  view(a) {
+  /**
+   * The agent as a reader sees it. The owner gets the preferences and the totals; anyone else gets
+   * the two review flags (a project name typed there may be a private one) and counters without
+   * private work. Callers say `{ owner: true }`; the default is the stranger's view.
+   */
+  view(a, { owner: isOwner = false } = {}) {
     const owner = this.ownerOf(a);
+    const prefs = a.reviewPrefs;
     return {
       handle: a.handle, name: a.name, model: a.model, description: a.description, createdAt: a.createdAt,
-      owner: owner?.username ?? null, byline: byline(a, this.displayName(owner)), reviewPrefs: a.reviewPrefs, stats: a.stats,
+      owner: owner?.username ?? null, byline: byline(a, this.displayName(owner)),
+      reviewPrefs: isOwner ? prefs : { enabled: prefs.enabled, anything: prefs.anything, projects: [], people: [], teams: [], tags: [] },
+      stats: isOwner ? a.stats : this.publicStats(a),
     };
+  }
+
+  /**
+   * The totals less the work done in projects that are not public: reviews and accepted findings from
+   * tasks, commits from the pushes the project kept (its last 200, so a very old private push may not
+   * be taken off; that errs towards a number that is too high, never towards a name).
+   */
+  publicStats(a) {
+    const projects = this.store.data.projects ?? {};
+    const hidden = { reviews: 0, findingsAccepted: 0, commits: 0 };
+    for (const t of Object.values(this.store.data.tasks ?? {})) {
+      if (t.claimant?.handle !== a.handle || !t.review || projects[t.project]?.visibility === 'public') continue;
+      hidden.reviews += 1;
+      hidden.findingsAccepted += t.review.findings.filter((f) => f.status === 'accepted').length;
+    }
+    for (const p of Object.values(projects)) {
+      if (p.visibility === 'public') continue;
+      for (const push of p.pushes ?? []) hidden.commits += push.commits.filter((c) => c.agent === a.handle).length;
+    }
+    const s = a.stats;
+    return { reviews: Math.max(0, s.reviews - hidden.reviews), findingsAccepted: Math.max(0, s.findingsAccepted - hidden.findingsAccepted), commits: Math.max(0, s.commits - hidden.commits) };
   }
 
   forOwner(userId) { return Object.values(this.data).filter((a) => a.owner === userId); }
@@ -94,7 +129,7 @@ export class AgentService {
       d.agents[a.handle].reviewPrefs = next;
       this.store.audit({ userId: user.id, event: 'agent.review_prefs', ip, agent: a.handle, anything: next.anything });
     });
-    return this.view(this.data[a.handle]);
+    return this.view(this.data[a.handle], { owner: true });
   }
 
   /** Find a registered agent named in a byline (persona name + owner display name or username). */
