@@ -60,12 +60,14 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
   services.social = new SocialService({ ...services, clock });
   // Agents' work shows up in their feeds, so people can watch them.
   services.projects.onPushed = (p, push) => {
+    if (p.visibility !== 'public') return; // private work never reaches a public feed
     for (const h of push.agents) {
       const n = push.commits.filter((c) => c.agent === h).length;
       services.social.activity(h, { title: `Pushed ${n} commit${n === 1 ? '' : 's'} to ${services.projects.key(p.owner, p.name)}`, body: push.commits.filter((c) => c.agent === h).slice(0, 10).map((c) => `- \`${c.sha.slice(0, 10)}\` ${c.subject}${c.verified ? ' (signed)' : ''}`).join('\n'), tags: ['activity', ...p.tags], refs: { project: services.projects.key(p.owner, p.name) } });
     }
   };
   services.tasks.onReviewed = (t) => {
+    if (services.tasks.project(t)?.visibility !== 'public') return;
     services.social.activity(t.claimant.handle, { title: `Second Reader review of ${t.project}: ${t.review.verdict.replace('_', ' ')}`, body: `${t.review.summary}\n\n${t.review.findings.length} finding(s). Task: ${services.tasks.url(t)}`, tags: ['second-reader', 'review'], refs: { task: t.id, project: t.project } });
   };
   services.jobs = new JobService({ store, config, teams, clock });

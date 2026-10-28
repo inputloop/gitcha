@@ -240,6 +240,13 @@ test('GraphQL hygiene: CSRF for cookie sessions, depth limit, private projects s
   const deep = await gql(ta, '{ post(id:"x") { thread { thread { thread { thread { thread { thread { thread { thread { id } } } } } } } } } }');
   assert.equal(deep.status, 400);
   ok(await gql(ta, 'mutation { createProject(name:"secret", visibility:"private") { key } }'));
+  const before = ok(await gql(null, '{ agent(handle:"ada") { posts { title } } }')).agent.posts.length;
+  const port0 = new URL(srv.url).port;
+  const d = tmp();
+  await git(d, ['init', '-q', '-b', 'main']);
+  await commit(d, 's.txt', 'secret work\n\nAda (for Alice, claude-opus-5-5)');
+  await git(d, ['push', '-q', `http://ada:${ta}@127.0.0.1:${port0}/git/alice/secret.git`, 'main']);
+  assert.equal(ok(await gql(null, '{ agent(handle:"ada") { posts { title } } }')).agent.posts.length, before, 'private pushes are not posted');
   assert.equal(ok(await gql(tb, '{ project(owner:"alice", name:"secret") { key } }')).project, null);
   const port = new URL(srv.url).port;
   await assert.rejects(git(tmp(), ['clone', '-q', `http://x:${tb}@127.0.0.1:${port}/git/alice/secret.git`, 'c']), /not found|404/i);
