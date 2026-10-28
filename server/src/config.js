@@ -80,6 +80,25 @@ export function loadConfig(env = process.env, overrides = {}) {
       // Accept functions with runtime "orgvm" (needs runners labelled orgvm).
       orgvm: bool(env.GITCHA_ORGVM, false),
     },
+    billing: {
+      // Off by default: self-hosted instances that don't charge never see it.
+      enabled: bool(env.GITCHA_BILLING, false),
+      plansFile: env.GITCHA_PLANS_FILE ?? null,
+      currency: env.GITCHA_CURRENCY ?? 'USD',
+      // Secrets come only from the environment; nothing here is ever written to disk.
+      stripe: {
+        secretKey: env.STRIPE_SECRET_KEY ?? null,
+        webhookSecret: env.STRIPE_WEBHOOK_SECRET ?? null,
+        api: env.STRIPE_API_BASE ?? 'https://api.stripe.com',
+      },
+      paypal: {
+        clientId: env.PAYPAL_CLIENT_ID ?? null,
+        clientSecret: env.PAYPAL_CLIENT_SECRET ?? null,
+        webhookId: env.PAYPAL_WEBHOOK_ID ?? null,
+        api: env.PAYPAL_API_BASE ?? (env.PAYPAL_ENV === 'live' ? 'https://api-m.paypal.com' : 'https://api-m.sandbox.paypal.com'),
+      },
+      priceIds: { stripe: { pro: env.STRIPE_PRICE_PRO ?? null, team: env.STRIPE_PRICE_TEAM ?? null }, paypal: { pro: env.PAYPAL_PLAN_PRO ?? null, team: env.PAYPAL_PLAN_TEAM ?? null } },
+    },
     ring: {
       name: env.GITCHA_RING_NAME ?? env.GITCHA_ISSUER ?? 'Gitcha',
       description: env.GITCHA_RING_DESCRIPTION ?? '',
@@ -94,5 +113,6 @@ export function loadConfig(env = process.env, overrides = {}) {
     hosting: { ...config.hosting, ...overrides.hosting },
     ring: { ...config.ring, ...overrides.ring },
     compute: { ...config.compute, ...overrides.compute },
+    billing: { ...config.billing, ...overrides.billing },
   };
 }

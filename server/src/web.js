@@ -25,6 +25,9 @@ const NOTICES = {
   transferred: 'Package moved to the team.',
   visibility: 'Package visibility updated.',
   confirm_again: 'Verified. Please submit your change again.',
+  cancelled: 'Checkout was cancelled; nothing was charged.',
+  subscribed: 'Thank you: your subscription is active.',
+  sub_cancelled: 'Your subscription has been cancelled.',
 };
 const REASONS = {
   interval: 'It has been a while since you last confirmed it was you.',
@@ -35,7 +38,7 @@ const REASONS = {
 /** Only allow same-site relative redirects. */
 const safeNext = (n) => (typeof n === 'string' && /^\/(?![/\\])/.test(n) ? n : '/packages');
 
-export function registerWeb(router, { auth, packages, teams, config }) {
+export function registerWeb(router, { auth, packages, teams, config, billing }) {
   const secure = config.secureCookies;
 
   const csrfToken = (ctx) => {
@@ -292,6 +295,61 @@ export function registerWeb(router, { auth, packages, teams, config }) {
     teams.delete(a.user, ctx.params.team, ctx.ip);
     redirect(ctx.res, '/teams?msg=team_deleted');
   }));
+
+  // ---- billing ----------------------------------------------------------------------
+  const billingBack = (owner) => `/billing?owner=${encodeURIComponent(owner ?? '')}`;
+  const billingView = (ctx, a, owner, { error, notice, status = 200 } = {}) => {
+    const view = billing.view(a.user, owner);
+    const owners = [`user:${a.user.username}`, ...teams.forUser(a.user).filter((t) => t.role === 'owner').map((t) => `team:${t.name}`)];
+    page(ctx, 'Billing', V.billingPage({ csrf: csrfToken(ctx), view, owners, error, notice }), { user: a.user, wide: true, status });
+  };
+
+  router.get('/billing', (ctx) => {
+    const a = requireWeb(ctx);
+    if (a) billingView(ctx, a, ctx.url.searchParams.get('owner') || undefined, { notice: NOTICES[ctx.url.searchParams.get('msg')] });
+  });
+
+  router.post('/billing/checkout', async (ctx) => {
+    const f = await form(ctx);
+    const a = requireWeb(ctx);
+    if (!a || !requireFresh(ctx, a, `${billingBack(f.owner)}&msg=confirm_again`, true)) return;
+    try {
+      const { url } = await billing.checkout(a.user, { owner: f.owner, plan: f.plan, provider: f.provider }, ctx.ip);
+      // Only ever redirect to the provider URL the provider gave us.
+      redirect(ctx.res, url);
+    } catch (err) {
+      if (!(err instanceof HttpError)) throw err;
+      billingView(ctx, a, f.owner, { error: err.message, status: err.status });
+    }
+  });
+
+  router.get('/billing/return', async (ctx) => {
+    const a = requireWeb(ctx);
+    if (!a) return;
+    const q = ctx.url.searchParams;
+    try {
+      await billing.confirmReturn(a.user, { owner: q.get('owner'), provider: q.get('provider'), sessionId: q.get('session_id'), subscriptionId: q.get('subscription_id') });
+      redirect(ctx.res, `${billingBack(q.get('owner'))}&msg=subscribed`);
+    } catch (err) {
+      if (!(err instanceof HttpError)) throw err;
+      billingView(ctx, a, q.get('owner'), { error: `${err.message} If you completed payment, it will appear once the provider notifies us.`, status: err.status });
+    }
+  });
+
+  router.post('/billing/cancel', async (ctx) => {
+    const f = await form(ctx);
+    const a = requireWeb(ctx);
+    if (!a || !requireFresh(ctx, a, `${billingBack(f.owner)}&msg=confirm_again`, true)) return;
+    await billing.cancel(a.user, { owner: f.owner }, ctx.ip);
+    redirect(ctx.res, `${billingBack(f.owner)}&msg=sub_cancelled`);
+  });
+
+  router.post('/billing/portal', async (ctx) => {
+    const f = await form(ctx);
+    const a = requireWeb(ctx);
+    if (!a || !requireFresh(ctx, a, `${billingBack(f.owner)}&msg=confirm_again`, true)) return;
+    redirect(ctx.res, (await billing.portal(a.user, { owner: f.owner })).url);
+  });
 
   // ---- account security -----------------------------------------------------
   const accountView = (ctx, a, { notice, error, status = 200 } = {}) => {

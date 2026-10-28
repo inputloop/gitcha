@@ -365,3 +365,42 @@ export const shareCard = ({ csrf, pkg, teams }) => h`
     <button class="btn small">${pkg.team ? 'Move' : 'Transfer'}</button>
   </form>` : h`<p class="small"><a href="/teams">Create a team</a> first.</p>`}
 </div>`;
+
+// ---- billing ----------------------------------------------------------------------
+const fmt = (n) => (n === null || n === undefined ? 'unlimited' : Number(n).toLocaleString('en-US'));
+
+export const billingPage = ({ csrf, view, owners, error, notice }) => h`
+<div class="page-head">
+  <h1>Billing</h1>
+  <form method="get" action="/billing" class="row">
+    <select name="owner" aria-label="Account">${owners.map((o) => h`<option value="${o}" ${o === view.owner ? raw('selected') : ''}>${o.replace(/^user:/, 'you (').replace(/^team:/, 'team ')}${o.startsWith('user:') ? ')' : ''}</option>`)}</select>
+    <button class="btn ghost small">Show</button>
+  </form>
+</div>
+${alert(notice, 'info')}${alert(error)}
+${view.enabled ? '' : h`<div class="alert info">Billing is switched off on this instance: there are no limits and nothing to pay.</div>`}
+<div class="account-grid">
+  <section class="card">
+    <h2>${view.planName} plan <span class="badge">${view.subscription ? `${view.subscription.status} via ${view.subscription.provider}` : 'no subscription'}</span></h2>
+    <table class="table compact"><thead><tr><th>This month</th><th>Used</th><th>Limit</th></tr></thead><tbody>
+    ${Object.entries({ fn_invocations: 'Function invocations', build_minutes: 'Build minutes', sites: 'Sites (total)' }).map(([k, label]) => h`<tr><td>${label}</td><td>${fmt(view.usage[k] ?? 0)}</td><td>${fmt(view.limits?.[k])}</td></tr>`)}
+    </tbody></table>
+    ${view.subscription && ['active', 'past_due'].includes(view.subscription.status) ? h`<div class="row gap">
+      ${view.subscription.provider === 'stripe' ? h`<form method="post" action="/billing/portal">${csrfField(csrf)}<input type="hidden" name="owner" value="${view.owner}"><button class="btn ghost">Update card and invoices</button></form>` : ''}
+      <form method="post" action="/billing/cancel">${csrfField(csrf)}<input type="hidden" name="owner" value="${view.owner}"><button class="btn danger">Cancel subscription</button></form>
+    </div>` : ''}
+  </section>
+  <section class="card">
+    <h2>Payments</h2>
+    <p class="small muted">You pay on Stripe's or PayPal's own pages; card details never reach this server. Starting or cancelling a subscription needs a fresh authenticator code.</p>
+  </section>
+</div>
+<div class="pkg-list">
+${view.plans.filter((p) => p.paid).map((p) => h`<div class="card plan">
+  <h3>${p.name}</h3><p class="price">${p.price ?? 'priced on request'}</p>
+  <ul class="small">${Object.entries(p.limits ?? {}).map(([k, v]) => h`<li>${fmt(v)} ${k.replace(/_/g, ' ')}</li>`)}</ul>
+  ${view.enabled && view.plan !== p.id ? view.providers.map((prov) => h`<form method="post" action="/billing/checkout" class="inline">${csrfField(csrf)}
+    <input type="hidden" name="owner" value="${view.owner}"><input type="hidden" name="plan" value="${p.id}"><input type="hidden" name="provider" value="${prov}">
+    <button class="btn ${prov === 'paypal' ? 'ghost' : ''}">${prov === 'stripe' ? 'Pay with card (Stripe)' : 'Pay with PayPal'}</button></form>`) : view.plan === p.id ? h`<span class="badge ok">current plan</span>` : ''}
+</div>`)}
+</div>`;

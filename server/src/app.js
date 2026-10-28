@@ -16,6 +16,8 @@ import { JobService } from './compute/jobs.js';
 import { CiService } from './compute/ci.js';
 import { FunctionService } from './compute/functions.js';
 import { registerComputeApi } from './compute/api.js';
+import { BillingService } from './billing/billing.js';
+import { registerBillingApi } from './billing/api.js';
 import { registerApi } from './api.js';
 import { registerWeb } from './web.js';
 import { layout, errorPage } from './views.js';
@@ -33,7 +35,9 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
   const router = new Router();
   const sites = new SiteService({ store, config, teams, clock });
   const domains = new DomainService({ store, config, sites, clock, ...(resolver ? { resolver } : {}) });
-  const services = { store, auth, packages, teams, sites, domains, config, billing: null };
+  const services = { store, auth, packages, teams, sites, domains, config };
+  services.billing = new BillingService({ store, config, teams, clock, ...(fetchImpl ? { fetchImpl } : {}) });
+  sites.billing = services.billing;
   services.jobs = new JobService({ store, config, teams, clock });
   services.ci = new CiService({ ...services, clock });
   services.functions = new FunctionService({ ...services, clock });
@@ -45,7 +49,8 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
   registerApi(router, { auth, packages, teams, config, version: VERSION, hooks: { onPublish: (...a) => services.ci.onPublish(...a) } });
   registerHostingApi(router, services);
   registerComputeApi(router, services);
-  registerWeb(router, { auth, packages, teams, config });
+  registerBillingApi(router, services);
+  registerWeb(router, { auth, packages, teams, config, billing: services.billing });
 
   router.get('/static/:file', (ctx) => {
     const file = path.basename(ctx.params.file);

@@ -154,3 +154,8 @@ form.row > .btn { margin-top: 0; }
 .add-member > .btn { margin-top: 0; }
 .roles { grid-template-columns: auto 1fr; }
 .danger-zone { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
+
+/* billing */
+.plan .price { font-size: 20px; font-weight: 700; margin: 4px 0 10px; }
+.plan form.inline { display: inline-block; margin: 4px 6px 0 0; }
+.row.gap { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }

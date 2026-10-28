@@ -121,6 +121,8 @@ export class SiteService {
     if (RESERVED.has(name)) throw new HttpError(409, 'site_reserved', `"${name}" is reserved.`);
     if (this.store.data.sites[name]) throw new HttpError(409, 'site_exists', `The site name "${name}" is taken.`);
     const owner = this.ownerFor(user, team);
+    const count = Object.values(this.store.data.sites).filter((s) => s.owner.type === owner.type && s.owner.name === owner.name).length;
+    this.billing?.check(`${owner.type}:${owner.name}`, 'sites', count);
     const site = { name, owner, description: String(description).slice(0, 300), createdAt: this.clock(), createdBy: user.username, deploys: [], activeDeploy: null, config: {} };
     this.store.tx((d) => {
       d.sites[name] = site;
