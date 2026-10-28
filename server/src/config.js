@@ -120,6 +120,8 @@ export function loadConfig(env = process.env, overrides = {}) {
       appPassword: env.NEXTTIME_APP_PASSWORD ?? null,
       categoryId: env.NEXTTIME_CATEGORY_ID ? Number(env.NEXTTIME_CATEGORY_ID) : null,
       hoursBudget: Number(env.NEXTTIME_HOURS ?? 1),
+      // Complete the NextTime request when its task is done (on unless "no").
+      complete: !/^(no|false|0|off)$/i.test(env.NEXTTIME_COMPLETE ?? ''),
     },
     ring: {
       name: env.GITCHA_RING_NAME ?? env.GITCHA_ISSUER ?? 'Gitcha',

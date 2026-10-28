@@ -130,7 +130,8 @@ ask *you* for the code.
   sites and functions can belong to a team, and team-only things are
   invisible to outsiders.
 - ✅ **Project task tracking**, mirrored into NextTime-Dev as timebank
-  requests when it is configured.
+  requests when it is configured: created, cancelled, and completed when a
+  task is done (a toggle, on by default).
 
 **Hosting and compute**
 
@@ -876,6 +877,7 @@ All settings are environment variables. In the Debian package they live in
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_PRO`, `STRIPE_PRICE_TEAM` | Stripe |
 | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_ENV`, `PAYPAL_WEBHOOK_ID`, `PAYPAL_PLAN_PRO`, `PAYPAL_PLAN_TEAM` | PayPal |
 | `NEXTTIME_URL`, `NEXTTIME_USER`, `NEXTTIME_APP_PASSWORD`, `NEXTTIME_CATEGORY_ID`, `NEXTTIME_HOURS` | Mirror project tasks into NextTime-Dev |
+| `NEXTTIME_COMPLETE` | `no` stops completing the NextTime request when a task is done (default: complete) |
 
 Payment keys belong in the environment only, never in a file in a
 repository.

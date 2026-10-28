@@ -222,7 +222,16 @@ export class TaskService {
     if (!p || !this.projects.isMaintainer(user, p)) throw new HttpError(403, 'project_forbidden', 'Only the project\'s maintainers close tasks.');
     if (!['done', 'closed'].includes(status)) throw new HttpError(400, 'bad_status', 'Close as done or closed.');
     this.store.tx((d) => Object.assign(d.tasks[id], { status, closedAt: this.clock(), closedBy: user.username }));
-    if (status === 'closed' && t.nexttime?.requestId && this.nexttime?.configured) this.nexttime.cancel(t.nexttime.requestId).catch(() => {});
+    const rid = t.nexttime?.requestId;
+    if (rid && this.nexttime?.configured) {
+      const note = (patch) => this.store.tx((d) => { d.tasks[id].nexttime = { ...d.tasks[id].nexttime, ...patch }; });
+      if (status === 'closed') this.nexttime.cancel(rid).then(() => note({ cancelledAt: this.clock() })).catch(() => {});
+      else if (this.nexttime.completeOnDone) {
+        this.nexttime.complete(rid)
+          .then(() => note({ completedAt: this.clock(), completeError: null }))
+          .catch((err) => note({ completeError: String(err.message).slice(0, 300), completeTriedAt: this.clock() }));
+      }
+    }
     return this.get(id);
   }
 

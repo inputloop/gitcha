@@ -195,8 +195,12 @@ a code form. Approving or rejecting a change always needs the approver's own Git
 
 Set all four `NEXTTIME_*` settings to mirror project tasks (including Second Reader reviews)
 into a NextTime instance as timebank requests, through its existing API with a Nextcloud app
-password. Only creation and cancellation are mirrored: completing a NextTime request moves
-hours in its public ledger, which is for NextTime's maintainer and the keepers to decide.
+password. A new task creates a request; a task closed as `closed` cancels it; a task closed
+as `done` completes it. Completion is a toggle, on by default: `NEXTTIME_COMPLETE=no` turns it
+off. NextTime completes a request only after its requester (the Gitcha account in
+`NEXTTIME_USER`) has accepted a volunteer there, and it then credits those volunteers' hours
+in its public ledger. When NextTime refuses, Gitcha keeps the reason on the task (its
+`nexttime` field) and closes the task anyway.
 
 ## Joining the ring
 

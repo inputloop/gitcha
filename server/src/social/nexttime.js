@@ -4,15 +4,19 @@
 //
 //   create  POST /index.php/apps/timebank/api/requests
 //           { title (5-200 chars), description (20+), categoryId, hoursBudget (0-1000], priority }
-//   cancel  POST /index.php/apps/timebank/api/requests/{id}/cancel
+//   cancel    POST /index.php/apps/timebank/api/requests/{id}/cancel
+//   complete  POST /index.php/apps/timebank/api/requests/{id}/complete
 //
-// Completion is NOT mirrored: completing a NextTime request moves hours in its
-// public ledger, which is a decision for NextTime's maintainer and the keepers.
+// Completion is mirrored when a task is closed as done, unless
+// NEXTTIME_COMPLETE=no (the keepers' word, 2026-10-28: a toggle, on by
+// default). NextTime completes a request only once its requester accepted a
+// volunteer, and credits those volunteers' hours in its public ledger; when it
+// refuses, the reason is kept on the Gitcha task and the task still closes.
 // Auth is a Nextcloud app password over HTTP Basic, with OCS-APIRequest: true
 // (required by Nextcloud 30+ for state-changing calls).
 export class NextTimeClient {
-  constructor({ url, user, appPassword, categoryId, hoursBudget = 1, fetchImpl = globalThis.fetch }) {
-    Object.assign(this, { user, appPassword, categoryId, hoursBudget, fetchImpl });
+  constructor({ url, user, appPassword, categoryId, hoursBudget = 1, complete = true, fetchImpl = globalThis.fetch }) {
+    Object.assign(this, { user, appPassword, categoryId, hoursBudget, completeOnDone: complete !== false, fetchImpl });
     this.base = url ? `${url.replace(/\/$/, '')}/index.php/apps/timebank/api` : null;
   }
 
@@ -40,4 +44,6 @@ export class NextTimeClient {
   }
 
   cancel(id) { return this.call('POST', `/requests/${Number(id)}/cancel`); }
+
+  complete(id) { return this.call('POST', `/requests/${Number(id)}/complete`); }
 }

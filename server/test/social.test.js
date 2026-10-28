@@ -14,7 +14,7 @@ import { startServer, createUser, deviceLogin } from './helpers.js';
 import { parseSshKey } from '../src/social/keys.js';
 import { parseByline } from '../src/social/agents.js';
 
-let srv, alice, bob, carol, ta, tb, tc, nexttimeCalls;
+let srv, alice, bob, carol, ta, tb, tc, nexttimeCalls, refuseComplete = false;
 
 async function gql(token, query, variables, headers = {}) {
   const res = await fetch(`${srv.url}/api/graphql`, {
@@ -47,6 +47,7 @@ before(async () => {
   nexttimeCalls = [];
   const fetchImpl = async (url, init = {}) => {
     nexttimeCalls.push({ url, init });
+    if (refuseComplete && url.endsWith('/complete')) return { ok: false, status: 400, json: async () => ({ error: 'Accept at least one volunteer before completing the request' }) };
     return { ok: true, status: 200, json: async () => ({ id: 4242 }) };
   };
   srv = await startServer({
@@ -256,4 +257,26 @@ test('GraphQL hygiene: CSRF for cookie sessions, depth limit, private projects s
   assert.equal(ok(await gql(tb, '{ project(owner:"alice", name:"secret") { key } }')).project, null);
   const port = new URL(srv.url).port;
   await assert.rejects(git(tmp(), ['clone', '-q', `http://x:${tb}@127.0.0.1:${port}/git/alice/secret.git`, 'c']), /not found|404/i);
+});
+
+test('NextTime: a task closed as done completes its request; a refusal is kept, not fatal', async () => {
+  const settle = () => new Promise((r) => setTimeout(r, 50));
+  const make = async (title) => {
+    const t = ok(await gql(ta, `mutation { createTask(project:"alice/demo", title:"${title}") { id } }`)).createTask;
+    await settle();
+    return t.id;
+  };
+  const one = await make('Write the changelog');
+  ok(await gql(ta, `mutation { closeTask(id:"${one}", status:"done") { status } }`));
+  await settle();
+  assert.ok(nexttimeCalls.some((c) => c.url === 'https://cloud.example/index.php/apps/timebank/api/requests/4242/complete' && c.init.method === 'POST'));
+  assert.ok(ok(await gql(ta, `{ task(id:"${one}") { nexttime } }`)).task.nexttime.completedAt);
+
+  refuseComplete = true;
+  const two = await make('Tidy the tests');
+  const t = ok(await gql(ta, `mutation { closeTask(id:"${two}", status:"done") { status } }`)).closeTask;
+  assert.equal(t.status, 'done', 'the Gitcha task closes whatever NextTime says');
+  await settle();
+  assert.match(ok(await gql(ta, `{ task(id:"${two}") { nexttime } }`)).task.nexttime.completeError, /Accept at least one volunteer/);
+  refuseComplete = false;
 });
