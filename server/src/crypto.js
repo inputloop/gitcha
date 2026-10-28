@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 import crypto from 'node:crypto';
+import { promisify } from 'node:util';
+
+const scryptAsync = promisify(crypto.scrypt);
 
 const SCRYPT = { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 
@@ -15,6 +18,17 @@ export function verifyPassword(password, stored) {
   if (scheme !== 'scrypt') return false;
   const expected = Buffer.from(hash, 'base64');
   const actual = crypto.scryptSync(password, Buffer.from(salt, 'base64'), expected.length, {
+    N: Number(N), r: Number(r), p: Number(p), maxmem: SCRYPT.maxmem,
+  });
+  return crypto.timingSafeEqual(expected, actual);
+}
+
+/** The same check on the thread pool, so a sign-in does not stop the server for the length of a scrypt run. */
+export async function verifyPasswordAsync(password, stored) {
+  const [scheme, N, r, p, salt, hash] = String(stored).split('$');
+  if (scheme !== 'scrypt') return false;
+  const expected = Buffer.from(hash, 'base64');
+  const actual = await scryptAsync(password, Buffer.from(salt, 'base64'), expected.length, {
     N: Number(N), r: Number(r), p: Number(p), maxmem: SCRYPT.maxmem,
   });
   return crypto.timingSafeEqual(expected, actual);

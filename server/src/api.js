@@ -58,7 +58,7 @@ export function registerApi(router, { auth: authSvc, packages, teams, config, ve
   // ---- authentication ------------------------------------------------------
   router.post('/api/v1/auth/login', async (ctx) => {
     const { username, password } = await readJson(ctx.req);
-    const { ticket } = authSvc.beginLogin({ username, password, ip: ctx.ip });
+    const { ticket } = await authSvc.beginLogin({ username, password, ip: ctx.ip });
     json(ctx.res, 200, { mfa_ticket: ticket, expires_in_ms: config.policy.mfaTicketTtl, next: 'POST /api/v1/auth/login/mfa' });
   });
 

@@ -146,7 +146,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
   router.post('/login', async (ctx) => {
     const f = await form(ctx);
     try {
-      const { ticket } = auth.beginLogin({ username: f.username, password: f.password, ip: ctx.ip });
+      const { ticket } = await auth.beginLogin({ username: f.username, password: f.password, ip: ctx.ip });
       redirect(ctx.res, `/login/2fa?next=${encodeURIComponent(safeNext(f.next))}`, {
         'Set-Cookie': [...ctx.outCookies, cookie(TICKET, ticket, { secure, maxAge: config.policy.mfaTicketTtl })],
       });

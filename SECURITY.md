@@ -54,8 +54,14 @@ Gitcha server**.
 
 - TOTP codes are single-use (the last accepted time step is stored) and valid
   for ±1 step (about 90 s).
-- Rate limits: 10 password attempts per IP+user and 6 second-factor attempts
-  per user per 15 minutes; an MFA ticket dies after 5 wrong codes.
+- Rate limits, per 15 minutes, counting wrong guesses only: 10 wrong passwords per
+  address and username, and 30 per address whatever the username (both checked
+  before any password hashing is done); 6 wrong second-factor codes per user and
+  network (/24 for IPv4), so a stranger's guesses lock the stranger's network and
+  not the account's owner. An MFA ticket dies after 5 wrong codes. A lockout leaves
+  one `login.rate_limited` row in the account's security log, not one per refusal.
+  Passwords are hashed off the main thread, so a burst of sign-ins does not stall
+  the server.
 - Unknown usernames take the same scrypt time as real ones.
 - Web: `HttpOnly`, `SameSite=Lax`, `Secure` (on https) cookies; CSRF tokens on
   every form; strict CSP with no inline script; `frame-ancestors 'none'`;

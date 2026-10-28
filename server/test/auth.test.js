@@ -267,3 +267,97 @@ test('AUTH-4: the security route runs the new-network check like every other rou
     assert.equal(home.status, 200);
   } finally { await srv.close(); }
 });
+
+import { RateLimiter } from '../src/auth.js';
+
+test('AUTH-6: guessing at the second factor locks the guesser\'s network, not the owner', async () => {
+  const srv = await startServer();
+  try {
+    const u = createUser(srv, 'alice');
+    const attacker = '198.51.100.20';
+    // Holding only the password, the attacker burns six wrong codes: five on one ticket (which dies), one on the next.
+    const t1 = await srv.auth.beginLogin({ username: 'alice', password: u.password, ip: attacker });
+    for (let i = 0; i < 5; i++) assert.throws(() => srv.auth.completeLogin({ ticket: t1.ticket, code: '000000', ip: attacker }), /not valid|Too many/);
+    assert.throws(() => srv.auth.completeLogin({ ticket: t1.ticket, code: '000000', ip: attacker }), /expired/, 'the ticket died at five');
+    const t2 = await srv.auth.beginLogin({ username: 'alice', password: u.password, ip: attacker });
+    assert.throws(() => srv.auth.completeLogin({ ticket: t2.ticket, code: '000000', ip: attacker }), /not valid/);
+    const t3 = await srv.auth.beginLogin({ username: 'alice', password: u.password, ip: attacker });
+    assert.throws(() => srv.auth.completeLogin({ ticket: t3.ticket, code: '000000', ip: attacker }), /Too many/, 'the seventh guess from that network is refused');
+    // The owner, from their own network, signs in with the right code at once.
+    const home = '203.0.113.40';
+    const mine = await srv.auth.beginLogin({ username: 'alice', password: u.password, ip: home });
+    const ok = srv.auth.completeLogin({ ticket: mine.ticket, code: u.nextCode(), ip: home });
+    assert.match(ok.token, /^gtd_/, 'the owner is not locked out by someone else\'s guesses');
+    // And a step-up from the owner's network works while the attacker's token is still locked.
+    const step = srv.auth.stepUp(srv.auth.authenticate(ok.token, home), u.nextCode(), home);
+    assert.equal(step.method, 'totp');
+  } finally { await srv.close(); }
+});
+
+test('AUTH-6: only wrong guesses are counted, and a right code clears the count', async () => {
+  const srv = await startServer();
+  try {
+    const u = createUser(srv, 'alice');
+    const ip = '198.51.100.20';
+    for (let round = 0; round < 3; round++) { // 3 x (5 wrong, then a right one): never locked, because the right one resets
+      const t = await srv.auth.beginLogin({ username: 'alice', password: u.password, ip });
+      for (let i = 0; i < 4; i++) assert.throws(() => srv.auth.completeLogin({ ticket: t.ticket, code: '000000', ip }), /not valid/);
+      assert.match(srv.auth.completeLogin({ ticket: t.ticket, code: u.nextCode(), ip }).token, /^gtd_/);
+    }
+  } finally { await srv.close(); }
+});
+
+test('AUTH-7: distinct usernames from one address hit a per-address cap before any scrypt runs', async () => {
+  const srv = await startServer();
+  try {
+    createUser(srv, 'alice');
+    const ip = '198.51.100.30';
+    const results = await Promise.all(Array.from({ length: 36 }, (_, i) => srv.auth.beginLogin({ username: `nobody${i}`, password: 'x'.repeat(12), ip }).then(() => 'ok', (e) => e.status)));
+    assert.equal(results.filter((s) => s === 401).length, 30, 'thirty guesses are evaluated');
+    assert.equal(results.filter((s) => s === 429).length, 6, 'the rest are refused unhashed');
+    // Someone else, elsewhere, is untouched; and a success from the capped address is not counted against it.
+    assert.match((await srv.auth.beginLogin({ username: 'alice', password: 'correct horse battery', ip: '198.51.100.31' })).ticket, /^gtt_/);
+  } finally { await srv.close(); }
+});
+
+test('AUTH-7: the password hash runs off the event loop (30 logins in flight must not freeze the server)', async () => {
+  const srv = await startServer();
+  try {
+    createUser(srv, 'alice');
+    const t0 = performance.now();
+    const pending = Array.from({ length: 6 }, (_, i) => srv.auth.beginLogin({ username: `ghost${i}`, password: 'y'.repeat(12), ip: `192.0.2.${i + 1}` }).catch(() => null));
+    const handedBack = performance.now() - t0;
+    // Six synchronous scrypt runs take over half a second before control returns; async hands it back at once.
+    assert.ok(handedBack < 150, `beginLogin handed control back after ${Math.round(handedBack)} ms`);
+    await Promise.all(pending);
+  } finally { await srv.close(); }
+});
+
+test('AUTH-7: a full limiter drops expired and unblocked keys first and never forgets a blocked one', () => {
+  let now = 1_000_000;
+  const lim = new RateLimiter({ max: 10, windowMs: 15 * 60_000, clock: () => now });
+  for (let i = 0; i < 11; i++) lim.hit('login:attacker:alice');
+  assert.equal(lim.check('login:attacker:alice'), false, 'blocked');
+  for (let i = 0; i < 50_100; i++) lim.hit(`login:ip${i}:user`);
+  assert.equal(lim.check('login:attacker:alice'), false, 'still blocked after a flood of other keys (old code cleared the whole map)');
+  assert.ok(lim.hits.size <= 50_000);
+  now += 16 * 60_000;
+  lim.hit('fresh');
+  assert.equal(lim.check('login:attacker:alice'), true, 'the window ends as before');
+});
+
+test('AUTH-19: a lockout leaves one audit row for the owner, not one per refused request', async () => {
+  const srv = await startServer();
+  try {
+    createUser(srv, 'alice');
+    const id = srv.store.userByName('alice').id;
+    const ip = '198.51.100.50';
+    for (let i = 0; i < 10; i++) await assert.rejects(srv.auth.beginLogin({ username: 'alice', password: 'wrong password ' + i, ip }), { status: 401 });
+    for (let i = 0; i < 8; i++) await assert.rejects(srv.auth.beginLogin({ username: 'alice', password: 'wrong password', ip }), { status: 429 });
+    // A stranger guessing at a name that does not exist cannot write into anybody's log.
+    for (let i = 0; i < 12; i++) await assert.rejects(srv.auth.beginLogin({ username: 'nobody', password: 'wrong password', ip }), (e) => e.status === 401 || e.status === 429);
+    const rows = srv.store.auditFor(id, 100).filter((r) => r.event === 'login.rate_limited');
+    assert.equal(rows.length, 1, 'eight refused requests, one row');
+    assert.equal(srv.store.auditFor(id, 100).filter((r) => r.event === 'login.bad_password').length, 10);
+  } finally { await srv.close(); }
+});
