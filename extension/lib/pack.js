@@ -6,8 +6,17 @@ import path from 'node:path';
 import { packFiles } from './tar.js';
 import { MANIFEST_FILE, validateManifest } from './manifest.js';
 
-// Never shipped, whatever "files" or .gitchaignore says.
-const ALWAYS_IGNORE = [/^\.git$/, /^node_modules$/, /^gitcha_modules$/, /^\.env(\..*)?$/, /^\.DS_Store$/, /\.tgz$/, /^credentials\.json$/, /\.pem$/, /^id_(rsa|ed25519)/];
+// What ships is what "files" names (default: src lib bin), plus gitcha.json, README* and LICENSE*. A name that
+// starts with a dot ships only when a "files" entry names it exactly; "*" never matches a leading dot.
+export const DEFAULT_FILES = ['src', 'lib', 'bin'];
+const ALWAYS = /^(readme|license)/i;
+
+// A second net under "files" and .gitchaignore: these never ship, whatever either says. Matched on every path
+// segment, so a directory takes everything under it.
+const DENIED_NAMES = new Set(['.git', 'node_modules', 'gitcha_modules', '.aws', '.ssh', '.gnupg', '.docker', 'gitcha-data',
+  '.kube', '.azure', '.npmrc', '.netrc', '.pgpass', '.git-credentials', '.pypirc', '.ds_store', '.gitchaignore', 'db.json', 'secret.key']);
+const DENIED_PATTERNS = [/^\.env/, /^id_/, /\.(key|pem|p12|pfx|jks|tgz|tfstate)$/i, /^credentials\.json/, /^terraform\.tfstate/, /^application_default_credentials/];
+export const isDenied = (rel) => rel.split('/').some((seg) => DENIED_NAMES.has(seg.toLowerCase()) || DENIED_PATTERNS.some((re) => re.test(seg)));
 
 function readIgnore(dir) {
   try {
@@ -15,7 +24,38 @@ function readIgnore(dir) {
   } catch { return []; }
 }
 
-const globToRe = (g) => new RegExp('^' + g.replace(/\/$/, '').replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*\*/g, '\0').replace(/\*/g, '[^/]*').replace(/\0/g, '.*') + '(/.*)?$');
+/** One path segment against one glob segment. A leading "*" or "?" skips dotfiles unless `dot`. */
+function segmentMatches(glob, seg, dot) {
+  if (!glob.includes('*') && !glob.includes('?')) return glob === seg;
+  if (!dot && seg.startsWith('.') && /^[*?]/.test(glob)) return false;
+  const re = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]');
+  return new RegExp(`^${re}$`).test(seg);
+}
+
+/** Do the glob's segments match the first segments of the path (so a pattern naming a directory takes its contents)? "**" is any run of segments. */
+function prefixMatches(glob, segs, dot, g = 0, i = 0) {
+  if (g === glob.length) return dot || segs.slice(i).every((seg) => !seg.startsWith('.')); // a dot-name below a named directory must be named too
+  if (glob[g] === '**') {
+    for (let k = i; k <= segs.length; k++) {
+      if (k > i && !dot && segs[k - 1].startsWith('.')) return false;
+      if (prefixMatches(glob, segs, dot, g + 1, k)) return true;
+    }
+    return false;
+  }
+  return i < segs.length && segmentMatches(glob[g], segs[i], dot) && prefixMatches(glob, segs, dot, g + 1, i + 1);
+}
+
+const toGlob = (pattern) => pattern.replace(/^\.?\//, '').replace(/\/+$/, '').split('/');
+
+/** .gitchaignore: a pattern with no slash matches a name at any depth (as in .gitignore); one with a slash is anchored at the project root. */
+function ignored(patterns, rel) {
+  const segs = rel.split('/');
+  return patterns.some((pattern) => {
+    const anchored = pattern.replace(/\/+$/, '').includes('/');
+    const glob = toGlob(pattern);
+    return anchored ? prefixMatches(glob, segs, true) : segs.some((seg) => segmentMatches(glob[0], seg, true));
+  });
+}
 
 export function readManifest(dir) {
   const file = path.join(dir, MANIFEST_FILE);
@@ -30,18 +70,19 @@ export function readManifest(dir) {
 export function collectFiles(dir) {
   const root = path.resolve(dir);
   const manifest = readManifest(root);
-  const ignores = readIgnore(root).map(globToRe);
-  const includes = manifest.files?.map(globToRe);
+  const ignores = readIgnore(root);
+  const includes = (manifest.files ?? DEFAULT_FILES).map(toGlob);
   const out = [];
   const walk = (rel) => {
     for (const entry of fs.readdirSync(path.join(root, rel), { withFileTypes: true })) {
       const p = rel ? `${rel}/${entry.name}` : entry.name;
-      if (ALWAYS_IGNORE.some((re) => re.test(entry.name)) || ignores.some((re) => re.test(p))) continue;
+      if (isDenied(p) || ignored(ignores, p)) continue;
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) walk(p);
       else if (entry.isFile()) {
-        const always = p === MANIFEST_FILE || /^(readme|license|licence|copying)(\.\w+)?$/i.test(p);
-        if (!includes || always || includes.some((re) => re.test(p))) out.push({ path: p, data: fs.readFileSync(path.join(root, p)) });
+        const segs = p.split('/');
+        const always = p === MANIFEST_FILE || (segs.length === 1 && ALWAYS.test(p));
+        if (always || includes.some((glob) => prefixMatches(glob, segs, false))) out.push({ path: p, data: fs.readFileSync(path.join(root, p)) });
       }
     }
   };
@@ -49,7 +90,8 @@ export function collectFiles(dir) {
   return { manifest, files: out };
 }
 
+/** `entries` is the list with sizes that a dry run shows; `files` is just the paths. */
 export function pack(dir) {
   const { manifest, files } = collectFiles(dir);
-  return { manifest, files: files.map((f) => f.path), tarball: packFiles(files) };
+  return { manifest, files: files.map((f) => f.path), entries: files.map((f) => ({ path: f.path, size: f.data.length })), tarball: packFiles(files) };
 }

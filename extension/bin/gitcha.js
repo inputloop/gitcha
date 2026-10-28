@@ -31,6 +31,7 @@ ${bold('Packages')}
   gitcha info <name>                            show a package and its versions
   gitcha install [name[@version]] [--dir DIR]   install one package, or all from gitcha.json
   gitcha publish [DIR] [--team T] [--private]  publish DIR (default: .), optionally owned by team T
+                                                (--dry-run lists the files and sizes, uploads nothing)
   gitcha yank <name@version> [--undo]           hide a broken version from installs
   gitcha transfer <name> <team>                 share a package by moving it into a team
   gitcha access <name> team-only|public         who can see a team package
@@ -63,7 +64,7 @@ function parseArgs(argv) {
     if (a.startsWith('--')) {
       const [k, v] = a.slice(2).split('=');
       if (v !== undefined) args.flags[k] = v;
-      else if (argv[i + 1] && !argv[i + 1].startsWith('--') && !['json', 'undo', 'help', 'version', 'hook', 'private'].includes(k)) args.flags[k] = argv[++i];
+      else if (argv[i + 1] && !argv[i + 1].startsWith('--') && !['json', 'undo', 'help', 'version', 'hook', 'private', 'dry-run', 'allow-yanked'].includes(k)) args.flags[k] = argv[++i];
       else args.flags[k] = true;
     } else args._.push(a);
   }
@@ -223,10 +224,16 @@ const commands = {
   },
 
   async publish({ _, flags }) {
-    const client = authedClient(flags);
     const dir = path.resolve(_[1] || '.');
-    const { manifest, files, tarball } = pack(dir);
-    out(`${magenta('◆')} Packing ${bold(`${manifest.name}@${manifest.version}`)} ${dim(`(${files.length} files, ${(tarball.length / 1024).toFixed(1)} KB)`)}`);
+    const { manifest, files, entries, tarball } = pack(dir);
+    if (!flags.json) out(`${magenta('◆')} Packing ${bold(`${manifest.name}@${manifest.version}`)} ${dim(`(${files.length} files, ${(tarball.length / 1024).toFixed(1)} KB)`)}`);
+    if (flags['dry-run']) {
+      // Versions cannot be deleted, so look at the list first: nothing is uploaded, no sign-in or code needed.
+      if (flags.json) return out(JSON.stringify({ name: manifest.name, version: manifest.version, files: entries, bytes: tarball.length }, null, 2));
+      for (const e of entries) out(`  ${e.path}  ${dim(`${e.size} bytes`)}`);
+      return out(dim(`Dry run: ${entries.length} files, ${tarball.length} bytes packed. Nothing was uploaded.`));
+    }
+    const client = authedClient(flags);
     const opts = { team: typeof flags.team === 'string' ? flags.team : undefined, private: flags.private ? true : undefined };
     const res = await withStepUp(client, () => client.publish(tarball, opts));
     if (flags.json) return out(JSON.stringify(res, null, 2));

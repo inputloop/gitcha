@@ -839,7 +839,7 @@ Or add the server to `claude_desktop_config.json` by hand:
 | `gitcha_search` | Search packages | Periodic / new-network checks |
 | `gitcha_package_info` | Versions, integrity, README | Periodic / new-network checks |
 | `gitcha_install` | Download, verify, extract and lock (or install all from `gitcha.json`) | Periodic / new-network checks |
-| `gitcha_publish` | Pack and publish a directory | **Fresh code** (sensitive) |
+| `gitcha_publish` | Pack and publish a directory (`dry_run` lists the files first) | **Fresh code** (sensitive) |
 | `gitcha_yank` | Yank or restore a version | **Fresh code** (sensitive) |
 | `gitcha_teams` | List your teams, or show a team's members and shared packages | Periodic / new-network checks |
 | `gitcha_team_create` | Start a team (you become owner) | Periodic / new-network checks |
@@ -869,7 +869,7 @@ gitcha security [--interval on|off] [--new-network on|off] [--sensitive on|off]
 gitcha search [query]
 gitcha info <name>
 gitcha install [name[@version]] [--dir DIR]   one package, or everything in gitcha.json
-gitcha publish [DIR] [--team T] [--private]
+gitcha publish [DIR] [--team T] [--private] [--dry-run]
 gitcha yank <name@version> [--undo]
 gitcha transfer <name> <team>                 move a package into a team to share it
 gitcha access <name> team-only|public
@@ -923,10 +923,18 @@ A package is any directory with a `gitcha.json`:
   members only.
 - `version`: semantic version. Published versions are immutable; yank a bad
   one instead of overwriting it.
-- `files` (optional): globs to include. `gitcha.json`, README and LICENSE are
-  always included.
-- `.gitchaignore` (optional): globs to exclude. `.git`, `node_modules`,
-  `gitcha_modules`, `.env*`, `*.pem`, SSH keys and `*.tgz` are never shipped.
+- `files` (optional): globs naming what to ship, relative to the project;
+  the default is `src/`, `lib/` and `bin/`. `gitcha.json`, `README*` and
+  `LICENSE*` always ship. A name that starts with a dot ships only when
+  `files` names it, and `*` never matches one.
+- `.gitchaignore` (optional): globs to exclude. A pattern with no slash
+  matches at any depth, as in `.gitignore`; the file itself is not shipped.
+  Whatever `files` says, `.git`, `node_modules`, `gitcha_modules`, `.env*`,
+  `id_*`, `*.key`, `*.pem`, `*.p12`, `*.pfx`, `*.jks`, `.npmrc`, `.netrc`,
+  `.aws`, `.ssh`, `.gnupg`, `.docker`, `gitcha-data`, `db.json` and `*.tgz`
+  are never shipped.
+- Versions cannot be deleted, so look first: `gitcha publish --dry-run`
+  lists the files and sizes and uploads nothing.
 
 `gitcha install` extracts into `gitcha_modules/<name>/` and writes
 `gitcha-lock.json` with the exact version and SHA-256 hash. Commit the

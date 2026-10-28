@@ -95,7 +95,7 @@ test('gitcha login: password + authenticator code, token saved with 0600 and no 
 test('CLI publish and install with integrity + lockfile', async () => {
   const pkg = path.join(project, 'hello');
   fs.mkdirSync(pkg);
-  fs.writeFileSync(path.join(pkg, 'gitcha.json'), JSON.stringify({ name: 'hello', version: '1.0.0', description: 'Says hello', license: 'MIT' }));
+  fs.writeFileSync(path.join(pkg, 'gitcha.json'), JSON.stringify({ name: 'hello', version: '1.0.0', description: 'Says hello', license: 'MIT', files: ['index.js'] }));
   fs.writeFileSync(path.join(pkg, 'index.js'), 'export const hello = () => "hi";\n');
   const pub = await run(['publish', 'hello']);
   assert.equal(pub.code, 0, pub.stderr);

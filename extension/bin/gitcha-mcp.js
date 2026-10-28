@@ -134,22 +134,29 @@ const tools = [
   {
     name: 'gitcha_publish',
     title: 'Publish a Gitcha package',
-    description: 'Pack the directory containing gitcha.json and publish it. Versions are immutable. Set "team" to publish a new package owned by a team (shared with its maintainers), and "private" to make it visible only to team members. Publishing is a sensitive action: the registry usually requires a fresh 2FA code, which you must get from the user. Confirm with the user before publishing.',
+    description: 'Pack the directory containing gitcha.json and publish it. Versions are immutable and cannot be deleted. ALWAYS call first with dry_run=true, which lists the exact files and the size without uploading, and show that list to the user; publish for real only after the user has confirmed that list. Set "team" to publish a new package owned by a team (shared with its maintainers), and "private" to make it visible only to team members. Publishing is a sensitive action: the registry usually requires a fresh 2FA code, which you must get from the user.',
     inputSchema: {
       type: 'object',
       properties: {
         directory: { type: 'string', description: 'Directory containing gitcha.json' },
         team: { type: 'string', description: 'Team that should own the package' },
         private: { type: 'boolean', description: 'Visible to team members only (requires team)' },
+        dry_run: { type: 'boolean', description: 'List the files and size that would be published; upload nothing (no 2FA code needed)' },
       },
       required: ['directory'], additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
-    handler: ({ directory, team, private: priv }) => call(async (c) => {
-      const { files, tarball } = pack(path.resolve(directory));
-      const r = await c.publish(tarball, { team, private: priv });
-      return text(`Published ${r.name}@${r.version}${r.team ? ` to team ${r.team}${r.visibility === 'team' ? ' (team-only)' : ''}` : ''} (${files.length} files, ${tarball.length} bytes). Integrity: ${r.integrity}\nFiles: ${files.join(', ')}`);
-    }),
+    handler: ({ directory, team, private: priv, dry_run: dryRun }) => {
+      if (dryRun) {
+        const { manifest, entries, tarball } = pack(path.resolve(directory));
+        return text(`Dry run for ${manifest.name}@${manifest.version}: ${entries.length} files, ${tarball.length} bytes packed. Nothing was uploaded.\nFiles:\n${entries.map((e) => `  ${e.path} (${e.size} bytes)`).join('\n')}\nShow this list to the user and publish only if they confirm it.`);
+      }
+      return call(async (c) => {
+        const { files, tarball } = pack(path.resolve(directory));
+        const r = await c.publish(tarball, { team, private: priv });
+        return text(`Published ${r.name}@${r.version}${r.team ? ` to team ${r.team}${r.visibility === 'team' ? ' (team-only)' : ''}` : ''} (${files.length} files, ${tarball.length} bytes). Integrity: ${r.integrity}\nFiles: ${files.join(', ')}`);
+      });
+    },
   },
   {
     name: 'gitcha_yank',

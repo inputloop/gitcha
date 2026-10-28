@@ -43,7 +43,7 @@ test('collectFiles honours "files", .gitchaignore and never ships secrets', () =
   fs.mkdirSync(path.join(dir, 'node_modules'));
   fs.writeFileSync(path.join(dir, 'node_modules', 'x.js'), '');
   const { files } = collectFiles(dir);
-  assert.deepEqual(files.map((f) => f.path).sort(), ['.gitchaignore', 'README.md', 'gitcha.json', 'src/index.js']);
+  assert.deepEqual(files.map((f) => f.path).sort(), ['README.md', 'gitcha.json', 'src/index.js']);
 });
 
 test('manifest helpers', () => {

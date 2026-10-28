@@ -19,6 +19,8 @@ export function validateManifest(m) {
   if (m.private && !m.team) errors.push('"private" packages must belong to a team (set "team")');
   if (m.files !== undefined && !(Array.isArray(m.files) && m.files.every((f) => typeof f === 'string'))) {
     errors.push('"files" must be an array of paths');
+  } else if (m.files?.some((f) => !f || f.startsWith('/') || /^[a-zA-Z]:/.test(f) || f.split(/[\\/]/).includes('..'))) {
+    errors.push('"files" entries must be paths inside the project (no "..", no leading "/")');
   }
   return errors;
 }

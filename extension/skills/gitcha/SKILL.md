@@ -42,8 +42,10 @@ about 30 seconds, so ask right before you need it.
 
 1. Make sure the directory has a `gitcha.json` with `name`, `version`,
    `description` and `license`. Bump `version`: published versions are immutable.
-2. Show the user what will be published and confirm.
-3. Call `gitcha_publish`; expect a 2FA check.
+2. Call `gitcha_publish` with `dry_run: true`. It returns the exact file list and size and uploads
+   nothing. Show it to the user and get their confirmation of that list: a published version cannot
+   be deleted.
+3. Call `gitcha_publish` again without `dry_run`; expect a 2FA check.
 
 ## Installing
 
