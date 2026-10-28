@@ -38,8 +38,21 @@ const REASONS = {
   sensitive_action: 'This is a sensitive action and needs a fresh code.',
 };
 
-/** Only allow same-site relative redirects. */
-const safeNext = (n) => (typeof n === 'string' && /^\/(?![/\\])/.test(n) ? n : '/packages');
+/**
+ * Only allow same-site relative redirects. The address is resolved the way a browser resolves a Location header,
+ * against a fixed origin, and must come back to that origin: the URL standard strips tab and newline before it
+ * parses, so a check on the raw text is not enough. Control characters and backslashes are refused up front.
+ */
+export function safeNext(n) {
+  const fallback = '/packages';
+  if (typeof n !== 'string' || n.length > 2048 || !n.startsWith('/') || /[\u0000-\u001f\u007f\\]/.test(n)) return fallback;
+  try {
+    const u = new URL(n, 'http://gitcha.invalid');
+    return u.origin === 'http://gitcha.invalid' ? u.pathname + u.search : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 export function registerWeb(router, { auth, packages, teams, config, billing }) {
   const secure = config.secureCookies;
