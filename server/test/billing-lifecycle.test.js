@@ -4,6 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { api } from './helpers.js';
+import { BillingService } from '../src/billing/billing.js';
 import { setup, subscribe, billingOf, dbAccount, stripeEvent, postStripe, postPaypal, DAY } from './billing-fixtures.js';
 
 const confirm = (srv, token, body) => api(srv.url, 'POST', '/api/v1/billing/confirm', { token, body });
@@ -203,4 +204,83 @@ test('BIL-2b: an event is marked seen only with its effect; a failed write is re
     assert.equal(dbAccount(srv, 'user:alice').subscription.subscriptionId, sub.id);
     assert.equal((await postStripe(srv, paid)).body.duplicate, true, 'and only then is it a duplicate');
   } finally { await srv.close(); }
+});
+
+test('BIL-3a: only a paid subscription session this server created activates an account', async () => {
+  const { srv, fake, token } = await setup({ users: ['alice', 'mallory'] });
+  try {
+    // mallory opens a Team checkout and abandons it: pending, not paid.
+    await checkout(srv, token, { plan: 'team', provider: 'stripe' });
+    const ours = Object.keys(fake.st.sessions).at(-1);
+    assert.equal((await billingOf(srv, token)).plan, 'free');
+
+    // A signed completed-event for some other session (a donation page on the same Stripe account) naming alice: no match, no plan.
+    const other = stripeEvent(srv, 'checkout.session.completed', { id: 'cs_live_donation', mode: 'payment', payment_status: 'paid', client_reference_id: 'user:alice', customer: 'cus_other' });
+    const r = await postStripe(srv, other);
+    assert.equal(r.body.ignored, true);
+    let acct = dbAccount(srv, 'user:alice');
+    assert.equal(acct.subscription.status, 'pending');
+    assert.equal(acct.subscription.customerId, undefined, 'the other payment\'s customer does not become the portal customer');
+    // ...and a user with no account at all gets none.
+    const nobody = stripeEvent(srv, 'checkout.session.completed', { id: 'cs_live_donation2', mode: 'subscription', payment_status: 'paid', client_reference_id: 'user:mallory', subscription: 'sub_x', customer: 'cus_o' });
+    assert.equal((await postStripe(srv, nobody)).body.ignored, true);
+    assert.equal(dbAccount(srv, 'user:mallory'), undefined);
+
+    // Our own session, but not a paid subscription: nothing activates.
+    const sub = fake.st.completeCheckout(ours);
+    const unpaid = stripeEvent(srv, 'checkout.session.completed', { ...sessionDone(fake, ours), payment_status: 'unpaid' });
+    assert.equal((await postStripe(srv, unpaid)).body.ignored, true);
+    const wrongMode = stripeEvent(srv, 'checkout.session.completed', { ...sessionDone(fake, ours), mode: 'payment' });
+    assert.equal((await postStripe(srv, wrongMode)).body.ignored, true);
+    assert.equal((await billingOf(srv, token)).plan, 'free');
+
+    // The real thing: our session, subscription mode, paid. The plan is the one chosen at checkout.
+    const paid = await postStripe(srv, stripeEvent(srv, 'checkout.session.completed', { ...sessionDone(fake, ours), metadata: { plan: 'pro' } }));
+    assert.equal(paid.body.applied, true);
+    acct = dbAccount(srv, 'user:alice');
+    assert.equal(acct.subscription.plan, 'team', 'the plan comes from our record, not from event metadata');
+    assert.equal(acct.subscription.subscriptionId, sub.id);
+    assert.equal(acct.subscription.customerId, sub.customer);
+  } finally { await srv.close(); }
+});
+
+test('BIL-3b: the key mode is announced once at startup, and records of the other mode are not honoured', async () => {
+  const lines = [];
+  const log = { info: (m) => lines.push(m), error: (m) => lines.push(m) };
+  const { srv, fake, token } = await setup({ billing: { stripe: { secretKey: 'sk_live_x', webhookSecret: 'whsec_test', api: 'https://stripe.test' } } });
+  try {
+    const mk = () => new BillingService({ store: srv.store, config: srv.config, teams: srv.teams, clock: srv.clock, fetchImpl: fake.fetchImpl, log });
+    mk();
+    assert.equal(lines.filter((l) => /stripe/i.test(l) && /live mode/i.test(l)).length, 1, `one line names Stripe's live mode: ${JSON.stringify(lines)}`);
+    assert.ok(!lines.some((l) => l.includes('sk_live')), 'the key is not printed');
+
+    // A subscription recorded while the keys were test keys is not a paid plan now.
+    const { subId } = await subscribe(srv, fake, token, { plan: 'pro' });
+    assert.equal(dbAccount(srv, 'user:alice').subscription.mode, 'live', 'a record says which mode wrote it');
+    assert.equal((await billingOf(srv, token)).plan, 'pro');
+    dbAccount(srv, 'user:alice').subscription.mode = 'test';
+    const view = await billingOf(srv, token);
+    assert.equal(view.plan, 'free');
+    assert.equal(view.subscription, null);
+    lines.length = 0;
+    mk();
+    assert.ok(lines.some((l) => /1 subscription record/.test(l) && /other mode/.test(l)), `the startup log counts them: ${JSON.stringify(lines)}`);
+
+    // Events say which mode they come from; a test-mode event on live keys is ignored.
+    dbAccount(srv, 'user:alice').subscription.mode = 'live';
+    const t = stripeEvent(srv, 'customer.subscription.updated', { ...fake.st.subs[subId], status: 'canceled' }, { livemode: false });
+    assert.equal((await postStripe(srv, t)).body.ignored, true);
+    assert.equal((await billingOf(srv, token)).plan, 'pro');
+    const l = stripeEvent(srv, 'customer.subscription.updated', { ...fake.st.subs[subId], status: 'canceled' }, { livemode: true });
+    assert.equal((await postStripe(srv, l)).body.applied, true);
+  } finally { await srv.close(); }
+
+  // Records from before modes existed take the mode of the keys now in use.
+  const t2 = await setup();
+  try {
+    t2.srv.store.data.billing.accounts['user:alice'] = { ownerRef: t2.srv.store.userByName('alice').id, subscription: { provider: 'stripe', plan: 'pro', status: 'active', subscriptionId: 'sub_old' } };
+    const again = new BillingService({ store: t2.srv.store, config: t2.srv.config, teams: t2.srv.teams, clock: t2.srv.clock, fetchImpl: t2.fake.fetchImpl, log });
+    assert.equal(t2.srv.store.data.billing.accounts['user:alice'].subscription.mode, 'test');
+    assert.equal(again.planFor('user:alice'), 'pro');
+  } finally { await t2.srv.close(); }
 });

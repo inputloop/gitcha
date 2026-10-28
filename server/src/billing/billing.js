@@ -41,18 +41,23 @@ export class BillingService {
     if (this.enabled) this.startUp();
   }
 
-  /** Bind accounts that predate binding, retire those whose owner is gone, and keep checking while the server runs. */
+  /** Say which mode each provider's keys are in, bind accounts that predate binding, retire those whose owner is gone, and keep checking while the server runs. */
   startUp() {
-    let adopted = 0;
+    for (const [name, p] of Object.entries(this.providers)) {
+      this.log.info(p.mode === 'unknown' ? `billing: ${name} keys are neither live nor test keys; records of the two modes cannot be told apart` : `billing: ${name} is in ${p.mode} mode`);
+    }
+    let changed = 0;
     for (const [key, a] of Object.entries(this.data.accounts)) {
-      if (a.ownerRef !== undefined) continue;
-      a.ownerRef = this.ownerRef(key) ?? GONE;
-      adopted++;
+      if (a.ownerRef === undefined) { a.ownerRef = this.ownerRef(key) ?? GONE; changed++; }
+      // A record from before modes existed is taken to be in the mode the keys are in now.
+      if (a.subscription && a.subscription.mode === undefined && this.providers[a.subscription.provider]) { a.subscription.mode = this.providers[a.subscription.provider].mode; changed++; }
     }
-    if (adopted) {
-      this.log.info(`billing: bound ${adopted} billing account(s) to their owners`);
-      try { this.store.flush(); } catch (err) { this.log.error(`billing: could not save the owner bindings: ${err.message}`); }
+    if (changed) {
+      this.log.info(`billing: bound ${changed} billing record(s) to their owner or mode`);
+      try { this.store.flush(); } catch (err) { this.log.error(`billing: could not save the bindings: ${err.message}`); }
     }
+    const other = Object.keys(this.data.accounts).filter((k) => { const s = this.data.accounts[k].subscription; return s && !this.modeOk(s); }).length;
+    if (other) this.log.info(`billing: ${other} subscription record(s) were written in the other mode and are not honoured`);
     this.reconcile().catch((err) => this.log.error(`billing: ${err.message}`));
     // A team deleted since the last look has its subscription cancelled within minutes even if nothing told us.
     this.reconcileTimer = setInterval(() => this.reconcile().catch((err) => this.log.error(`billing: ${err.message}`)), 5 * 60_000);
@@ -159,8 +164,15 @@ export class BillingService {
     return this.draining;
   }
 
+  /** A record written with test keys is not a paid plan once the keys are live, and the reverse. */
+  modeOk(s) {
+    const pm = this.providers[s.provider]?.mode;
+    return !s.mode || !pm || pm === 'unknown' || s.mode === 'unknown' || s.mode === pm;
+  }
+
   subscription(key) {
-    return this.accountOf(key)?.subscription ?? null;
+    const s = this.accountOf(key)?.subscription;
+    return s && this.modeOk(s) ? s : null;
   }
 
   /** The plan whose limits apply now. Past-due accounts keep paid limits for a grace period, counted from when the spell began. */
@@ -289,8 +301,8 @@ export class BillingService {
       cancelUrl: `${base}/billing?owner=${encodeURIComponent(o.key)}&msg=cancelled`,
     });
     // On an account that pays, the new plan waits in its own slot and the paid subscription stays until the new one is confirmed.
-    if (paying) this.setCheckout(o.key, { provider, plan, ...out.ids, startedAt: this.clock() }, 'checkout_started');
-    else this.setSubscription(o.key, { provider, plan, status: 'pending', ...out.ids }, 'checkout_started', { replace: true, clearCheckout: true });
+    if (paying) this.setCheckout(o.key, { provider, plan, mode: p.mode, ...out.ids, startedAt: this.clock() }, 'checkout_started');
+    else this.setSubscription(o.key, { provider, plan, mode: p.mode, status: 'pending', ...out.ids }, 'checkout_started', { replace: true, clearCheckout: true });
     this.store.tx(() => this.store.audit({ userId: user.id, event: 'billing.checkout', ip, owner: o.key, plan, provider }));
     return { url: out.url };
   }
@@ -375,7 +387,7 @@ export class BillingService {
     if (old && ['active', 'past_due'].includes(old.status) && old.subscriptionId !== next.subscriptionId) await this.provider(old.provider).cancel(old);
     // The cancel took a while; if another delivery or a confirm got here first, there is nothing left to do.
     if ((seen && this.data.events[seen]) || this.accountOf(key)?.checkout !== slot) return 'duplicate';
-    const fresh = { provider: next.provider, ...patch, plan: patch.plan ?? slot.plan, checkoutSessionId: slot.checkoutSessionId, ...(next.at != null ? { lastEventAt: next.at } : {}) };
+    const fresh = { provider: next.provider, ...patch, plan: patch.plan ?? slot.plan, mode: slot.mode, checkoutSessionId: slot.checkoutSessionId, ...(next.at != null ? { lastEventAt: next.at } : {}) };
     return this.atomically(key, (d) => { this.putSubscription(d, key, fresh, event, { replace: true, clearCheckout: true }); return 'applied'; }, seen);
   }
 
@@ -396,6 +408,8 @@ export class BillingService {
     if (named && ev.owner !== hit.key) return this.ignore(provider, ev, seen, hit.key, 'owner_mismatch', true);
     const late = this.supersededBy(hit, ev);
     if (late) return this.ignore(provider, ev, seen, hit.key, late, true);
+    const pm = this.providers[provider].mode;
+    if (typeof ev.livemode === 'boolean' && pm !== 'unknown' && (ev.livemode ? 'live' : 'test') !== pm) return this.ignore(provider, ev, seen, hit.key, 'other_mode', true);
     const outcome = await this.adopt(hit.key, hit.target, { ...ev, provider }, `${provider}:${ev.type}`, { seen });
     if (outcome === 'duplicate') return { duplicate: true };
     if (outcome !== 'applied') return { ignored: true, reason: outcome };

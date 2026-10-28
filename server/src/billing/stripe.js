@@ -7,6 +7,8 @@ import crypto from 'node:crypto';
 import { HttpError } from '../errors.js';
 
 const TOLERANCE_S = 300;
+/** Which Stripe account the secret key belongs to: live or test (restricted keys carry the same marker). */
+export const stripeMode = (key) => (/^(sk|rk)_live_/.test(key ?? '') ? 'live' : /^(sk|rk)_test_/.test(key ?? '') ? 'test' : 'unknown');
 const idOf = (x) => (typeof x === 'string' ? x : x?.id ?? undefined); // an expandable field is an id or an object
 const STATUS = { active: 'active', trialing: 'active', past_due: 'past_due', unpaid: 'past_due', canceled: 'canceled', incomplete: 'pending', incomplete_expired: 'canceled', paused: 'canceled' };
 
@@ -35,6 +37,7 @@ export function verifyStripeSignature(rawBody, header, secret, nowS) {
 export class StripeProvider {
   constructor({ secretKey, webhookSecret, api, prices, fetchImpl, clock }) {
     Object.assign(this, { secretKey, webhookSecret, api, prices, fetchImpl, clock });
+    this.mode = stripeMode(secretKey);
   }
 
   get canSell() { return Object.values(this.prices).some(Boolean); }
@@ -113,12 +116,14 @@ export class StripeProvider {
     const o = ev.data?.object ?? {};
     const at = Number.isFinite(ev.created) ? ev.created * 1000 : undefined; // Stripe's own time for the event
     const out = this.translate(ev, o);
-    return out && at !== undefined ? { ...out, at } : out;
+    return out && { ...out, ...(at !== undefined ? { at } : {}), ...(typeof ev.livemode === 'boolean' ? { livemode: ev.livemode } : {}) };
   }
 
   translate(ev, o) {
     switch (ev.type) {
       case 'checkout.session.completed':
+        // Only a paid subscription session counts; the account is found by the session id we recorded, so any other session is ignored upstream.
+        if (o.mode !== 'subscription' || !['paid', 'no_payment_required'].includes(o.payment_status)) return { id: ev.id, type: ev.type, owner: null };
         return { id: ev.id, type: ev.type, owner: o.client_reference_id ?? o.metadata?.owner, checkoutSessionId: o.id, status: 'active', subscriptionId: idOf(o.subscription), customerId: idOf(o.customer) };
       case 'customer.subscription.created':
       case 'customer.subscription.updated':

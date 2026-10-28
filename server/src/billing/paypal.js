@@ -12,10 +12,21 @@ const EVENT_STATUS = {
   'BILLING.SUBSCRIPTION.CANCELLED': 'canceled', 'BILLING.SUBSCRIPTION.EXPIRED': 'canceled',
 };
 
+/** The PayPal API host says whether this is the live service or the sandbox. */
+export function paypalMode(api) {
+  try {
+    const h = new URL(api).hostname;
+    if (h === 'api-m.paypal.com' || h === 'api.paypal.com') return 'live';
+    if (h.includes('sandbox')) return 'test';
+  } catch { /* not a URL: unknown */ }
+  return 'unknown';
+}
+
 export class PayPalProvider {
   constructor({ clientId, clientSecret, webhookId, api, plans, fetchImpl, clock, brand }) {
     Object.assign(this, { clientId, clientSecret, webhookId, api, plans, fetchImpl, clock, brand });
     this.token = null;
+    this.mode = paypalMode(api);
   }
 
   get canSell() { return Object.values(this.plans).some(Boolean); }
