@@ -2,8 +2,10 @@
 # Copyright 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Corwin Brust <corwin@bru.st> and Contributors.
 # SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 #
-# Caddy asks Gitcha before it requests a certificate, so only this instance's own name, sites' subdomains and
-# custom domains whose DNS TXT check passed ever get one.
+# Caddy asks Gitcha before it requests a certificate, so only this instance's own name, custom domains whose DNS TXT
+# check passed (and are still re-checked), and a few new site subdomains per owner per week ever get one.
+# A public CA limits how many certificates one registered domain may order in a week, so give each hosting domain a
+# wildcard certificate (the block below); Caddy then never asks about sites' subdomains at all.
 {
 	on_demand_tls {
 		ask http://127.0.0.1:4873/api/v1/hosting/tls-allowed
@@ -14,7 +16,16 @@ gitcha.example.org {
 	reverse_proxy 127.0.0.1:4873
 }
 
-# Every hosted name: sites' subdomains and verified custom domains.
+# One wildcard certificate per hosting domain (GITCHA_HOSTING_DOMAINS). It needs the DNS challenge, so a Caddy build
+# with your DNS provider's module; replace the provider line. Repeat the block for each hosting domain.
+*.pages.example.net {
+	tls {
+		dns PROVIDER {env.DNS_API_TOKEN}
+	}
+	reverse_proxy 127.0.0.1:4873
+}
+
+# Everything else hosted: verified custom domains, one certificate each, on demand.
 https:// {
 	tls {
 		on_demand

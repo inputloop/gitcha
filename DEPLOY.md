@@ -76,10 +76,16 @@ be named as such in alphaOS's security model.
 
 ### TLS and DNS
 
-`/usr/share/doc/inputloop-gitcha/Caddyfile.example` puts Caddy in front with on-demand
-certificates. Caddy asks `GET /api/v1/hosting/tls-allowed?domain=NAME` first, and Gitcha says
-yes only for its own name, sites' subdomains on a hosting domain, and custom domains whose DNS
-check passed.
+`/usr/share/doc/inputloop-gitcha/Caddyfile.example` puts Caddy in front: a wildcard
+certificate for each hosting domain, and on-demand certificates for everything else. Caddy
+asks `GET /api/v1/hosting/tls-allowed?domain=NAME` before ordering one, and Gitcha says yes
+only for its own name, custom domains whose DNS check passed and still passes (Gitcha looks
+again every six hours and drops a domain after three misses in a row), and, as a stopgap for
+instances without a wildcard certificate, a site's subdomain while its owner has ordered fewer
+than ten new ones this week. A public CA caps how many certificates one registered domain may
+order per week, so use the wildcard certificate (it needs the DNS challenge, so a Caddy build
+with your DNS provider's module); an account may also hold at most 25 sites whatever the
+billing setting.
 
 `gitcha.env` sets `GITCHA_TRUST_PROXY=true`, which is right for this Caddyfile: Caddy replaces
 `X-Forwarded-For` with the client's address and Gitcha trusts one proxy hop. With nginx instead,
@@ -95,7 +101,12 @@ DNS records to create:
 | `hosting.example.net` A/AAAA | the server VM | optional: the CNAME target shown to people with custom domains (`GITCHA_HOSTING_CNAME`) |
 
 Use hosting domains that are **separate registrable domains** from the UI's, so a site's
-scripts cannot set cookies for Gitcha.
+scripts cannot set cookies for Gitcha. Gitcha refuses to start when a hosting domain shares a
+registrable domain with `GITCHA_PUBLIC_URL`. It guesses that from the last two labels (three
+under a country code such as `co.uk`); it carries no copy of the Public Suffix List. Sites on
+one hosting domain are still "same-site" with each other unless that domain is on the Public
+Suffix List, so a keeper who wants tenants kept apart from one another should have it added
+(https://publicsuffix.org/submit/).
 
 The keepers already hold several names (ils4 lists `ghostwheel.cloud`, whose wildcard points
 at gw10 today with a certificate for the apex only; `ghostwheel.chat`, `gwhee.lol`,
@@ -106,6 +117,10 @@ panel.
 **Custom domains.** A person adds a domain to a site. Gitcha shows a TXT record
 (`_gitcha-challenge.NAME` = `gitcha-verify=...`) and a CNAME target. Once the TXT record
 resolves, they press verify, and only then is the domain served and allowed a certificate.
+Until then it is only a claim: several people may claim one name, a claim lapses after a day,
+and an account holds at most ten waiting claims and 25 domains. Whoever proves DNS control
+first gets the name, and a later proof from another site takes it over. A verified domain is
+dropped when its TXT record has been gone for three checks in a row.
 
 ### Git over SSH
 

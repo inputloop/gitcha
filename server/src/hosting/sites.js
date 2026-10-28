@@ -14,6 +14,8 @@ import { unpackFiles, extractTo } from '../../../extension/lib/tar.js';
 export const SITE_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const RESERVED = new Set(['www', 'api', 'admin', 'mail', 'smtp', 'imap', 'ftp', 'ns', 'ns1', 'ns2', 'gitcha', 'ring', 'ops', 'status', 'billing', 'static', 'cdn', 'login', 'auth', 'kiosk']);
 export const SITE_CONFIG = 'gitcha.site.json';
+// One owner may hold this many sites whatever the billing setting (each is a name a certificate can be ordered for).
+const MAX_SITES = 25;
 // One owner's sites together may hold this much on disk (all kept deploys, unpacked), whatever the billing setting.
 // A conservative default of ten times the per-site cap (the keepers can set config.hosting.maxOwnerBytes).
 const OWNER_BYTES_FACTOR = 10;
@@ -145,6 +147,7 @@ export class SiteService {
     if (this.store.data.sites[name]) throw new HttpError(409, 'site_exists', `The site name "${name}" is taken.`);
     const owner = this.ownerFor(user, team);
     const count = Object.values(this.store.data.sites).filter((s) => s.owner.type === owner.type && s.owner.name === owner.name).length;
+    if (count >= (this.config.hosting.maxSites ?? MAX_SITES)) throw new HttpError(403, 'site_limit', 'This account holds as many sites as it may.');
     this.billing?.check(`${owner.type}:${owner.name}`, 'sites', count);
     const site = { name, uid: crypto.randomBytes(8).toString('hex'), owner, description: String(description).slice(0, 300), createdAt: this.clock(), createdBy: user.username, deploys: [], activeDeploy: null, config: {} };
     this.store.tx((d) => {
@@ -243,6 +246,7 @@ export class SiteService {
     this.store.tx((d) => {
       delete d.sites[site.name];
       for (const [h, dom] of Object.entries(d.domains)) if (dom.site === site.name) delete d.domains[h];
+      for (const [h, claims] of Object.entries(d.domainClaims ?? {})) { delete claims[site.name]; if (!Object.keys(claims).length) delete d.domainClaims[h]; }
       this.store.audit({ userId: user.id, event: 'site.deleted', ip, site: site.name });
     });
     fs.rmSync(path.join(this.root, site.name), { recursive: true, force: true });
@@ -266,7 +270,7 @@ export class SiteService {
   isHostingHost(host) {
     host = String(host ?? '').toLowerCase().replace(/:\d+$/, '').replace(/\.$/, '');
     // Registered custom domains belong to hosting even before they verify, so they never reach the UI.
-    return this.config.hosting.domains.some((d) => host === d || host.endsWith(`.${d}`)) || Boolean(this.store.data.domains[host]);
+    return this.config.hosting.domains.some((d) => host === d || host.endsWith(`.${d}`)) || Boolean(this.store.data.domains[host] || this.store.data.domainClaims?.[host]);
   }
 
   /** Function route for this path, if the site maps one. */

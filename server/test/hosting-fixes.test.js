@@ -111,3 +111,138 @@ test('SITE-5: a hosting domain in the UI host\'s registrable domain is refused a
     await srv.close();
   }
 });
+
+// ---- custom domains (DOM-1, DOM-2) and certificates (DOM-3) ---------------------------------------------------
+/** A resolver the test controls: name -> TXT value, and an error code that every lookup fails with when set. */
+function fakeDns() {
+  const dns = { txt: {}, failWith: null };
+  dns.resolveTxt = async (name) => {
+    if (dns.failWith) throw Object.assign(new Error(dns.failWith), { code: dns.failWith });
+    if (!dns.txt[name]) throw Object.assign(new Error('nx'), { code: 'ENOTFOUND' });
+    return [[dns.txt[name]]];
+  };
+  return dns;
+}
+const challenge = (h) => `_gitcha-challenge.${h}`;
+const addDomain = (srv, token, siteName, hostname) => api(srv.url, 'POST', `/api/v1/sites/${siteName}/domains`, { token, body: { hostname } });
+const verifyDomain = (srv, token, siteName, hostname) => api(srv.url, 'POST', `/api/v1/sites/${siteName}/domains/${hostname}/verify`, { token });
+const tlsAllowed = async (srv, name) => (await api(srv.url, 'GET', `/api/v1/hosting/tls-allowed?domain=${name}`)).status === 200;
+
+async function twoTenants(opts) {
+  const { srv, alice, token: ta } = await setup(opts);
+  const bob = createUser(srv, 'bob', 'second long pass');
+  const tb = await deviceLogin(srv, bob);
+  await api(srv.url, 'POST', '/api/v1/sites', { token: ta, body: { name: 'shop' } });
+  await api(srv.url, 'POST', '/api/v1/sites', { token: tb, body: { name: 'mall' } });
+  await deploy(srv, ta, 'shop', site({ 'index.html': 'alice shop' }));
+  await deploy(srv, tb, 'mall', site({ 'index.html': 'bob mall' }));
+  return { srv, alice, bob, ta, tb };
+}
+
+test('DOM-1: an unproven claim does not lock out the real owner, expires, and is capped per account', async () => {
+  const dns = fakeDns();
+  const { srv, bob, ta, tb: bobFirst } = await twoTenants({ appOpts: { resolver: dns }, overrides: { hosting: { maxPendingDomains: 3 } } });
+  let tb = bobFirst;
+  try {
+    // bob (no DNS control at all) claims the name first.
+    const squat = await addDomain(srv, tb, 'mall', 'shop.victim.example');
+    assert.equal(squat.status, 201, JSON.stringify(squat.body));
+    // alice, who owns the domain, can still claim it, publish her own proof and verify.
+    const mine = await addDomain(srv, ta, 'shop', 'shop.victim.example');
+    assert.equal(mine.status, 201, `the real owner is not told "taken": ${JSON.stringify(mine.body)}`);
+    assert.notEqual(mine.body.dns.txt.value, squat.body.dns.txt.value, 'each claim has its own token');
+    dns.txt[challenge('shop.victim.example')] = mine.body.dns.txt.value;
+    assert.equal((await verifyDomain(srv, tb, 'mall', 'shop.victim.example')).status, 409, 'the squatter cannot verify with her proof');
+    assert.equal((await verifyDomain(srv, ta, 'shop', 'shop.victim.example')).body.verified, true);
+    assert.equal((await hostGet(srv.url, 'shop.victim.example', '/')).body, 'alice shop');
+    assert.equal((await verifyDomain(srv, tb, 'mall', 'shop.victim.example')).status, 404, 'the losing claim is gone');
+
+    // A claim nobody proves lapses after a day, and the name is free again.
+    assert.equal((await addDomain(srv, tb, 'mall', 'mall.example.org')).status, 201);
+    srv.clock.advance(25 * 3600_000);
+    tb = await deviceLogin(srv, bob); // the old token lapsed with the day
+    assert.equal((await verifyDomain(srv, tb, 'mall', 'mall.example.org')).status, 404, 'expired');
+    assert.deepEqual((await api(srv.url, 'GET', '/api/v1/sites/mall', { token: tb })).body.domains, []);
+
+    // And one account holds only so many waiting claims (3 here).
+    for (const n of [1, 2, 3]) assert.equal((await addDomain(srv, tb, 'mall', `d${n}.example.org`)).status, 201);
+    const over = await addDomain(srv, tb, 'mall', 'd4.example.org');
+    assert.equal(over.status, 429, JSON.stringify(over.body));
+    assert.equal(over.body.error, 'too_many_pending');
+  } finally { await srv.close(); }
+});
+
+test('DOM-2: a verified domain is re-checked, dropped when its proof is gone, and a fresh proof can take it over', async () => {
+  const dns = fakeDns();
+  const { srv, ta, tb } = await twoTenants({ appOpts: { resolver: dns } });
+  try {
+    const add = await addDomain(srv, tb, 'mall', 'bob.example.com');
+    dns.txt[challenge('bob.example.com')] = add.body.dns.txt.value;
+    assert.equal((await verifyDomain(srv, tb, 'mall', 'bob.example.com')).body.verified, true);
+
+    // A resolver that merely fails (timeout, SERVFAIL) proves nothing; the domain stays.
+    dns.failWith = 'ETIMEOUT';
+    for (let i = 0; i < 5; i++) await srv.domains.recheck();
+    assert.equal((await hostGet(srv.url, 'bob.example.com', '/')).body, 'bob mall');
+    dns.failWith = null;
+
+    // The record is really gone: one miss is tolerated, three in a row end it (serving and certificate permission).
+    delete dns.txt[challenge('bob.example.com')];
+    await srv.domains.recheck();
+    await srv.domains.recheck();
+    assert.equal((await hostGet(srv.url, 'bob.example.com', '/')).body, 'bob mall', 'two misses are not enough');
+    dns.txt[challenge('bob.example.com')] = add.body.dns.txt.value;
+    await srv.domains.recheck();
+    delete dns.txt[challenge('bob.example.com')];
+    for (let i = 0; i < 3; i++) await srv.domains.recheck();
+    assert.notEqual((await hostGet(srv.url, 'bob.example.com', '/')).body, 'bob mall', 'no longer served');
+    assert.equal(await tlsAllowed(srv, 'bob.example.com'), false, 'no longer allowed a certificate');
+    assert.ok(srv.store.data.audit.some((e) => e.event === 'domain.lapsed' && e.domain === 'bob.example.com'));
+
+    // A name that changed hands: alice, who now controls the DNS, takes it from bob's still-verified record.
+    const again = await addDomain(srv, tb, 'mall', 'new.example.com');
+    dns.txt[challenge('new.example.com')] = again.body.dns.txt.value;
+    await verifyDomain(srv, tb, 'mall', 'new.example.com');
+    const hers = await addDomain(srv, ta, 'shop', 'new.example.com');
+    assert.equal(hers.status, 201, JSON.stringify(hers.body));
+    dns.txt[challenge('new.example.com')] = hers.body.dns.txt.value;
+    assert.equal((await verifyDomain(srv, ta, 'shop', 'new.example.com')).body.verified, true);
+    assert.equal((await hostGet(srv.url, 'new.example.com', '/')).body, 'alice shop');
+    assert.deepEqual((await api(srv.url, 'GET', '/api/v1/sites/mall', { token: tb })).body.domains.map((d) => d.hostname), [], 'bob no longer holds it');
+  } finally { await srv.close(); }
+});
+
+test('DOM-2: the server looks again on its own schedule', async () => {
+  const dns = fakeDns();
+  const { srv, tb } = await twoTenants({ appOpts: { resolver: dns }, overrides: { hosting: { recheckEvery: 25, recheckFailures: 2 } } });
+  try {
+    const add = await addDomain(srv, tb, 'mall', 'timer.example.com');
+    dns.txt[challenge('timer.example.com')] = add.body.dns.txt.value;
+    await verifyDomain(srv, tb, 'mall', 'timer.example.com');
+    delete dns.txt[challenge('timer.example.com')];
+    const until = Date.now() + 3000;
+    while (Date.now() < until && (await hostGet(srv.url, 'timer.example.com', '/')).body === 'bob mall') await new Promise((r) => setTimeout(r, 25));
+    assert.notEqual((await hostGet(srv.url, 'timer.example.com', '/')).body, 'bob mall', 'dropped by the timer, with nobody calling recheck');
+  } finally { await srv.close(); }
+});
+
+test('DOM-3: a site\'s subdomain gets a certificate only inside the owner\'s weekly budget; sites per account are capped', async () => {
+  const { srv, ta, tb } = await twoTenants({ overrides: { hosting: { certBudget: 2, maxSites: 3 } } });
+  try {
+    assert.equal(await tlsAllowed(srv, new URL(srv.config.publicUrl).hostname), true, 'the instance\'s own name');
+    assert.equal(await tlsAllowed(srv, 'nobody.pages.test'), false, 'no such site');
+    for (const n of ['one', 'two']) await api(srv.url, 'POST', '/api/v1/sites', { token: ta, body: { name: n } });
+    // alice holds shop, one, two: the cap is 3, the fourth is refused whatever billing says.
+    const capped = await api(srv.url, 'POST', '/api/v1/sites', { token: ta, body: { name: 'three' } });
+    assert.equal(capped.status, 403, JSON.stringify(capped.body));
+    assert.equal(capped.body.error, 'site_limit');
+
+    assert.equal(await tlsAllowed(srv, 'shop.pages.test'), true);
+    assert.equal(await tlsAllowed(srv, 'one.pages.test'), true);
+    assert.equal(await tlsAllowed(srv, 'two.pages.test'), false, 'a third new name in the week is not ordered');
+    assert.equal(await tlsAllowed(srv, 'shop.pages.test'), true, 'a name already approved is not a new order');
+    assert.equal(await tlsAllowed(srv, 'mall.pages.test'), true, 'bob has his own budget');
+    srv.clock.advance(8 * 24 * 3600_000);
+    assert.equal(await tlsAllowed(srv, 'two.pages.test'), true, 'a week later it is allowed');
+  } finally { await srv.close(); }
+});

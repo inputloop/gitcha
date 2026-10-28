@@ -11,6 +11,7 @@ import { RING_PATH } from './ring.js';
 export function registerHostingApi(router, { auth, sites, domains, ring, config }) {
   const { verified } = makeGuards(auth, config);
   const announceLimiter = new RateLimiter({ max: 5, windowMs: 3600_000, clock: auth.clock });
+  domains.startRecheck(); // verified domains are looked at again on a schedule (DOM-2)
   const siteView = (s, user) => ({ ...sites.view(s, user), domains: domains.forSite(s) });
 
   router.get('/api/v1/sites', (ctx) => {
