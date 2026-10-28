@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { unpackFiles, extractTo } from './tar.js';
-import { MANIFEST_FILE, NAME_RE } from './manifest.js';
+import { MANIFEST_FILE, isPackageName } from './manifest.js';
 
 export const MODULES_DIR = 'gitcha_modules';
 export const LOCK_FILE = 'gitcha-lock.json';
@@ -14,7 +14,7 @@ export const LOCK_FILE = 'gitcha-lock.json';
 export function parseSpec(spec) {
   const at = spec.lastIndexOf('@');
   const [name, version] = at > 0 ? [spec.slice(0, at), spec.slice(at + 1)] : [spec, 'latest'];
-  if (!NAME_RE.test(name)) throw new Error(`"${name}" is not a valid package name.`);
+  if (!isPackageName(name)) throw new Error(`"${name}" is not a valid package name.`);
   return { name, version: version || 'latest' };
 }
 
@@ -44,7 +44,7 @@ function modulesDir(root) {
 }
 
 export async function installOne(client, { name, version = 'latest' }, { dir = process.cwd(), save = true, allowYanked = false } = {}) {
-  if (!NAME_RE.test(name)) throw new Error(`"${name}" is not a valid package name.`);
+  if (!isPackageName(name)) throw new Error(`"${name}" is not a valid package name.`);
   const root = path.resolve(dir);
   const lockFile = path.join(root, LOCK_FILE);
   const lock = readJson(lockFile, { lockfileVersion: 1, packages: {} });
@@ -108,7 +108,7 @@ export async function installAll(client, { dir = process.cwd(), allowYanked = fa
   const m = readJson(path.join(root, MANIFEST_FILE), {});
   const lock = readJson(path.join(root, LOCK_FILE), { packages: {} });
   const names = Object.keys(m.dependencies ?? {});
-  for (const name of names) if (!NAME_RE.test(name)) throw new Error(`"${name}" in ${MANIFEST_FILE} is not a valid package name.`);
+  for (const name of names) if (!isPackageName(name)) throw new Error(`"${name}" in ${MANIFEST_FILE} is not a valid package name.`);
   const results = [];
   for (const name of names) {
     const version = lockedEntry(lock, name)?.version ?? 'latest';

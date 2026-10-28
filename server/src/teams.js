@@ -16,7 +16,8 @@ export class TeamService {
   }
 
   get(name) {
-    const team = this.store.team(String(name).toLowerCase());
+    const key = String(name).toLowerCase();
+    const team = Object.hasOwn(this.store.data.teams, key) ? this.store.team(key) : null; // "constructor" is not a team
     if (!team) throw new HttpError(404, 'team_not_found', `No team named "${name}".`);
     return team;
   }
@@ -35,6 +36,11 @@ export class TeamService {
     if (!this.has(team, user, role)) {
       throw new HttpError(403, 'team_forbidden', `You need to be ${role === 'owner' ? 'an owner' : `a ${role}`} of team "${team.name}" to do that.`);
     }
+  }
+
+  /** The ids of a team's owners, who are told when its packages move. */
+  ownerIds(team) {
+    return Object.entries(team.members).filter(([, m]) => m.role === 'owner').map(([id]) => id);
   }
 
   forUser(user) {
@@ -61,7 +67,7 @@ export class TeamService {
 
   create(user, { name, description = '' }, ip) {
     name = String(name ?? '').trim().toLowerCase();
-    if (!TEAM_RE.test(name)) throw new HttpError(400, 'bad_team_name', 'Team names are 2-32 lowercase letters, digits, "-" or "_".');
+    if (!TEAM_RE.test(name) || name in Object.prototype) throw new HttpError(400, 'bad_team_name', 'Team names are 2-32 lowercase letters, digits, "-" or "_", and not a word every JavaScript object already has.');
     if (this.store.team(name)) throw new HttpError(409, 'team_exists', `The team "${name}" already exists.`);
     if (this.store.userByName(name) || this.store.data.agents?.[name]) throw new HttpError(409, 'team_exists', `"${name}" is already a user or agent name.`);
     const now = this.clock();

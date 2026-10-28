@@ -127,3 +127,31 @@ test('a small upload cannot expand past four times the upload limit (PKG-F14)', 
     assert.equal(fine.status, 201, 'a package that stays inside the cap is published');
   } finally { await srv.close(); }
 });
+
+test('names and versions that every object already has are refused, not a 500 (PKG-F11)', async () => {
+  const srv = await startServer();
+  try {
+    const u = createUser(srv);
+    const token = await deviceLogin(srv, u);
+    const fine = await publish(srv, token, tarball({ name: 'fine', version: '1.0.0' }));
+    assert.equal(fine.status, 201);
+    const ctor = await publish(srv, token, tarball({ name: 'constructor', version: '1.0.0' }));
+    assert.equal(ctor.status, 400, JSON.stringify(ctor.body));
+    assert.equal(ctor.body.error, 'bad_manifest');
+    assert.equal((await api(srv.url, 'GET', '/api/v1/packages/constructor', { token })).status, 400);
+    for (const v of ['__proto__', 'constructor', 'toString', 'hasOwnProperty', '1.0']) {
+      const dl = await api(srv.url, 'GET', `/api/v1/packages/fine/${v}/tarball`, { token });
+      assert.equal(dl.status, 400, `${v}: ${JSON.stringify(dl.body)}`);
+      assert.equal(dl.body.error, 'bad_version');
+      assert.equal((await api(srv.url, 'POST', `/api/v1/packages/fine/${v}/yank`, { token, body: {} })).status, 400, v);
+    }
+    assert.equal((await api(srv.url, 'GET', '/api/v1/packages/fine/9.9.9/tarball', { token })).status, 404, 'a well-formed version that does not exist is still a 404');
+    const team = await api(srv.url, 'POST', '/api/v1/teams', { token, body: { name: 'constructor' } });
+    assert.equal(team.status, 400, JSON.stringify(team.body));
+    assert.equal(team.body.error, 'bad_team_name');
+    assert.equal((await api(srv.url, 'GET', '/api/v1/teams/constructor', { token })).status, 404);
+    assert.equal((await publish(srv, token, tarball({ name: 'fine', version: '1.0.1', team: 'constructor' }))).status, 404);
+    // the registry is still serving
+    assert.equal((await api(srv.url, 'GET', '/api/v1/packages/fine', { token })).status, 200);
+  } finally { await srv.close(); }
+});

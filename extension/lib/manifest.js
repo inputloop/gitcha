@@ -3,12 +3,14 @@
 // The gitcha.json package manifest, shared by the server and the client.
 export const MANIFEST_FILE = 'gitcha.json';
 export const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+/** NAME_RE also admits "constructor", which every object already has; it is not a package name. */
+export const isPackageName = (name) => typeof name === 'string' && NAME_RE.test(name) && !(name in Object.prototype);
 export const VERSION_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$/;
 
 export function validateManifest(m) {
   const errors = [];
   if (!m || typeof m !== 'object' || Array.isArray(m)) return ['gitcha.json must be a JSON object'];
-  if (!NAME_RE.test(m.name ?? '')) errors.push('"name" must be lowercase letters, digits, ".", "_" or "-" (max 64)');
+  if (!isPackageName(m.name ?? '')) errors.push('"name" must be lowercase letters, digits, ".", "_" or "-" (max 64), and not a word every JavaScript object already has');
   if (!VERSION_RE.test(m.version ?? '')) errors.push('"version" must be a semantic version like 1.2.3');
   if (m.description !== undefined && (typeof m.description !== 'string' || m.description.length > 500)) {
     errors.push('"description" must be a string of at most 500 characters');
