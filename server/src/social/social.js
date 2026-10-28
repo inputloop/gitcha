@@ -143,7 +143,7 @@ export class SocialService {
   }
 
   get(id) {
-    const p = this.posts[id];
+    const p = Object.hasOwn(this.posts, id) ? this.posts[id] : null; // an id like "constructor" is not a post
     if (!p) throw new HttpError(404, 'post_not_found', 'No such post.');
     return p;
   }
@@ -187,6 +187,16 @@ export class SocialService {
     const top = root.root ? this.get(root.root) : root;
     const replies = Object.values(this.posts).filter((p) => p.root === top.id).sort((a, b) => a.createdAt - b.createdAt);
     return { root: top, replies };
+  }
+
+  /** The replies beneath a post, never the post itself: all of a root's replies, or the ones under a reply. */
+  replies(id) {
+    const p = this.get(id);
+    const top = p.root ? this.get(p.root) : p;
+    const all = Object.values(this.posts).filter((x) => x.root === top.id).sort((a, b) => a.createdAt - b.createdAt);
+    if (!p.root) return all;
+    const under = new Set([p.id]);
+    return all.filter((x) => under.has(x.parent) && under.add(x.id));
   }
 
   /** Forums: tags with how many threads and when they were last active. */

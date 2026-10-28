@@ -109,11 +109,57 @@ type Mutation {
 
 const MAX_DEPTH = 8;
 const MAX_QUERY = 20_000;
+// What one request may ask for. Conservative defaults; the keepers can move them here.
+const MAX_ALIASES = 10; // aliased fields, after fragments are expanded
+const MAX_FIELDS = 400; // fields in all, after fragments are expanded (a fragment used twice counts twice)
+const MAX_OBJECTS = 5_000; // list items one request may build while it runs
 
-function depth(node, d = 0) {
-  if (!node.selectionSet) return d;
-  return Math.max(...node.selectionSet.selections.map((s) => depth(s, d + 1)));
+/**
+ * Measure a request before it runs, following fragment spreads (a spread has no
+ * selection of its own, so a chain of fragments reached any depth) and stopping
+ * the moment a limit is passed, so the walk itself can never be the expensive part.
+ */
+function measure(doc, { introspection }) {
+  const fragments = new Map(doc.definitions.filter((d) => d.kind === Kind.FRAGMENT_DEFINITION).map((d) => [d.name.value, d]));
+  for (const op of doc.definitions.filter((d) => d.kind === Kind.OPERATION_DEFINITION)) {
+    const seen = { fields: 0, aliases: 0 };
+    const walk = (set, level, via) => {
+      for (const sel of set.selections) {
+        if (sel.kind === Kind.INLINE_FRAGMENT) { walk(sel.selectionSet, level, via); continue; }
+        if (sel.kind === Kind.FRAGMENT_SPREAD) {
+          const f = fragments.get(sel.name.value);
+          if (!f) continue; // validation reports the unknown fragment
+          if (via.includes(f.name.value)) throw new HttpError(400, 'bad_query', 'A fragment may not spread itself.');
+          walk(f.selectionSet, level, [...via, f.name.value]);
+          continue;
+        }
+        const name = sel.name.value;
+        if (!introspection && (name === '__schema' || name === '__type')) throw new HttpError(403, 'introspection_off', 'Schema introspection is off on this server; the schema is in the repository.');
+        if (level + 1 > MAX_DEPTH) throw new HttpError(400, 'too_deep', `Queries may nest at most ${MAX_DEPTH} levels.`);
+        if (++seen.fields > MAX_FIELDS) throw new HttpError(400, 'too_complex', `A request may select at most ${MAX_FIELDS} fields (fragments count each time they are used).`);
+        if (sel.alias && ++seen.aliases > MAX_ALIASES) throw new HttpError(400, 'too_many_aliases', `A request may alias at most ${MAX_ALIASES} fields.`);
+        if (sel.selectionSet) walk(sel.selectionSet, level + 1, via);
+      }
+    };
+    walk(op.selectionSet, 0, []);
+  }
 }
+
+/** A request's running count of list items built; passing the cap ends the request with a 400. */
+function makeMeter() {
+  const m = { used: 0, fatal: null };
+  m.spend = (list) => {
+    m.used += list.length;
+    if (m.used > MAX_OBJECTS) {
+      m.fatal ??= new HttpError(400, 'too_costly', `That request builds more than ${MAX_OBJECTS} objects; ask for less, or in pieces.`);
+      throw m.fatal;
+    }
+    return list;
+  };
+  return m;
+}
+
+const PROTO_IDS = new Set(['__proto__', 'constructor', 'prototype']);
 
 const JSONScalar = new GraphQLScalarType({
   name: 'JSON',
@@ -126,6 +172,8 @@ export function makeGraphql(s) {
   const schema = buildSchema(SDL);
   Object.assign(schema.getType('JSON'), { serialize: JSONScalar.serialize, parseValue: JSONScalar.parseValue, parseLiteral: JSONScalar.parseLiteral });
   const { auth, agents, keys, budgets, projects, tasks, social, store, config, ops } = s;
+  // Schema introspection is the documentation; a public server answers it only when the operator turns it on.
+  const introspection = config.social?.introspection ?? /^(1|true|yes|on)$/i.test(process.env.GITCHA_GRAPHQL_INTROSPECTION ?? '');
 
   // ---- guards ----------------------------------------------------------------------------
   const anyone = (ctx) => ctx.principal;
@@ -153,16 +201,17 @@ export function makeGraphql(s) {
     return p;
   };
   const budgetView = (account) => ({ account, balance: budgets.balance(account), ledger: ({ limit }) => budgets.ledger(account, limit) });
-  const agentView = (a) => ({ ...agents.view(a), posts: ({ limit }) => social.feed({ author: `agent:${a.handle}`, sort: 'new', limit }), budget: budgetView(`agent:${a.handle}`) });
+  const agentView = (a) => ({ ...agents.view(a), posts: ({ limit }, c) => c.meter.spend(social.feed({ author: `agent:${a.handle}`, sort: 'new', limit })), budget: budgetView(`agent:${a.handle}`) });
   const userView = (u) => ({
     username: u.username, displayName: u.profile?.displayName ?? null, bio: u.profile?.bio ?? null,
-    agents: agents.forOwner(u.id).map(agentView), posts: ({ limit }) => social.feed({ author: `user:${u.username}`, sort: 'new', limit }), budget: budgetView(`user:${u.username}`),
+    agents: (_, c) => c.meter.spend(agents.forOwner(u.id)).map(agentView), posts: ({ limit }, c) => c.meter.spend(social.feed({ author: `user:${u.username}`, sort: 'new', limit })), budget: budgetView(`user:${u.username}`),
   });
+  // `html` and `thread` are functions so nothing is rendered or fetched unless the query asks.
   const postView = (ctx) => (p) => ({
-    ...social.view(p, ctx.principal), html: markdown(p.body).__html,
-    thread: () => { const t = social.thread(p.id); return [t.root, ...t.replies].map(postView(ctx)); },
+    ...social.view(p, ctx.principal), html: () => markdown(p.body).__html,
+    thread: () => ctx.meter.spend(social.replies(p.id)).map(postView(ctx)),
   });
-  const projectView = (ctx) => (p) => ({ ...projects.view(p, ctx.principal), tasks: ({ status }) => tasks.forProject(projects.key(p.owner, p.name)).filter((t) => !status || t.status === status).map((t) => tasks.view(t, ctx.principal)) });
+  const projectView = (ctx) => (p) => ({ ...projects.view(p, ctx.principal), tasks: ({ status }) => ctx.meter.spend(tasks.forProject(projects.key(p.owner, p.name)).filter((t) => !status || t.status === status)).map((t) => tasks.view(t, ctx.principal)) });
   const meView = (ctx) => {
     const p = someone(ctx);
     if (p.kind === 'agent') {
@@ -179,19 +228,19 @@ export function makeGraphql(s) {
       user: ({ username }, ctx) => { anyone(ctx); const u = store.userByName(username); return u && u.status === 'active' ? userView(u) : null; },
       agent: ({ handle }) => { const a = store.data.agents[String(handle).toLowerCase()]; return a ? agentView(a) : null; },
       project: ({ owner, name }, ctx) => { const p = projects.find(owner, name); return p && projects.canRead(ctx.principal, p) ? projectView(ctx)(p) : null; },
-      projects: (_, ctx) => projects.list(ctx.principal).map(projectView(ctx)),
+      projects: (_, ctx) => ctx.meter.spend(projects.list(ctx.principal)).map(projectView(ctx)),
       post: ({ id }, ctx) => { const p = social.posts[id]; return p ? postView(ctx)(p) : null; },
-      feed: ({ tag, author, sort, limit, before }, ctx) => social.feed({ tag, author, sort: sort.toLowerCase(), limit, before }).map(postView(ctx)),
-      topics: ({ limit }) => social.topics(limit),
+      feed: ({ tag, author, sort, limit, before }, ctx) => ctx.meter.spend(social.feed({ tag, author, sort: sort.toLowerCase(), limit, before })).map(postView(ctx)),
+      topics: ({ limit }, ctx) => ctx.meter.spend(social.topics(limit)),
       task: ({ id }, ctx) => { const t = tasks.data[id]; if (!t) return null; tasks.readable(ctx.principal, t); return tasks.view(t, ctx.principal); },
       reviewPool: ({ agent }, ctx) => {
         const a = tasks.actingAgent(someone(ctx), agent);
         if (!a) throw new HttpError(400, 'agent_required', 'Name one of your agents.');
-        return tasks.pool(a).map((t) => tasks.view(t, ctx.principal));
+        return ctx.meter.spend(tasks.pool(a)).map((t) => tasks.view(t, ctx.principal));
       },
-      tickets: (args, ctx) => { const u = person(ctx).user; return ops.tickets(u, args).map((t) => ops.view(u, t)); },
+      tickets: (args, ctx) => { const u = person(ctx).user; return ctx.meter.spend(ops.tickets(u, args)).map((t) => ops.view(u, t)); },
       ticket: ({ id }, ctx) => { const u = person(ctx).user; return ops.view(u, ops.ticket(u, id)); },
-      changes: ({ status }, ctx) => ops.changes(person(ctx).user, { status }),
+      changes: ({ status }, ctx) => ctx.meter.spend(ops.changes(person(ctx).user, { status })),
       change: ({ id }, ctx) => ops.change(person(ctx).user, id),
       opsSummary: (_, ctx) => ops.summary(person(ctx).user),
       budget: ({ account }, ctx) => {
@@ -274,9 +323,14 @@ export function makeGraphql(s) {
   }
 
   async function handle(ctx) {
-    const body = ctx.req.method === 'GET'
-      ? { query: ctx.url.searchParams.get('query'), variables: JSON.parse(ctx.url.searchParams.get('variables') || 'null'), operationName: ctx.url.searchParams.get('operationName') }
-      : await readJson(ctx.req, 256 * 1024);
+    let body;
+    if (ctx.req.method === 'GET') {
+      let variables = null;
+      try { variables = JSON.parse(ctx.url.searchParams.get('variables') || 'null'); } catch { throw new HttpError(400, 'bad_variables', 'variables must be a JSON object.'); }
+      body = { query: ctx.url.searchParams.get('query'), variables, operationName: ctx.url.searchParams.get('operationName') };
+    } else {
+      body = await readJson(ctx.req, 256 * 1024);
+    }
     const query = String(body.query ?? '');
     if (!query || query.length > MAX_QUERY) throw new HttpError(400, 'bad_query', `Send a GraphQL query of at most ${MAX_QUERY} characters.`);
     const { parse } = await import('graphql');
@@ -284,17 +338,20 @@ export function makeGraphql(s) {
     try { doc = parse(query); } catch (err) { return json(ctx.res, 400, { errors: [{ message: err.message }] }); }
     const isMutation = doc.definitions.some((d) => d.operation === 'mutation');
     if (isMutation && ctx.req.method === 'GET') throw new HttpError(405, 'use_post', 'Mutations must be sent with POST.');
-    if (doc.definitions.some((d) => d.selectionSet && depth(d) > MAX_DEPTH)) throw new HttpError(400, 'too_deep', `Queries may nest at most ${MAX_DEPTH} levels.`);
+    measure(doc, { introspection });
     const principal = principalFor(ctx, isMutation);
     // People must have passed their periodic 2FA check, as everywhere else.
     if (principal?.kind === 'user' && principal.auth) auth.requireMfa(principal.auth);
-    const result = await graphql({ schema, source: query, variableValues: body.variables ?? undefined, operationName: body.operationName ?? undefined, contextValue: { principal, ip: ctx.ip } });
+    const meter = makeMeter();
+    const result = await graphql({ schema, source: query, variableValues: body.variables ?? undefined, operationName: body.operationName ?? undefined, contextValue: { principal, ip: ctx.ip, meter } });
+    if (meter.fatal) throw meter.fatal; // too costly: no partial answer
     if (result.errors) {
       result.errors = result.errors.map((e) => {
         const orig = e.originalError;
         if (orig instanceof HttpError) return { message: orig.message, path: e.path, extensions: { code: orig.code, status: orig.status, ...orig.extra } };
         if (orig && !(orig instanceof GraphQLError)) { console.error(orig); return { message: 'Internal error.', path: e.path, extensions: { code: 'internal' } }; }
-        return { message: e.message, locations: e.locations, path: e.path };
+        // "Did you mean ..." would spell out the schema that introspection is not allowed to.
+        return { message: introspection ? e.message : e.message.replace(/\s*Did you mean[\s\S]*$/, ''), locations: e.locations, path: e.path };
       });
     }
     json(ctx.res, 200, result);

@@ -223,7 +223,8 @@ test('social: posts, tags become forums, threads, votes, media', async () => {
   const v = ok(await gql(tc, `mutation { vote(post:"${p.id}", value:1) { score replies } }`)).vote;
   assert.deepEqual(v, { score: 2, replies: 1 });
   const thread = ok(await gql(null, `{ post(id:"${p.id}") { thread { id } } }`)).post.thread;
-  assert.equal(thread.length, 2);
+  assert.equal(thread.length, 1, 'the thread of a post is its replies, not the post itself');
+  assert.equal(thread[0].id, r.id);
   const topics = ok(await gql(null, '{ topics { tag threads } }')).topics;
   assert.ok(topics.find((t) => t.tag === 'parsers').threads >= 2);
   const forum = ok(await gql(null, '{ feed(tag:"parsers", sort:NEW) { title } }')).feed.map((x) => x.title);

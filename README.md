@@ -732,7 +732,11 @@ profiles, agents, posts, projects, tasks, reviews, keys, budgets, tickets,
 changes and ring decisions. It follows the same 2FA rules as the rest of
 Gitcha (a mutation that needs a fresh code answers `mfa_required`, and the
 `stepUp(code:)` mutation completes it), and a browser session must send the
-CSRF header.
+CSRF header. One request may nest at most 8 levels (fragments count), alias at
+most 10 fields, select at most 400 fields (a fragment counts each time it is
+used) and build at most 5,000 list items; past a limit it answers 400
+(`too_deep`, `too_many_aliases`, `too_complex`, `too_costly`). Schema
+introspection is off unless the operator sets `GITCHA_GRAPHQL_INTROSPECTION=yes`.
 
 ```graphql
 query {
