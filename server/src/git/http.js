@@ -17,6 +17,8 @@ import { principalKey } from '../social/principal.js';
 import { parseOwnerLabel, GIT_ENV } from './projects.js';
 
 const SERVICES = new Set(['git-upload-pack', 'git-receive-pack']);
+// A POST body is a git pack request and nothing else; http-backend refuses any other type without reading the body.
+const REQUEST_TYPES = { 'git-upload-pack': 'application/x-git-upload-pack-request', 'git-receive-pack': 'application/x-git-receive-pack-request' };
 
 function basicCreds(req) {
   const h = req.headers.authorization ?? '';
@@ -78,6 +80,9 @@ export function registerGit(router, { auth, projects, principals, config }) {
       if (!m.ok) return send(res, 403, `Your periodic two-factor check is due (${m.reason}). Run \`gitcha verify\`, then push again.\n`, { 'Content-Type': 'text/plain' });
     }
     if (write && !projects.canWrite(principal, p)) return send(res, 403, `You cannot push to ${projects.key(p.owner, p.name)}.\n`, { 'Content-Type': 'text/plain' });
+    if (tail !== 'info/refs' && String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase() !== REQUEST_TYPES[service]) {
+      return send(res, 415, `Send this as ${REQUEST_TYPES[service]}.\n`, { 'Content-Type': 'text/plain', Connection: 'close' });
+    }
     const before = write ? projects.refs(p) : null;
     const env = {
       PATH: process.env.PATH, GIT_CONFIG_GLOBAL: GIT_ENV.GIT_CONFIG_GLOBAL, GIT_CONFIG_NOSYSTEM: '1', GIT_PROJECT_ROOT: projects.root, GIT_HTTP_EXPORT_ALL: '1',
@@ -89,10 +94,18 @@ export function registerGit(router, { auth, projects, principals, config }) {
     };
     await new Promise((resolve) => {
       const child = spawn('git', ['http-backend'], { env, stdio: ['pipe', 'pipe', 'pipe'] });
-      req.pipe(child.stdin);
       let head = Buffer.alloc(0);
       let headerDone = false;
+      // http-backend may exit without reading the whole body (it refuses what it dislikes), and a client may leave
+      // mid-upload. Neither may become an uncaught error, which would end the whole server.
+      child.stdin.on('error', () => { /* EPIPE: the backend is done with its input */ });
+      child.on('error', (err) => { console.error('git http-backend could not run', err.message); });
+      res.on('error', () => { /* the client is gone */ });
+      req.on('error', () => child.kill());
+      req.on('close', () => { if (!req.complete) child.kill(); });
+      req.pipe(child.stdin);
       child.stdout.on('data', (chunk) => {
+        if (res.destroyed) return undefined;
         if (headerDone) return res.write(chunk);
         head = Buffer.concat([head, chunk]);
         const end = head.indexOf('\r\n\r\n');
@@ -112,7 +125,7 @@ export function registerGit(router, { auth, projects, principals, config }) {
       });
       child.stderr.on('data', () => { /* git's progress and errors go to the client inside the protocol */ });
       child.on('close', (code) => {
-        if (!headerDone) send(res, 500, 'git http-backend failed.\n', { 'Content-Type': 'text/plain' });
+        if (res.destroyed) { /* nobody is listening */ } else if (!headerDone) send(res, 500, 'git http-backend failed.\n', { 'Content-Type': 'text/plain' });
         else res.end();
         if (write && code === 0) {
           try { projects.afterPush(p, principal, before); } catch (err) { console.error('afterPush failed', err); }
