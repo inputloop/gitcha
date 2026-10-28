@@ -1,13 +1,24 @@
 #!/usr/bin/env node
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-import { loadConfig } from './config.js';
+import { loadConfig, StartupError } from './config.js';
 import { createApp } from './app.js';
 import { installLastResort } from './http.js';
 
 installLastResort();
-const config = loadConfig(process.env);
-const { server, version } = createApp(config);
+
+// A setting or data file the server cannot start with is one line and exit 1, not a stack trace (AUTH-9, DEP-5).
+function startOrExplain() {
+  try {
+    const config = loadConfig(process.env);
+    return { config, ...createApp(config) };
+  } catch (err) {
+    if (!(err instanceof StartupError)) throw err;
+    console.error(`gitcha: cannot start: ${err.message}`);
+    process.exit(1);
+  }
+}
+const { config, server, version } = startOrExplain();
 
 server.listen(config.port, config.host, () => {
   const h = (ms) => `${Math.round(ms / 60000)} min`;

@@ -973,7 +973,7 @@ All settings are environment variables. In the Debian package they live in
 | `GITCHA_STEPUP_INTERVAL` | `12h` | Periodic re-verification interval (`30m`, `4h`, `7d`…) |
 | `GITCHA_SENSITIVE_WINDOW` | `10m` | Maximum age of the last code for sensitive actions |
 | `GITCHA_STEPUP_ON_NEW_NETWORK` | `true` | Default for the new-network check |
-| `GITCHA_LOCKED_CHECKS` | *(empty)* | Comma list of `interval`, `new_network`, `sensitive` that users can't turn off |
+| `GITCHA_LOCKED_CHECKS` | *(empty)* | Comma list of `interval`, `new_network`, `sensitive` that users can't turn off; any other name stops the server at start |
 | `GITCHA_SESSION_MAX_AGE` / `GITCHA_SESSION_IDLE` | `30d` / `7d` | Hard and idle lifetime of sessions and device tokens |
 | `GITCHA_MAX_PACKAGE_BYTES` / `GITCHA_MAX_MEDIA_BYTES` | 25 MiB / 50 MiB | Maximum package tarball and media upload |
 | `GITCHA_TRUST_PROXY` | `false` | Use `X-Forwarded-For` for client IPs (only behind your own proxy; `true`, `yes`, `on` or `1`) |

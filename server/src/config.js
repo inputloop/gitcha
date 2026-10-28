@@ -8,10 +8,27 @@ import { parseTrustedProxies } from './http.js';
 const HOUR = 3600_000;
 const MINUTE = 60_000;
 
+/** A setting or file the server cannot start with: index.js prints the message as one line and exits 1. */
+export class StartupError extends Error {
+  constructor(message) { super(message); this.name = 'StartupError'; }
+}
+
+export const CHECK_NAMES = ['interval', 'new_network', 'sensitive'];
+
+/** GITCHA_LOCKED_CHECKS: a typo must stop the server, not quietly lock nothing while /health says it is locked (AUTH-9). */
+export function parseLockedChecks(value) {
+  const names = String(value ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+  const unknown = names.filter((n) => !CHECK_NAMES.includes(n));
+  if (unknown.length) {
+    throw new StartupError(`GITCHA_LOCKED_CHECKS names unknown check(s): ${unknown.join(', ')}. Valid names: ${CHECK_NAMES.join(', ')}.`);
+  }
+  return [...new Set(names)];
+}
+
 function duration(value, fallback) {
   if (value === undefined || value === '') return fallback;
   const m = /^(\d+)\s*(ms|s|m|h|d)?$/.exec(String(value).trim());
-  if (!m) throw new Error(`invalid duration: ${value}`);
+  if (!m) throw new StartupError(`invalid duration: ${value} (use a number with ms, s, m, h or d, for example 12h)`);
   const mult = { ms: 1, s: 1000, m: MINUTE, h: HOUR, d: 24 * HOUR }[m[2] || 's'];
   return Number(m[1]) * mult;
 }
@@ -66,7 +83,7 @@ export function loadConfig(env = process.env, overrides = {}) {
       sessionIdle: duration(env.GITCHA_SESSION_IDLE, 7 * 24 * HOUR),
       mfaTicketTtl: 5 * MINUTE,
       // Checks users may NOT switch off (comma list of: interval,new_network,sensitive).
-      lockedChecks: String(env.GITCHA_LOCKED_CHECKS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+      lockedChecks: parseLockedChecks(env.GITCHA_LOCKED_CHECKS),
     },
     hosting: {
       // Domains this instance hands out subdomains on, e.g. "pages.example.net,apps.example.org".
