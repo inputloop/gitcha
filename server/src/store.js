@@ -4,7 +4,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const EMPTY = () => ({ version: 1, users: {}, sessions: {}, packages: {}, teams: {}, audit: [] });
+const EMPTY = () => ({
+  version: 1, users: {}, sessions: {}, packages: {}, teams: {}, audit: [],
+  sites: {}, domains: {}, ring: { peers: {}, announcements: {} },
+});
 const AUDIT_LIMIT = 10_000;
 
 export class Store {

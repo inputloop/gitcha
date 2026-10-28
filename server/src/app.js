@@ -8,6 +8,10 @@ import { Store } from './store.js';
 import { AuthService } from './auth.js';
 import { PackageService } from './packages.js';
 import { TeamService } from './teams.js';
+import { SiteService } from './hosting/sites.js';
+import { DomainService } from './hosting/domains.js';
+import { RingService } from './hosting/ring.js';
+import { registerHostingApi, serveHosted } from './hosting/api.js';
 import { registerApi } from './api.js';
 import { registerWeb } from './web.js';
 import { layout, errorPage } from './views.js';
@@ -17,13 +21,22 @@ const PUBLIC = path.join(here, '..', 'public');
 const VERSION = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8')).version;
 const MIME = { '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png' };
 
-export function createApp(config, { clock = Date.now } = {}) {
+export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}) {
   const store = new Store(config.dataDir);
   const auth = new AuthService({ store, config, clock });
   const teams = new TeamService({ store, clock });
   const packages = new PackageService({ store, config, teams, clock });
   const router = new Router();
+  const sites = new SiteService({ store, config, teams, clock });
+  const domains = new DomainService({ store, config, sites, clock, ...(resolver ? { resolver } : {}) });
+  const services = { store, auth, packages, teams, sites, domains, config, functions: null };
+  const ring = new RingService({
+    store, config, version: VERSION, clock, ...(fetchImpl ? { fetchImpl } : {}),
+    features: () => ({ packages: true, teams: true, hosting: config.hosting.domains.length > 0, ci: Boolean(services.jobs), functions: Boolean(services.functions), paid: services.billing?.paidFeatures() ?? [] }),
+  });
+  services.ring = ring;
   registerApi(router, { auth, packages, teams, config, version: VERSION });
+  registerHostingApi(router, services);
   registerWeb(router, { auth, packages, teams, config });
 
   router.get('/static/:file', (ctx) => {
@@ -46,6 +59,8 @@ export function createApp(config, { clock = Date.now } = {}) {
       return writeHead(status, headers);
     };
     try {
+      // Hosted sites are served on their own hostnames and never reach the UI or API.
+      if (await serveHosted(ctx, services)) return;
       // Cross-site browser requests to the JSON API are refused outright.
       if (isApi && req.headers['sec-fetch-site'] === 'cross-site') throw new HttpError(403, 'cross_site', 'Cross-site requests are not allowed.');
       const m = router.match(req.method, url.pathname);
@@ -62,5 +77,5 @@ export function createApp(config, { clock = Date.now } = {}) {
   }
 
   const server = http.createServer(handle);
-  return { server, store, auth, packages, teams, config, version: VERSION };
+  return { server, ...services, router, version: VERSION };
 }

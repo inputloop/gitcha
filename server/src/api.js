@@ -22,7 +22,8 @@ function sessionView(auth, state) {
   };
 }
 
-export function registerApi(router, { auth: authSvc, packages, teams, config, version }) {
+/** Request guards shared by every API module. */
+export function makeGuards(authSvc, config) {
   const authed = (ctx) => {
     const a = authSvc.authenticate(bearer(ctx.req), ctx.ip);
     if (!a) throw new HttpError(401, 'unauthenticated', 'Not logged in. Run `gitcha login` first.');
@@ -35,6 +36,11 @@ export function registerApi(router, { auth: authSvc, packages, teams, config, ve
     return a;
   };
   const reader = (ctx) => (config.publicRead && !bearer(ctx.req) ? null : verified(ctx));
+  return { authed, verified, reader, bearer };
+}
+
+export function registerApi(router, { auth: authSvc, packages, teams, config, version }) {
+  const { authed, verified, reader } = makeGuards(authSvc, config);
 
   router.get('/api/v1/health', (ctx) => json(ctx.res, 200, {
     ok: true, service: 'gitcha', version, api: API_VERSION,

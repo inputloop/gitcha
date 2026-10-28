@@ -13,6 +13,10 @@ function duration(value, fallback) {
   return Number(m[1]) * mult;
 }
 
+function list(value) {
+  return String(value ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+}
+
 function bool(value, fallback) {
   if (value === undefined || value === '') return fallback;
   return /^(1|true|yes|on)$/i.test(value);
@@ -58,6 +62,27 @@ export function loadConfig(env = process.env, overrides = {}) {
       // Checks users may NOT switch off (comma list of: interval,new_network,sensitive).
       lockedChecks: String(env.GITCHA_LOCKED_CHECKS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
     },
+    hosting: {
+      // Domains this instance hands out subdomains on, e.g. "pages.example.net,apps.example.org".
+      // Use a registrable domain separate from the Gitcha UI so user content can't touch its cookies.
+      domains: list(env.GITCHA_HOSTING_DOMAINS),
+      maxSiteBytes: Number(env.GITCHA_MAX_SITE_BYTES ?? 100 * 1024 * 1024),
+      keepDeploys: Number(env.GITCHA_KEEP_DEPLOYS ?? 10),
+      // What custom domains should point at (CNAME target), shown to users.
+      cnameTarget: env.GITCHA_HOSTING_CNAME ?? null,
+    },
+    ring: {
+      name: env.GITCHA_RING_NAME ?? env.GITCHA_ISSUER ?? 'Gitcha',
+      description: env.GITCHA_RING_DESCRIPTION ?? '',
+      operator: env.GITCHA_RING_OPERATOR ?? '',
+      peers: String(env.GITCHA_RING_PEERS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+      refresh: duration(env.GITCHA_RING_REFRESH, 6 * HOUR),
+    },
   };
-  return { ...config, ...overrides, policy: { ...config.policy, ...overrides.policy } };
+  return {
+    ...config, ...overrides,
+    policy: { ...config.policy, ...overrides.policy },
+    hosting: { ...config.hosting, ...overrides.hosting },
+    ring: { ...config.ring, ...overrides.ring },
+  };
 }

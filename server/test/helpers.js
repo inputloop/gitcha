@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
@@ -17,9 +18,9 @@ export function tmpDir(prefix = 'gitcha-test-') {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
-export async function startServer({ env = {}, overrides = {}, clock = fakeClock() } = {}) {
+export async function startServer({ env = {}, overrides = {}, clock = fakeClock(), appOpts = {} } = {}) {
   const config = loadConfig({ GITCHA_PORT: '0', ...env }, { dataDir: tmpDir(), ...overrides });
-  const app = createApp(config, { clock });
+  const app = createApp(config, { clock, ...appOpts });
   await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${app.server.address().port}`;
   return { ...app, url, clock, close: () => new Promise((r) => app.server.close(r)) };
@@ -48,4 +49,18 @@ export async function deviceLogin(srv, user) {
   const r1 = await api(srv.url, 'POST', '/api/v1/auth/login', { body: { username: user.username, password: user.password } });
   const r2 = await api(srv.url, 'POST', '/api/v1/auth/login/mfa', { body: { ticket: r1.body.mfa_ticket, code: user.nextCode(), device_name: 'test' } });
   return r2.body.token;
+}
+
+/** Raw HTTP request with an explicit Host header (fetch cannot set Host). */
+export function hostGet(url, host, path = '/', { method = 'GET', headers = {}, body } = {}) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const req = http.request({ host: u.hostname, port: u.port, path, method, headers: { Host: host, ...headers } }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }));
+    });
+    req.on('error', reject);
+    req.end(body);
+  });
 }
