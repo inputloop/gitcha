@@ -27,6 +27,7 @@ import { NextTimeClient } from './social/nexttime.js';
 import { makePrincipals } from './social/principal.js';
 import { makeGraphql } from './social/graphql.js';
 import { registerSocialApi } from './social/api.js';
+import { registerSocialWeb } from './social/web.js';
 import { ProjectService } from './git/projects.js';
 import { registerGit } from './git/http.js';
 import { OpsService } from './ops/ops.js';
@@ -86,7 +87,8 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
   services.ops = new OpsService({ ...services, clock });
   services.graphql = makeGraphql(services);
   registerSocialApi(router, services);
-  registerWeb(router, { auth, packages, teams, config, billing: services.billing });
+  services.web = registerWeb(router, { auth, packages, teams, config, billing: services.billing });
+  registerSocialWeb(router, services);
 
   router.get('/static/:file', (ctx) => {
     const file = path.basename(ctx.params.file);

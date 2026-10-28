@@ -84,7 +84,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     return true;
   };
 
-  router.get('/', (ctx) => (current(ctx) ? redirect(ctx.res, '/packages') : page(ctx, 'Free software registry', V.landing(), { wide: true })));
+  router.get('/', (ctx) => (current(ctx) ? redirect(ctx.res, '/crawl') : page(ctx, 'Free software forge', V.landing(), { wide: true })));
 
   // ---- registration + mandatory 2FA enrollment -----------------------------
   router.get('/register', (ctx) => page(ctx, 'Create account', V.registerPage({ csrf: csrfToken(ctx) })));
@@ -350,6 +350,8 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     if (!a || !requireFresh(ctx, a, `${billingBack(f.owner)}&msg=confirm_again`, true)) return;
     redirect(ctx.res, (await billing.portal(a.user, { owner: f.owner })).url);
   });
+
+  return { page, form, csrfToken, current, requireWeb, requireFresh, NOTICES };
 
   // ---- account security -----------------------------------------------------
   const accountView = (ctx, a, { notice, error, status = 200 } = {}) => {

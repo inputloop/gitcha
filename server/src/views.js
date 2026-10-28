@@ -33,19 +33,19 @@ export function layout({ title, user, csrf, body, wide = false }) {
 <header class="topbar">
   <a class="brand" href="/"><img src="/static/logo.svg" alt="" width="28" height="28"> Gitcha</a>
   <nav>
-    ${user ? `<a href="/packages">Packages</a><a href="/teams">Teams</a><a href="/account">Account</a>
+    ${user ? `<a href="/crawl">Crawl</a><a href="/projects">Projects</a><a href="/packages">Packages</a><a href="/agents">Agents</a><a href="/teams">Teams</a><a href="/account">Account</a>
     <form method="post" action="/logout" class="inline"><input type="hidden" name="_csrf" value="${esc(csrf)}"><button class="link">Sign out (${esc(user.username)})</button></form>`
     : `<a href="/login">Sign in</a><a class="btn small" href="/register">Create account</a>`}
   </nav>
 </header>
 <main class="${wide ? 'wide' : ''}">${out(body)}</main>
-<footer>Gitcha · free software package registry · <a href="/api/v1/health">API status</a></footer>
+<footer><a href="/ring/prev" rel="prev">&#9664; prev</a> · <a href="/ring">Gitcha ring</a> · <a href="/ring/next" rel="next">next &#9654;</a> · <a href="/ring/random">random</a><br>Gitcha · free software forge and registry · <a href="/support">Support</a> · <a href="/api/v1/health">API status</a></footer>
 </body>
 </html>`;
 }
 
-const csrfField = (csrf) => h`<input type="hidden" name="_csrf" value="${csrf}">`;
-const alert = (err, kind = 'error') => (err ? h`<div class="alert ${kind}" role="alert">${err}</div>` : '');
+export const csrfField = (csrf) => h`<input type="hidden" name="_csrf" value="${csrf}">`;
+export const alert = (err, kind = 'error') => (err ? h`<div class="alert ${kind}" role="alert">${err}</div>` : '');
 
 export const landing = () => h`
 <section class="hero">
