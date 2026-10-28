@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import { HttpError } from '../errors.js';
 
 const TOLERANCE_S = 300;
+const idOf = (x) => (typeof x === 'string' ? x : x?.id ?? undefined); // an expandable field is an id or an object
 const STATUS = { active: 'active', trialing: 'active', past_due: 'past_due', unpaid: 'past_due', canceled: 'canceled', incomplete: 'pending', incomplete_expired: 'canceled', paused: 'canceled' };
 
 /** Stripe's form encoding, including nested keys like line_items[0][price]. */
@@ -111,13 +112,13 @@ export class StripeProvider {
     const o = ev.data?.object ?? {};
     switch (ev.type) {
       case 'checkout.session.completed':
-        return { id: ev.id, type: ev.type, owner: o.client_reference_id ?? o.metadata?.owner, plan: o.metadata?.plan, status: 'active', subscriptionId: o.subscription, customerId: o.customer };
+        return { id: ev.id, type: ev.type, owner: o.client_reference_id ?? o.metadata?.owner, checkoutSessionId: o.id, status: 'active', subscriptionId: idOf(o.subscription), customerId: idOf(o.customer) };
       case 'customer.subscription.created':
       case 'customer.subscription.updated':
       case 'customer.subscription.deleted':
         return { id: ev.id, type: ev.type, ...this.fromSubscription(o), ...(ev.type.endsWith('deleted') ? { status: 'canceled' } : {}) };
       case 'invoice.payment_failed':
-        return { id: ev.id, type: ev.type, owner: o.subscription_details?.metadata?.owner ?? o.lines?.data?.[0]?.metadata?.owner, status: 'past_due' };
+        return { id: ev.id, type: ev.type, owner: o.subscription_details?.metadata?.owner ?? o.lines?.data?.[0]?.metadata?.owner, subscriptionId: idOf(o.subscription) ?? idOf(o.parent?.subscription_details?.subscription), status: 'past_due' };
       default:
         return { id: ev.id, type: ev.type, owner: null };
     }

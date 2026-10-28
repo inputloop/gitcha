@@ -114,22 +114,40 @@ export class BillingService {
     return {
       owner: o.key, enabled: this.enabled, plan, planName: this.plans[plan].name, limits: this.plans[plan].limits, usage: this.usage(o.key),
       subscription: sub ? { provider: sub.provider, plan: sub.plan, status: sub.status, currentPeriodEnd: sub.currentPeriodEnd ?? null } : null,
+      pendingCheckout: this.data.accounts[o.key]?.checkout ? { provider: this.data.accounts[o.key].checkout.provider, plan: this.data.accounts[o.key].checkout.plan } : null,
       plans: Object.entries(this.plans).map(([id, p]) => ({ id, name: p.name, price: p.price, limits: p.limits, paid: Boolean(p.paid) })),
       providers: Object.keys(this.providers).filter((k) => this.providers[k].canSell),
     };
   }
 
-  setSubscription(key, patch, event) {
+  /** Change the account's subscription record; `replace` starts a fresh one instead of merging over the old. */
+  setSubscription(key, patch, event, { replace = false, clearCheckout = false } = {}) {
     this.store.tx((d) => {
       const a = (d.billing.accounts[key] ??= {});
-      const before = a.subscription ?? {};
+      const before = replace ? {} : a.subscription ?? {};
       a.subscription = { ...before, ...patch, updatedAt: this.clock() };
       // The grace is counted from the first moment of a past-due spell; a write that changes nothing cannot move it.
       if (a.subscription.status !== 'past_due') delete a.subscription.pastDueSince;
       else a.subscription.pastDueSince = before.status === 'past_due' ? before.pastDueSince ?? before.updatedAt : this.clock();
+      if (clearCheckout) delete a.checkout;
       a.history = [...(a.history ?? []).slice(-49), { at: this.clock(), event, status: a.subscription.status, plan: a.subscription.plan, provider: a.subscription.provider }];
       this.store.audit({ event: `billing.${event}`, owner: key, plan: a.subscription.plan, status: a.subscription.status, provider: a.subscription.provider });
     });
+  }
+
+  /** A checkout for a new plan on an account that already pays waits in its own slot; the paid record is not touched. */
+  setCheckout(key, slot, event) {
+    this.store.tx((d) => {
+      const a = (d.billing.accounts[key] ??= {});
+      a.checkout = slot;
+      a.history = [...(a.history ?? []).slice(-49), { at: this.clock(), event, status: 'pending', plan: slot?.plan, provider: slot?.provider }];
+      this.store.audit({ event: `billing.${event}`, owner: key, plan: slot?.plan, status: 'pending', provider: slot?.provider });
+    });
+  }
+
+  ignored(provider, ev, key, reason) {
+    this.store.tx(() => this.store.audit({ event: 'billing.event_ignored', owner: key ?? ev.owner, provider, eventType: ev.type, eventId: ev.id, reason }));
+    return { ignored: true, reason };
   }
 
   // ---- checkout ---------------------------------------------------------------------------
@@ -143,7 +161,8 @@ export class BillingService {
     const o = this.account(user, owner, { manage: true });
     if (!this.plans[plan]?.paid) throw new HttpError(400, 'bad_plan', `"${plan}" is not a paid plan.`);
     const current = this.subscription(o.key);
-    if (current && ['active', 'past_due'].includes(current.status) && current.plan === plan) {
+    const paying = Boolean(current && ['active', 'past_due'].includes(current.status));
+    if (paying && current.plan === plan) {
       throw new HttpError(409, 'already_subscribed', `${o.key} is already on the ${this.plans[plan].name} plan.`);
     }
     const p = this.provider(provider);
@@ -153,7 +172,9 @@ export class BillingService {
       successUrl: `${base}/billing/return?provider=${provider}&owner=${encodeURIComponent(o.key)}`,
       cancelUrl: `${base}/billing?owner=${encodeURIComponent(o.key)}&msg=cancelled`,
     });
-    this.setSubscription(o.key, { provider, plan, status: 'pending', ...out.ids }, 'checkout_started');
+    // On an account that pays, the new plan waits in its own slot and the paid subscription stays until the new one is confirmed.
+    if (paying) this.setCheckout(o.key, { provider, plan, ...out.ids, startedAt: this.clock() }, 'checkout_started');
+    else this.setSubscription(o.key, { provider, plan, status: 'pending', ...out.ids }, 'checkout_started', { replace: true, clearCheckout: true });
     this.store.tx(() => this.store.audit({ userId: user.id, event: 'billing.checkout', ip, owner: o.key, plan, provider }));
     return { url: out.url };
   }
@@ -163,9 +184,13 @@ export class BillingService {
     const o = this.account(user, owner);
     const p = this.provider(provider);
     const sub = this.subscription(o.key);
-    const found = await p.lookup({ sessionId, subscriptionId: subscriptionId ?? sub?.subscriptionId });
+    const slot = this.data.accounts[o.key]?.checkout;
+    const found = await p.lookup({ sessionId, subscriptionId: subscriptionId ?? sub?.subscriptionId ?? slot?.subscriptionId });
     if (!found || found.owner !== o.key) throw new HttpError(400, 'not_confirmed', 'The payment provider has no matching subscription for this account yet.');
-    this.setSubscription(o.key, { provider, plan: found.plan ?? sub?.plan, status: found.status, subscriptionId: found.subscriptionId, customerId: found.customerId ?? sub?.customerId, currentPeriodEnd: found.currentPeriodEnd ?? null }, 'confirmed');
+    // The subscription must be one this account is waiting on or already holds: its owner field alone proves nothing.
+    const target = this.targetOf(o.key, provider, { subscriptionId: found.subscriptionId, checkoutSessionId: sessionId });
+    if (!target) throw new HttpError(400, 'not_confirmed', 'That subscription is not the one this account is waiting on.');
+    await this.adopt(o.key, target, { ...found, provider }, 'confirmed', { authoritative: true });
     return this.view(user, o.key);
   }
 
@@ -188,8 +213,45 @@ export class BillingService {
   }
 
   // ---- webhooks -------------------------------------------------------------------------------
+  /** Which of this account's records (the paid one or the waiting checkout) does the provider's subscription or session belong to? */
+  targetOf(key, provider, { subscriptionId, checkoutSessionId }) {
+    const hit = (r) => r?.provider === provider && ((subscriptionId && r.subscriptionId === subscriptionId) || (checkoutSessionId && r.checkoutSessionId === checkoutSessionId));
+    if (hit(this.subscription(key))) return 'current';
+    if (hit(this.data.accounts[key]?.checkout)) return 'checkout';
+    return null;
+  }
+
+  /** The account an event is about is found by the ids we recorded, never by the owner the event claims. */
+  accountFor(provider, ids) {
+    for (const key of Object.keys(this.data.accounts)) {
+      const target = this.targetOf(key, provider, ids);
+      if (target) return { key, target };
+    }
+    return null;
+  }
+
+  /** Take what the provider says about a subscription into the account. A replacement plan cancels the old subscription first. */
+  async adopt(key, target, next, event, { authoritative = false } = {}) {
+    const patch = {};
+    for (const k of ['status', 'plan', 'subscriptionId', 'customerId', 'currentPeriodEnd']) if (next[k] !== undefined && (next[k] !== null || (authoritative && k === 'currentPeriodEnd'))) patch[k] = next[k];
+    if (target === 'current') {
+      this.setSubscription(key, { provider: next.provider, ...patch }, event);
+      return 'applied';
+    }
+    const slot = this.data.accounts[key].checkout;
+    if (next.status === 'canceled') { // the buyer never paid, or the provider dropped the new subscription
+      this.store.tx((d) => { delete d.billing.accounts[key].checkout; });
+      return 'dropped';
+    }
+    if (next.status !== 'active') return 'waiting';
+    const old = this.subscription(key);
+    if (old && ['active', 'past_due'].includes(old.status) && old.subscriptionId !== next.subscriptionId) await this.provider(old.provider).cancel(old);
+    this.setSubscription(key, { provider: next.provider, ...patch, plan: patch.plan ?? slot.plan, checkoutSessionId: slot.checkoutSessionId }, event, { replace: true, clearCheckout: true });
+    return 'applied';
+  }
+
   /** Apply a verified provider event. Each event id is applied once. */
-  applyEvent(provider, ev) {
+  async applyEvent(provider, ev) {
     if (!ev) return { ignored: true };
     if (this.data.events[`${provider}:${ev.id}`]) return { duplicate: true };
     this.store.tx((d) => {
@@ -197,11 +259,13 @@ export class BillingService {
       const ids = Object.keys(d.billing.events);
       if (ids.length > 5000) for (const k of ids.slice(0, ids.length - 5000)) delete d.billing.events[k];
     });
-    if (!ev.owner || !/^(user|team):/.test(ev.owner)) return { ignored: true };
-    const patch = { provider };
-    for (const k of ['status', 'plan', 'subscriptionId', 'customerId', 'currentPeriodEnd']) if (ev[k] !== undefined && ev[k] !== null) patch[k] = ev[k];
-    this.setSubscription(ev.owner, patch, `${provider}:${ev.type}`);
-    return { applied: true, owner: ev.owner, status: patch.status };
+    const named = typeof ev.owner === 'string' && /^(user|team):/.test(ev.owner);
+    const hit = this.accountFor(provider, ev);
+    if (!hit) return named ? this.ignored(provider, ev, ev.owner, 'unknown_subscription') : { ignored: true };
+    if (named && ev.owner !== hit.key) return this.ignored(provider, ev, hit.key, 'owner_mismatch');
+    const outcome = await this.adopt(hit.key, hit.target, { ...ev, provider }, `${provider}:${ev.type}`);
+    if (outcome !== 'applied') return { ignored: true, reason: outcome };
+    return { applied: true, owner: hit.key, status: ev.status };
   }
 
   async webhook(provider, rawBody, headers) {

@@ -16,6 +16,7 @@ export function fakeProviders() {
   const st = {
     n: 0, sessions: {}, subs: {}, pp: {}, ppVerify: 0, ppTokens: 0, periodEnd: 2_000_000_000,
     stripeError: null, // { status, message } makes every Stripe call answer with it
+    failCancel: false, // cancelling a subscription at either provider answers 500
     gate: null, // async (url, init) => ... awaited before a request is answered (to hold it open)
   };
   const priceOf = { pro: 'price_pro', team: 'price_team' };
@@ -41,7 +42,10 @@ export function fakeProviders() {
       if ((m = /^\/v1\/subscriptions\/(sub_\w+)$/.exec(u.pathname))) {
         const s = st.subs[m[1]];
         if (!s) return reply(404, { error: { message: `No such subscription: '${m[1]}'` } });
-        if (init.method === 'DELETE') s.status = 'canceled';
+        if (init.method === 'DELETE') {
+          if (st.failCancel) return reply(500, { error: { message: 'cancel failed' } });
+          s.status = 'canceled';
+        }
         return reply(200, s);
       }
       if (u.pathname === '/v1/billing_portal/sessions') return reply(200, { url: `https://billing.stripe.test/p/${new URLSearchParams(init.body).get('customer')}` });
@@ -57,6 +61,7 @@ export function fakeProviders() {
       let m;
       if ((m = /^\/v1\/billing\/subscriptions\/(I-\w+)\/cancel$/.exec(u.pathname))) {
         if (!st.pp[m[1]]) return reply(404, { message: 'no such subscription' });
+        if (st.failCancel) return reply(500, { message: 'cancel failed' });
         st.pp[m[1]].status = 'CANCELLED';
         return reply(204, {});
       }

@@ -117,7 +117,7 @@ test('Stripe: checkout, server-side confirmation, webhooks, portal and cancel', 
     assert.equal(conf.body.subscription.status, 'active');
 
     // Webhook: unsigned or tampered events are refused; a signed one applies once.
-    const ev = JSON.stringify({ id: 'evt_1', type: 'invoice.payment_failed', data: { object: { subscription_details: { metadata: { owner: 'user:alice' } } } } });
+    const ev = JSON.stringify({ id: 'evt_1', type: 'invoice.payment_failed', data: { object: { subscription: 'sub_1', subscription_details: { metadata: { owner: 'user:alice' } } } } });
     assert.equal((await fetch(`${srv.url}/api/v1/billing/stripe/webhook`, { method: 'POST', body: ev, headers: { 'stripe-signature': 't=1,v1=00' } })).status, 400);
     const ok = await fetch(`${srv.url}/api/v1/billing/stripe/webhook`, { method: 'POST', body: ev, headers: { 'stripe-signature': stripeSign(ev) } });
     assert.equal(ok.status, 200);
