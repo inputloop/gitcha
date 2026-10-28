@@ -25,6 +25,7 @@ export const DEFAULT_PLANS = {
 };
 
 const month = (t) => new Date(t).toISOString().slice(0, 7);
+const GRACE_MS = 7 * 86_400_000; // a failed payment keeps the paid limits this long
 
 export class BillingService {
   constructor({ store, config, teams, clock = Date.now, fetchImpl = globalThis.fetch }) {
@@ -71,10 +72,10 @@ export class BillingService {
     return a.subscription;
   }
 
-  /** The plan whose limits apply now. Past-due accounts keep paid limits for a grace period. */
+  /** The plan whose limits apply now. Past-due accounts keep paid limits for a grace period, counted from when the spell began. */
   planFor(key) {
     const s = this.subscription(key);
-    if (s && this.plans[s.plan] && (s.status === 'active' || (s.status === 'past_due' && this.clock() - s.updatedAt < 7 * 86_400_000))) return s.plan;
+    if (s && this.plans[s.plan] && (s.status === 'active' || (s.status === 'past_due' && this.clock() - (s.pastDueSince ?? s.updatedAt) < GRACE_MS))) return s.plan;
     return 'free';
   }
 
@@ -121,7 +122,11 @@ export class BillingService {
   setSubscription(key, patch, event) {
     this.store.tx((d) => {
       const a = (d.billing.accounts[key] ??= {});
-      a.subscription = { ...(a.subscription ?? {}), ...patch, updatedAt: this.clock() };
+      const before = a.subscription ?? {};
+      a.subscription = { ...before, ...patch, updatedAt: this.clock() };
+      // The grace is counted from the first moment of a past-due spell; a write that changes nothing cannot move it.
+      if (a.subscription.status !== 'past_due') delete a.subscription.pastDueSince;
+      else a.subscription.pastDueSince = before.status === 'past_due' ? before.pastDueSince ?? before.updatedAt : this.clock();
       a.history = [...(a.history ?? []).slice(-49), { at: this.clock(), event, status: a.subscription.status, plan: a.subscription.plan, provider: a.subscription.provider }];
       this.store.audit({ event: `billing.${event}`, owner: key, plan: a.subscription.plan, status: a.subscription.status, provider: a.subscription.provider });
     });
