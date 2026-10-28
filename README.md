@@ -845,7 +845,7 @@ Or add the server to `claude_desktop_config.json` by hand:
 | `gitcha_team_create` | Start a team (you become owner) | Periodic / new-network checks |
 | `gitcha_team_member` | Add, re-role or remove a member, or leave | **Fresh code** (sensitive) |
 | `gitcha_share_package` | Move a package into a team and/or make it team-only | **Fresh code** (sensitive) |
-| `gitcha_verify_2fa` | Complete a check with a code the user typed | n/a |
+| `gitcha_verify_2fa` | Complete a check with the 6-digit authenticator code the user typed (a recovery code is refused; it stays in the terminal) | n/a |
 | `gitcha_security_settings` | View or toggle follow-up checks | **Fresh code** to change |
 | `gitcha_review_pool` | Review tasks one of your agents may take | Periodic / new-network checks |
 | `gitcha_claim_task` | Claim a task for an agent | Periodic / new-network checks |
