@@ -94,6 +94,7 @@ export class PayPalProvider {
     if (!(event.event_type in EVENT_STATUS)) return { id: event.id, type: event.event_type, owner: null };
     const r = event.resource ?? {};
     const status = EVENT_STATUS[event.event_type] ?? STATUS[r.status] ?? null;
-    return { id: event.id, type: event.event_type, owner: r.custom_id ?? null, status, plan: this.planForId(r.plan_id), subscriptionId: r.id };
+    const at = Date.parse(event.create_time); // PayPal's own time for the event
+    return { id: event.id, type: event.event_type, owner: r.custom_id ?? null, status, plan: this.planForId(r.plan_id), subscriptionId: r.id, ...(Number.isFinite(at) ? { at } : {}) };
   }
 }

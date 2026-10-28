@@ -111,6 +111,12 @@ export class StripeProvider {
     }
     const ev = JSON.parse(rawBody.toString('utf8'));
     const o = ev.data?.object ?? {};
+    const at = Number.isFinite(ev.created) ? ev.created * 1000 : undefined; // Stripe's own time for the event
+    const out = this.translate(ev, o);
+    return out && at !== undefined ? { ...out, at } : out;
+  }
+
+  translate(ev, o) {
     switch (ev.type) {
       case 'checkout.session.completed':
         return { id: ev.id, type: ev.type, owner: o.client_reference_id ?? o.metadata?.owner, checkoutSessionId: o.id, status: 'active', subscriptionId: idOf(o.subscription), customerId: idOf(o.customer) };

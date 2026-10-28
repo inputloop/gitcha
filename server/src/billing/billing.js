@@ -211,35 +211,60 @@ export class BillingService {
     };
   }
 
-  /** Change the account's subscription record; `replace` starts a fresh one instead of merging over the old. */
-  setSubscription(key, patch, event, { replace = false, clearCheckout = false } = {}) {
-    this.store.tx((d) => {
-      const a = this.ensureAccount(d, key);
-      const before = replace ? {} : a.subscription ?? {};
-      a.subscription = { ...before, ...patch, updatedAt: this.clock() };
-      // The grace is counted from the first moment of a past-due spell; a write that changes nothing cannot move it.
-      if (a.subscription.status !== 'past_due') delete a.subscription.pastDueSince;
-      else a.subscription.pastDueSince = before.status === 'past_due' ? before.pastDueSince ?? before.updatedAt : this.clock();
-      if (clearCheckout) delete a.checkout;
-      a.history = [...(a.history ?? []).slice(-49), { at: this.clock(), event, status: a.subscription.status, plan: a.subscription.plan, provider: a.subscription.provider }];
-      this.store.audit({ event: `billing.${event}`, owner: key, plan: a.subscription.plan, status: a.subscription.status, provider: a.subscription.provider });
-    });
+  // ---- writes ---------------------------------------------------------------------------------
+  /**
+   * Run `change(d)` and, if `seen` is given, mark that event seen in the same write. If the write fails, memory is put back
+   * (the account, the close queues, the audit rows and the marker) so nothing half-done is kept and the provider's retry starts clean.
+   */
+  atomically(key, change, seen = null) {
+    const bd = this.data;
+    const was = { account: key ? structuredClone(bd.accounts[key]) : undefined, closed: structuredClone(bd.closed), pending: structuredClone(bd.pendingCancels), audit: this.store.data.audit.length, marker: seen ? bd.events[seen] : undefined };
+    const put = (obj, k, v) => { if (v === undefined) delete obj[k]; else obj[k] = v; };
+    try {
+      return this.store.tx((d) => {
+        const out = change(d);
+        if (seen) this.markSeen(d, seen);
+        return out;
+      });
+    } catch (err) {
+      if (key) put(bd.accounts, key, was.account);
+      put(bd, 'closed', was.closed);
+      put(bd, 'pendingCancels', was.pending);
+      if (seen) put(bd.events, seen, was.marker);
+      this.store.data.audit.length = Math.min(this.store.data.audit.length, was.audit);
+      throw err;
+    }
   }
 
-  /** A checkout for a new plan on an account that already pays waits in its own slot; the paid record is not touched. */
-  setCheckout(key, slot, event) {
-    this.store.tx((d) => {
-      const a = this.ensureAccount(d, key);
-      a.checkout = slot;
-      a.history = [...(a.history ?? []).slice(-49), { at: this.clock(), event, status: 'pending', plan: slot?.plan, provider: slot?.provider }];
-      this.store.audit({ event: `billing.${event}`, owner: key, plan: slot?.plan, status: 'pending', provider: slot?.provider });
-    });
+  markSeen(d, seen) {
+    d.billing.events[seen] = this.clock();
+    const ids = Object.keys(d.billing.events);
+    if (ids.length > 5000) for (const k of ids.slice(0, ids.length - 5000)) delete d.billing.events[k];
   }
 
-  ignored(provider, ev, key, reason) {
-    this.store.tx(() => this.store.audit({ event: 'billing.event_ignored', owner: key ?? ev.owner, provider, eventType: ev.type, eventId: ev.id, reason }));
-    return { ignored: true, reason };
+  /** Change the account's subscription record inside a write; `replace` starts a fresh one instead of merging over the old. */
+  putSubscription(d, key, patch, event, { replace = false, clearCheckout = false } = {}) {
+    const a = this.ensureAccount(d, key);
+    const before = replace ? {} : a.subscription ?? {};
+    a.subscription = { ...before, ...patch, updatedAt: this.clock() };
+    // The grace is counted from the first moment of a past-due spell; a write that changes nothing cannot move it.
+    if (a.subscription.status !== 'past_due') delete a.subscription.pastDueSince;
+    else a.subscription.pastDueSince = before.status === 'past_due' ? before.pastDueSince ?? before.updatedAt : this.clock();
+    if (clearCheckout) delete a.checkout;
+    a.history = [...(a.history ?? []).slice(-49), { at: this.clock(), event, status: a.subscription.status, plan: a.subscription.plan, provider: a.subscription.provider }];
+    this.store.audit({ event: `billing.${event}`, owner: key, plan: a.subscription.plan, status: a.subscription.status, provider: a.subscription.provider });
   }
+
+  /** A checkout for a new plan on an account that already pays waits in its own slot (null empties it); the paid record is not touched. */
+  putCheckout(d, key, slot, event) {
+    const a = this.ensureAccount(d, key);
+    if (slot) a.checkout = slot; else delete a.checkout;
+    a.history = [...(a.history ?? []).slice(-49), { at: this.clock(), event, status: 'pending', plan: slot?.plan, provider: slot?.provider }];
+    this.store.audit({ event: `billing.${event}`, owner: key, plan: slot?.plan, status: 'pending', provider: slot?.provider });
+  }
+
+  setSubscription(key, patch, event, opts) { this.atomically(key, (d) => this.putSubscription(d, key, patch, event, opts)); }
+  setCheckout(key, slot, event) { this.atomically(key, (d) => this.putCheckout(d, key, slot, event)); }
 
   // ---- checkout ---------------------------------------------------------------------------
   provider(name) {
@@ -321,40 +346,58 @@ export class BillingService {
     return null;
   }
 
-  /** Take what the provider says about a subscription into the account. A replacement plan cancels the old subscription first. */
-  async adopt(key, target, next, event, { authoritative = false } = {}) {
+  /** Why an event for this account must not be applied, if it must not: it is older than one already applied, or the subscription has ended. */
+  supersededBy(hit, ev) {
+    if (hit.target !== 'current') return null;
+    const s = this.subscription(hit.key);
+    // Cancelled is final for a subscription (a new purchase is a new subscription), whatever order events arrive in.
+    if (s.status === 'canceled' && s.subscriptionId === ev.subscriptionId && ev.status && ev.status !== 'canceled') return 'subscription_ended';
+    // Events carry the provider's own time; one older than the last applied is a late delivery. Ids are no order (random), so the same second applies.
+    if (ev.at != null && s.lastEventAt != null && ev.at < s.lastEventAt) return 'older_than_applied';
+    return null;
+  }
+
+  /** Take what the provider says about a subscription into the account. A replacement plan cancels the old subscription first. `seen` marks the event in the same write. */
+  async adopt(key, target, next, event, { authoritative = false, seen = null } = {}) {
     const patch = {};
     for (const k of ['status', 'plan', 'subscriptionId', 'customerId', 'currentPeriodEnd']) if (next[k] !== undefined && (next[k] !== null || (authoritative && k === 'currentPeriodEnd'))) patch[k] = next[k];
+    const mark = (outcome) => { if (seen) this.atomically(null, () => {}, seen); return outcome; };
     if (target === 'current') {
-      this.setSubscription(key, { provider: next.provider, ...patch }, event);
-      return 'applied';
+      if (next.at != null) patch.lastEventAt = Math.max(next.at, this.subscription(key).lastEventAt ?? 0);
+      return this.atomically(key, (d) => { this.putSubscription(d, key, { provider: next.provider, ...patch }, event); return 'applied'; }, seen);
     }
     const slot = this.accountOf(key).checkout;
     if (next.status === 'canceled') { // the buyer never paid, or the provider dropped the new subscription
-      this.store.tx((d) => { delete d.billing.accounts[key].checkout; });
-      return 'dropped';
+      return this.atomically(key, (d) => { this.putCheckout(d, key, null, 'checkout_dropped'); return 'dropped'; }, seen);
     }
-    if (next.status !== 'active') return 'waiting';
+    if (next.status !== 'active') return mark('waiting');
     const old = this.subscription(key);
     if (old && ['active', 'past_due'].includes(old.status) && old.subscriptionId !== next.subscriptionId) await this.provider(old.provider).cancel(old);
-    this.setSubscription(key, { provider: next.provider, ...patch, plan: patch.plan ?? slot.plan, checkoutSessionId: slot.checkoutSessionId }, event, { replace: true, clearCheckout: true });
-    return 'applied';
+    // The cancel took a while; if another delivery or a confirm got here first, there is nothing left to do.
+    if ((seen && this.data.events[seen]) || this.accountOf(key)?.checkout !== slot) return 'duplicate';
+    const fresh = { provider: next.provider, ...patch, plan: patch.plan ?? slot.plan, checkoutSessionId: slot.checkoutSessionId, ...(next.at != null ? { lastEventAt: next.at } : {}) };
+    return this.atomically(key, (d) => { this.putSubscription(d, key, fresh, event, { replace: true, clearCheckout: true }); return 'applied'; }, seen);
   }
 
-  /** Apply a verified provider event. Each event id is applied once. */
+  /** Record an event we will not apply: seen (so a retry is a duplicate), and an audit row when it names a Gitcha owner. */
+  ignore(provider, ev, seen, key, reason, audit) {
+    this.atomically(key ?? null, () => { if (audit) this.store.audit({ event: 'billing.event_ignored', owner: key, provider, eventType: ev.type, eventId: ev.id, reason }); }, seen);
+    return { ignored: true, reason };
+  }
+
+  /** Apply a verified provider event. Each event id is applied once, and marked seen only together with its effect. */
   async applyEvent(provider, ev) {
     if (!ev) return { ignored: true };
-    if (this.data.events[`${provider}:${ev.id}`]) return { duplicate: true };
-    this.store.tx((d) => {
-      d.billing.events[`${provider}:${ev.id}`] = this.clock();
-      const ids = Object.keys(d.billing.events);
-      if (ids.length > 5000) for (const k of ids.slice(0, ids.length - 5000)) delete d.billing.events[k];
-    });
+    const seen = `${provider}:${ev.id}`;
+    if (this.data.events[seen]) return { duplicate: true };
     const named = typeof ev.owner === 'string' && /^(user|team):/.test(ev.owner);
     const hit = this.accountFor(provider, ev);
-    if (!hit) return named ? this.ignored(provider, ev, ev.owner, 'unknown_subscription') : { ignored: true };
-    if (named && ev.owner !== hit.key) return this.ignored(provider, ev, hit.key, 'owner_mismatch');
-    const outcome = await this.adopt(hit.key, hit.target, { ...ev, provider }, `${provider}:${ev.type}`);
+    if (!hit) return this.ignore(provider, ev, seen, named ? ev.owner : null, 'unknown_subscription', named);
+    if (named && ev.owner !== hit.key) return this.ignore(provider, ev, seen, hit.key, 'owner_mismatch', true);
+    const late = this.supersededBy(hit, ev);
+    if (late) return this.ignore(provider, ev, seen, hit.key, late, true);
+    const outcome = await this.adopt(hit.key, hit.target, { ...ev, provider }, `${provider}:${ev.type}`, { seen });
+    if (outcome === 'duplicate') return { duplicate: true };
     if (outcome !== 'applied') return { ignored: true, reason: outcome };
     return { applied: true, owner: hit.key, status: ev.status };
   }

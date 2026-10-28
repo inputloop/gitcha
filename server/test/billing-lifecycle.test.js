@@ -140,3 +140,67 @@ test('BIL-5b: PayPal custom_id naming a victim cannot cancel the victim', async 
     assert.equal(dbAccount(srv, 'user:alice').subscription.subscriptionId, subId);
   } finally { await srv.close(); }
 });
+
+const sessionDone = (fake, sessionId, owner = 'user:alice') => {
+  const s = fake.st.sessions[sessionId];
+  return { id: sessionId, mode: 'subscription', payment_status: 'paid', client_reference_id: owner, subscription: s.subscription, customer: fake.st.subs[s.subscription]?.customer };
+};
+const subEvent = (srv, fake, type, subId, extra = {}, opts = {}) => stripeEvent(srv, type, { ...fake.st.subs[subId], ...extra }, opts);
+
+test('BIL-2a: events are applied in the provider\'s order; an older one delivered late never undoes a newer one', async () => {
+  const { srv, fake, token } = await setup();
+  try {
+    const { subId } = await subscribe(srv, fake, token, { plan: 'pro' });
+    const t = Math.floor(srv.clock() / 1000);
+    // The cancellation (t+10) arrives first; the update that was sent before it (t+5) arrives late.
+    const gone = await postStripe(srv, subEvent(srv, fake, 'customer.subscription.deleted', subId, { status: 'canceled' }, { created: t + 10 }));
+    assert.equal(gone.body.applied, true);
+    assert.equal((await billingOf(srv, token)).plan, 'free');
+    const late = await postStripe(srv, subEvent(srv, fake, 'customer.subscription.updated', subId, { status: 'active' }, { created: t + 5 }));
+    assert.equal(late.body.ignored, true, JSON.stringify(late.body));
+    assert.equal((await billingOf(srv, token)).plan, 'free', 'a cancelled subscription is not live again');
+    // Even a newer-looking "active" cannot revive a cancelled subscription: cancelled is final for that subscription.
+    const odd = await postStripe(srv, subEvent(srv, fake, 'customer.subscription.updated', subId, { status: 'active' }, { created: t + 20 }));
+    assert.equal(odd.body.ignored, true);
+    assert.equal((await billingOf(srv, token)).plan, 'free');
+  } finally { await srv.close(); }
+});
+
+test('BIL-2a: a stale failure notice does not take a newer recovery back', async () => {
+  const { srv, fake, token } = await setup();
+  try {
+    const { subId } = await subscribe(srv, fake, token, { plan: 'pro' });
+    const t = Math.floor(srv.clock() / 1000);
+    assert.equal((await postStripe(srv, subEvent(srv, fake, 'customer.subscription.updated', subId, { status: 'active', current_period_end: 2_100_000_000 }, { created: t + 10 }))).body.applied, true);
+    const late = await postStripe(srv, failedInvoice(srv, subId, 'evt_late_fail').replace(/"created":\d+/, `"created":${t + 5}`));
+    assert.equal(late.body.ignored, true);
+    assert.equal(dbAccount(srv, 'user:alice').subscription.status, 'active');
+    // Two events in the same second both apply: a second has no finer order, and ids are not an order.
+    assert.equal((await postStripe(srv, failedInvoice(srv, subId, 'evt_same_sec').replace(/"created":\d+/, `"created":${t + 10}`))).body.applied, true);
+    assert.equal(dbAccount(srv, 'user:alice').subscription.status, 'past_due');
+  } finally { await srv.close(); }
+});
+
+test('BIL-2b: an event is marked seen only with its effect; a failed write is retried, not lost', async () => {
+  const { srv, fake, token } = await setup();
+  try {
+    await checkout(srv, token, { plan: 'pro', provider: 'stripe' });
+    const sessionId = Object.keys(fake.st.sessions).at(-1);
+    const sub = fake.st.completeCheckout(sessionId);
+    const paid = stripeEvent(srv, 'checkout.session.completed', sessionDone(fake, sessionId), { id: 'evt_paid_1' });
+
+    const real = srv.store.flush.bind(srv.store);
+    srv.store.flush = () => { throw new Error('disk full'); };
+    const down = await fetch(`${srv.url}/api/v1/billing/stripe/webhook`, { method: 'POST', body: paid, headers: { 'stripe-signature': (await import('./billing-fixtures.js')).stripeSign(paid, Math.floor(srv.clock() / 1000)) } });
+    assert.equal(down.status, 500);
+    assert.equal(srv.store.data.billing.events['stripe:evt_paid_1'], undefined, 'not marked seen when the write failed');
+    assert.equal(dbAccount(srv, 'user:alice').subscription.status, 'pending', 'memory holds what disk holds');
+
+    srv.store.flush = real;
+    const retry = await postStripe(srv, paid);
+    assert.equal(retry.body.applied, true, `the provider's retry applies the upgrade: ${JSON.stringify(retry.body)}`);
+    assert.equal((await billingOf(srv, token)).plan, 'pro');
+    assert.equal(dbAccount(srv, 'user:alice').subscription.subscriptionId, sub.id);
+    assert.equal((await postStripe(srv, paid)).body.duplicate, true, 'and only then is it a duplicate');
+  } finally { await srv.close(); }
+});
