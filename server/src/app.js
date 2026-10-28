@@ -12,6 +12,10 @@ import { SiteService } from './hosting/sites.js';
 import { DomainService } from './hosting/domains.js';
 import { RingService } from './hosting/ring.js';
 import { registerHostingApi, serveHosted } from './hosting/api.js';
+import { JobService } from './compute/jobs.js';
+import { CiService } from './compute/ci.js';
+import { FunctionService } from './compute/functions.js';
+import { registerComputeApi } from './compute/api.js';
 import { registerApi } from './api.js';
 import { registerWeb } from './web.js';
 import { layout, errorPage } from './views.js';
@@ -29,14 +33,18 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
   const router = new Router();
   const sites = new SiteService({ store, config, teams, clock });
   const domains = new DomainService({ store, config, sites, clock, ...(resolver ? { resolver } : {}) });
-  const services = { store, auth, packages, teams, sites, domains, config, functions: null };
+  const services = { store, auth, packages, teams, sites, domains, config, billing: null };
+  services.jobs = new JobService({ store, config, teams, clock });
+  services.ci = new CiService({ ...services, clock });
+  services.functions = new FunctionService({ ...services, clock });
   const ring = new RingService({
     store, config, version: VERSION, clock, ...(fetchImpl ? { fetchImpl } : {}),
     features: () => ({ packages: true, teams: true, hosting: config.hosting.domains.length > 0, ci: Boolean(services.jobs), functions: Boolean(services.functions), paid: services.billing?.paidFeatures() ?? [] }),
   });
   services.ring = ring;
-  registerApi(router, { auth, packages, teams, config, version: VERSION });
+  registerApi(router, { auth, packages, teams, config, version: VERSION, hooks: { onPublish: (...a) => services.ci.onPublish(...a) } });
   registerHostingApi(router, services);
+  registerComputeApi(router, services);
   registerWeb(router, { auth, packages, teams, config });
 
   router.get('/static/:file', (ctx) => {
@@ -77,5 +85,8 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
   }
 
   const server = http.createServer(handle);
+  const sweeper = setInterval(() => services.jobs.sweep(), 30_000);
+  sweeper.unref();
+  server.on('close', () => { clearInterval(sweeper); services.jobs.cancelWaiters(); });
   return { server, ...services, router, version: VERSION };
 }

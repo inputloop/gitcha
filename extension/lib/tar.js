@@ -62,11 +62,17 @@ export function safeRelative(p) {
   return norm;
 }
 
-/** Unpack a gzipped tarball into `[{ path, data }]` (paths relative to package/). */
-export function unpackFiles(tgz, { maxBytes = 200 * 1024 * 1024 } = {}) {
+/**
+ * Unpack a gzipped tarball into `[{ path, data }]`.
+ * By default entries must sit under package/ (Gitcha's own format). With
+ * { root: '' } any safe relative path is accepted, as written by ordinary tar
+ * (./ prefixes, GNU long names, pax headers); used for CI artifacts.
+ */
+export function unpackFiles(tgz, { maxBytes = 200 * 1024 * 1024, root = 'package/' } = {}) {
   const tar = zlib.gunzipSync(tgz, { maxOutputLength: maxBytes });
   const files = [];
   let off = 0;
+  let longName = null;
   while (off + BLOCK <= tar.length) {
     const h = tar.subarray(off, off + BLOCK);
     if (h.every((b) => b === 0)) break;
@@ -75,17 +81,31 @@ export function unpackFiles(tgz, { maxBytes = 200 * 1024 * 1024 } = {}) {
     const size = parseInt(str(h, 124, 12).trim() || '0', 8);
     const type = String.fromCharCode(h[156] || 48);
     off += BLOCK;
-    const full = prefix ? `${prefix}/${name}` : name;
+    const data = tar.subarray(off, off + size);
+    off += Math.ceil(size / BLOCK) * BLOCK;
+    if (type === 'L') { longName = data.toString('utf8').replace(/\0+$/, ''); continue; }
+    if (type === 'x') {
+      const m = /\d+ path=([^\n]*)\n/.exec(data.toString('utf8'));
+      if (m) longName = m[1];
+      continue;
+    }
+    if (type === 'g') continue;
+    let full = longName ?? (prefix ? `${prefix}/${name}` : name);
+    longName = null;
     if (type === '0' || type === '\0') {
-      if (!full.startsWith('package/')) throw new Error(`unexpected entry outside package/: ${full}`);
-      const rel = safeRelative(full.slice('package/'.length));
+      if (root) {
+        if (!full.startsWith(root)) throw new Error(`unexpected entry outside ${root}: ${full}`);
+        full = full.slice(root.length);
+      } else {
+        full = full.replace(/^(\.\/)+/, '');
+      }
+      const rel = safeRelative(full);
       if (!rel) throw new Error(`unsafe path in tarball: ${full}`);
-      files.push({ path: rel, data: Buffer.from(tar.subarray(off, off + size)) });
+      files.push({ path: rel, data: Buffer.from(data) });
       if (files.length > MAX_FILES) throw new Error('too many files in tarball');
     } else if (type !== '5') {
       throw new Error(`unsupported tar entry type "${type}" for ${full} (links are not allowed)`);
     }
-    off += Math.ceil(size / BLOCK) * BLOCK;
   }
   return files;
 }

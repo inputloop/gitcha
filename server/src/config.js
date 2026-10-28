@@ -71,6 +71,15 @@ export function loadConfig(env = process.env, overrides = {}) {
       // What custom domains should point at (CNAME target), shown to users.
       cnameTarget: env.GITCHA_HOSTING_CNAME ?? null,
     },
+    compute: {
+      // Image CI steps and functions run in when they don't name one (a bContain/OCI reference).
+      defaultImage: env.GITCHA_DEFAULT_IMAGE ?? 'docker.io/library/node:22-alpine',
+      maxJobMs: duration(env.GITCHA_MAX_JOB_TIME, 60 * MINUTE),
+      // How long an invocation may wait for a free runner before answering 503.
+      queueWaitMs: duration(env.GITCHA_QUEUE_WAIT, 20_000),
+      // Accept functions with runtime "orgvm" (needs runners labelled orgvm).
+      orgvm: bool(env.GITCHA_ORGVM, false),
+    },
     ring: {
       name: env.GITCHA_RING_NAME ?? env.GITCHA_ISSUER ?? 'Gitcha',
       description: env.GITCHA_RING_DESCRIPTION ?? '',
@@ -84,5 +93,6 @@ export function loadConfig(env = process.env, overrides = {}) {
     policy: { ...config.policy, ...overrides.policy },
     hosting: { ...config.hosting, ...overrides.hosting },
     ring: { ...config.ring, ...overrides.ring },
+    compute: { ...config.compute, ...overrides.compute },
   };
 }

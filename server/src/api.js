@@ -39,7 +39,7 @@ export function makeGuards(authSvc, config) {
   return { authed, verified, reader, bearer };
 }
 
-export function registerApi(router, { auth: authSvc, packages, teams, config, version }) {
+export function registerApi(router, { auth: authSvc, packages, teams, config, version, hooks = {} }) {
   const { authed, verified, reader } = makeGuards(authSvc, config);
 
   router.get('/api/v1/health', (ctx) => json(ctx.res, 200, {
@@ -130,7 +130,10 @@ export function registerApi(router, { auth: authSvc, packages, teams, config, ve
     const body = await readJson(ctx.req, Math.ceil(config.maxPackageBytes * 1.4) + 4096);
     const tarball = Buffer.from(String(body.tarball ?? ''), 'base64');
     const priv = typeof body.private === 'boolean' ? body.private : undefined;
-    json(ctx.res, 201, packages.publish(a.user, { tarball, integrity: body.integrity, team: body.team || undefined, private: priv }, ctx.ip));
+    const published = packages.publish(a.user, { tarball, integrity: body.integrity, team: body.team || undefined, private: priv }, ctx.ip);
+    // A pipeline marked "on": ["publish"] builds the new version on a runner.
+    const build = hooks.onPublish?.(a.user, published, tarball, ctx.ip) ?? null;
+    json(ctx.res, 201, build ? { ...published, build: { id: build.id, status: build.status } } : published);
   });
 
   router.post('/api/v1/packages/:name/:version/yank', async (ctx) => {
