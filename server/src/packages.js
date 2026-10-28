@@ -49,7 +49,8 @@ export class PackageService {
     }
     let files;
     try {
-      files = unpackFiles(tarball);
+      // Expanded size capped at 4 x the compressed limit (a conservative default, keepers may tune); strict = the package rules.
+      files = unpackFiles(tarball, { maxBytes: this.config.maxPackageBytes * 4, strict: true });
     } catch (err) {
       throw new HttpError(400, 'bad_tarball', `Invalid package tarball: ${err.message}`);
     }
