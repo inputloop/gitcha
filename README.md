@@ -373,7 +373,8 @@ authenticator app.
 
 Nothing can be installed until this machine has signed in with a password and
 a 2FA code. `gitcha login` saves a revocable **device token** with file
-mode 600. It never saves your password. `gitcha status` shows when the next
+mode 600 (it reads the mode back and warns you where the platform cannot set it).
+It never saves your password. `gitcha status` shows when the next
 periodic check is due.
 
 ![gitcha login and status](docs/screenshots/11-cli-login.png)
@@ -799,7 +800,7 @@ Set `GITCHA_SERVER` in your environment if your registry isn't on
 | Skill `gitcha` | Teaches Claude the first-run and 2FA rules |
 | `/gitcha:gitcha-status` | Shows sign-in and 2FA status |
 | `/gitcha:gitcha-publish [dir]` | Guided, confirmed publish |
-| SessionStart hook | Tells Claude whether Gitcha is signed in and when the next 2FA check is due |
+| SessionStart hook | Tells Claude, in fixed words (never the registry's text), whether Gitcha is signed in and whether a 2FA check is due; it waits at most 5 seconds for the registry |
 
 ### Option B: add only the MCP server to Claude Code
 
@@ -879,13 +880,16 @@ gitcha team info <name>
 gitcha team add <team> <user> [--role member|maintainer|owner]
 gitcha team remove <team> <user>              remove a member, or yourself to leave
 gitcha team delete <name>
-gitcha logout                                 revoke this device's token
+gitcha logout [--local-only]                  revoke this device's token (--local-only: just forget it here)
 gitcha mcp                                    run the Claude extension on stdio
 ```
 
 Global options: `--server URL` (or `GITCHA_SERVER`), `--json`. Credentials are
 stored in `$GITCHA_CONFIG_DIR`, `$XDG_CONFIG_HOME/gitcha`, `~/.config/gitcha`
-or `%APPDATA%\gitcha`.
+or `%APPDATA%\gitcha`. `gitcha logout` removes the local token only after the
+registry has confirmed the revoke (or said the token was already dead); if the
+registry cannot be reached the token stays so you can try again, and
+`--local-only` forgets it on this machine without asking.
 
 When a periodic or sensitive-action check is due in an interactive terminal,
 the CLI asks for a code and retries automatically. In scripts it exits with a

@@ -51,7 +51,7 @@ ${bold('Security')}
   gitcha verify [CODE]                          re-confirm 2FA now (intermittent check)
   gitcha security [--interval on|off] [--new-network on|off] [--sensitive on|off]
                                                 view or toggle follow-up 2FA checks
-  gitcha logout                                 revoke this device's token
+  gitcha logout [--local-only]                  revoke this device's token (--local-only: just forget it here)
 
 ${bold('Claude')}
   gitcha mcp                                    run the Claude extension (MCP server on stdio)
@@ -65,24 +65,27 @@ function parseArgs(argv) {
     if (a.startsWith('--')) {
       const [k, v] = a.slice(2).split('=');
       if (v !== undefined) args.flags[k] = v;
-      else if (argv[i + 1] && !argv[i + 1].startsWith('--') && !['json', 'undo', 'help', 'version', 'hook', 'private', 'dry-run', 'allow-yanked'].includes(k)) args.flags[k] = argv[++i];
+      else if (argv[i + 1] && !argv[i + 1].startsWith('--') && !['json', 'undo', 'help', 'version', 'hook', 'private', 'dry-run', 'allow-yanked', 'local-only'].includes(k)) args.flags[k] = argv[++i];
       else args.flags[k] = true;
     } else args._.push(a);
   }
   return args;
 }
 
+const HOOK_TIMEOUT_MS = 5000;
 const REASON_TEXT = {
   interval: 'Periodic security check: please confirm it is still you.',
   new_network: 'This device is on a new network: please confirm it is you.',
   sensitive_action: 'This is a sensitive action and needs a fresh code.',
 };
 
+const reasonText = (r) => (typeof r === 'string' && Object.hasOwn(REASON_TEXT, r) ? REASON_TEXT[r] : 'Two-factor check required.');
+
 async function promptCode(reason) {
   if (!process.stdin.isTTY) {
-    throw new Error(`${REASON_TEXT[reason] ?? 'Two-factor check required.'} Run \`gitcha verify <code>\` and try again.`);
+    throw new Error(`${reasonText(reason)} Run \`gitcha verify <code>\` and try again.`);
   }
-  process.stderr.write(`\n${yellow('🔐 ' + (REASON_TEXT[reason] ?? 'Two-factor check required.'))}\n`);
+  process.stderr.write(`\n${yellow('🔐 ' + reasonText(reason))}\n`);
   return ask(`${bold('Authenticator code')}: `);
 }
 
@@ -91,7 +94,8 @@ function authedClient(flags) {
   const server = resolveServer(flags.server);
   const creds = getCredentials(server);
   if (!creds) throw new Error(`You are not signed in to ${server}.\nRun ${cyan('gitcha login' + (flags.server ? ` --server ${server}` : ''))} first: a password and an authenticator code are required.`);
-  return new GitchaClient({ server, token: creds.token, userAgent: `gitcha-cli/${VERSION}` });
+  // The SessionStart hook runs at every Claude session start; it gets a short leash.
+  return new GitchaClient({ server, token: creds.token, userAgent: `gitcha-cli/${VERSION}`, ...(flags.hook ? { timeoutMs: HOOK_TIMEOUT_MS } : {}) });
 }
 
 /** Run fn; if the server asks for an intermittent 2FA check, prompt and retry once. */
@@ -126,17 +130,34 @@ const commands = {
     const code = flags.code || (await ask(`${bold('Authenticator code')}: `));
     const device = flags.device || `gitcha CLI on ${os.hostname()}`;
     const res = await client.loginMfa(mfa_ticket, code, device);
-    saveCredentials(server, { username: res.username, token: res.token, device: res.device });
+    const saved = saveCredentials(server, { username: res.username, token: res.token, device: res.device });
     out(green(`✓ Signed in as ${bold(res.username)}.`) + ` Device "${res.device}" registered.`);
-    out(dim(`  Token saved to ${credentialsPath()} (mode 600). Your password is not stored.`));
+    out(dim(`  Token saved to ${credentialsPath()}${saved.private ? ' (mode 600)' : ''}. Your password is not stored.`));
+    if (!saved.private || saved.warning) {
+      process.stderr.write(yellow(`  Warning: ${saved.warning ?? 'this platform does not give the file private permissions'}. Anyone who can read that file can use this token; keep it in a folder only you can open.\n`));
+    }
     if (res.next_check_at) out(dim(`  Next periodic 2FA check: ${when(res.next_check_at)}`));
   },
 
   async logout({ flags }) {
     const client = authedClient(flags);
-    try { await client.logout(); } catch (err) { if (!(err instanceof GitchaError)) throw err; }
+    if (flags['local-only']) {
+      removeCredentials(client.server);
+      return out(yellow('● Forgot the token on this machine only.') + ' It stays valid on the server until you revoke the device in the web page.');
+    }
+    // The local copy is the only way to revoke the token from here, so it goes only after the server has answered.
+    let note = 'this device token has been revoked';
+    try {
+      await client.logout();
+    } catch (err) {
+      if (!(err instanceof GitchaError)) throw err;
+      if (!err.unauthenticated) {
+        throw new Error(`Could not revoke the token: ${err.message}\nIt is still saved here, so you can try again. If the registry is gone for good, run \`gitcha logout --local-only\` to forget it on this machine.`);
+      }
+      note = 'the registry said this token was already revoked';
+    }
     removeCredentials(client.server);
-    out(green('✓ Signed out; this device token has been revoked.'));
+    out(green(`✓ Signed out; ${note}.`));
   },
 
   async status({ flags }) {
@@ -150,14 +171,15 @@ const commands = {
     const me = await client.whoami();
     if (flags.json) return out(JSON.stringify(me, null, 2));
     if (flags.hook) {
-      return out(`Gitcha: signed in to ${server} as ${me.user.username}; 2FA ${me.mfa.ok ? `ok (next check ${when(me.mfa.next_check_at)})` : `check due (${me.mfa.reason})`}.`);
+      // This line goes into the model's context: only our own words and the server address, never the registry's text.
+      return out(`Gitcha: signed in to ${server}; the two-factor check is ${me?.mfa?.ok === true ? 'current' : 'due (the user can run gitcha verify in a terminal)'}.`);
     }
     out(`${green('●')} Signed in to ${bold(server)} as ${bold(me.user.username)} ${dim(`(${me.user.role})`)}`);
     out(`  Device          ${me.device.name}`);
     out(`  Last 2FA        ${when(me.mfa.verified_at)}`);
     out(me.mfa.ok
       ? `  Next 2FA check  ${me.mfa.next_check_at ? when(me.mfa.next_check_at) : dim('periodic checks off')}`
-      : `  2FA status      ${yellow(`check due: ${REASON_TEXT[me.mfa.reason]}`)} Run ${cyan('gitcha verify')}.`);
+      : `  2FA status      ${yellow(`check due: ${reasonText(me.mfa.reason)}`)} Run ${cyan('gitcha verify')}.`);
   },
 
   async verify({ _, flags }) {
@@ -335,7 +357,9 @@ async function main() {
 
 main().catch((err) => {
   // The SessionStart hook must never break a Claude session.
-  if (process.argv.includes('--hook')) return out(`Gitcha: status unavailable (${err.message.split('\n')[0]}).`);
+  if (process.argv.includes('--hook')) {
+    return out(`Gitcha: status unavailable (${err instanceof GitchaError && ['network', 'timeout'].includes(err.code) ? 'the registry could not be reached' : 'the registry did not answer as expected'}).`);
+  }
   console.error(red('✗ ') + err.message);
   process.exitCode = 1;
 });

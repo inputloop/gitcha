@@ -13,12 +13,18 @@ export class GitchaError extends Error {
 }
 
 export class GitchaClient {
-  constructor({ server, token = null, userAgent = 'gitcha-cli' }) {
-    Object.assign(this, { server, token, userAgent });
+  // timeoutMs bounds the whole exchange, body included, so a registry that stalls cannot hang a command or a hook.
+  constructor({ server, token = null, userAgent = 'gitcha-cli', timeoutMs = 60_000 }) {
+    Object.assign(this, { server, token, userAgent, timeoutMs });
+  }
+
+  timedOut() {
+    return new GitchaError(0, 'timeout', `The Gitcha server at ${this.server} did not answer within ${Math.round(this.timeoutMs / 1000)} seconds.`);
   }
 
   async request(method, path, { body, raw = false } = {}) {
     let res;
+    const signal = AbortSignal.timeout(this.timeoutMs);
     try {
       res = await fetch(this.server + path, {
         method,
@@ -30,18 +36,26 @@ export class GitchaClient {
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
         redirect: 'error',
+        signal,
       });
     } catch (err) {
+      if (err.name === 'TimeoutError') throw this.timedOut();
       throw new GitchaError(0, 'network', `Cannot reach the Gitcha server at ${this.server} (${err.cause?.code ?? err.message}).`);
     }
     if (!res.ok) {
       let payload = {};
       try { payload = await res.json(); } catch { /* non-JSON error */ }
-      const { error, message, ...extra } = payload;
+      if (signal.aborted) throw this.timedOut();
+      const { error, message, ...extra } = payload ?? {};
       throw new GitchaError(res.status, error ?? 'http_error', message ?? `HTTP ${res.status}`, extra);
     }
     if (raw) return res;
-    return res.json();
+    try {
+      return await res.json();
+    } catch (err) {
+      if (err.name === 'TimeoutError' || signal.aborted) throw this.timedOut();
+      throw new GitchaError(res.status, 'bad_response', 'The Gitcha server sent an answer that is not JSON.');
+    }
   }
 
   health() { return this.request('GET', '/api/v1/health'); }
@@ -104,6 +118,13 @@ export class GitchaClient {
     if (version !== 'latest' && answered !== version) {
       throw new GitchaError(0, 'version_mismatch', `Asked the registry for ${name}@${version} and it answered with ${answered}. Refusing it.`);
     }
-    return { data: Buffer.from(await res.arrayBuffer()), integrity, version: answered };
+    let data;
+    try {
+      data = Buffer.from(await res.arrayBuffer());
+    } catch (err) {
+      if (err.name === 'TimeoutError' || err.name === 'AbortError') throw this.timedOut();
+      throw new GitchaError(0, 'network', `The download of ${name}@${version} from ${this.server} broke off (${err.cause?.code ?? err.message}).`);
+    }
+    return { data, integrity, version: answered };
   }
 }
