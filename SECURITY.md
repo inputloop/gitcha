@@ -66,7 +66,12 @@ Gitcha server**.
   absolute paths or `..` are rejected on both server and client.
 - The client refuses plain `http://` for anything but localhost.
 - Every security-relevant event is written to a per-user audit log shown on
-  the Account page.
+  the Account page. The log is kept per user (1,000 security rows, 200 rows of
+  what other people did to you, 200 package downloads, oldest dropped first),
+  so one user's activity cannot push another's rows out; the page lists
+  security activity apart from downloads and from changes others made, 15 to
+  a page. A row about something another person did never carries their
+  address.
 
 ## Teams
 

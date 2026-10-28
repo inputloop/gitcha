@@ -107,3 +107,41 @@ test('AUTH-4 (web): making someone an owner on the team page needs a code of its
     assert.equal(srv.store.team('acme').members[srv.store.userByName('bobby').id].role, 'owner');
   } finally { await srv.close(); }
 });
+
+const section = (html, title) => {
+  const i = html.indexOf(`<h2>${title}</h2>`);
+  if (i === -1) return '';
+  const j = html.indexOf('</section>', i);
+  return html.slice(i, j);
+};
+
+test('AUTH-5 / PROD-1: the Account page shows security events apart from downloads, 15 to a page', async () => {
+  const srv = await startServer();
+  try {
+    const u = createUser(srv);
+    const b = await loggedIn(srv, u);
+    const me = srv.store.userByName(u.username);
+    for (let i = 0; i < 40; i++) srv.store.audit({ userId: me.id, event: 'mfa.step_up', ip: '127.0.0.1', session: `s${i}` });
+    for (let i = 0; i < 30; i++) srv.store.audit({ userId: me.id, event: 'package.downloaded', package: `dl${i}`, version: '1.0.0', ip: '127.0.0.1' });
+    for (let i = 0; i < 3; i++) srv.store.audit({ userId: me.id, event: 'team.member_added', team: 'acme', by: 'someone', ip: '203.0.113.9' });
+    const first = (await b.go('/account')).text;
+    const sec = section(first, 'Recent security activity');
+    assert.equal((sec.match(/<code>/g) ?? []).length, 15, 'a page of fifteen');
+    assert.ok(!sec.includes('package.downloaded') && !sec.includes('team.member_added'), 'downloads and others\' changes are not in the security list');
+    assert.match(sec, /Page 1 of 3/);
+    assert.match(sec, /href="\/account\?events=2#activity"/);
+    const dl = section(first, 'Recent package downloads');
+    assert.equal((dl.match(/package.downloaded/g) ?? []).length, 15);
+    assert.match(dl, /Page 1 of 2/);
+    const others = section(first, 'Changes other people made to you');
+    assert.match(others, /team.member_added/);
+    assert.ok(!others.includes('203.0.113.9'), 'the other person\'s address is not shown');
+    // The last page of the security list, and an out-of-range page number, both land on real pages.
+    const last = section((await b.go('/account?events=3')).text, 'Recent security activity');
+    assert.match(last, /Page 3 of 3/);
+    assert.match(last, /Newer/);
+    assert.ok(!/Older/.test(last));
+    const wild = section((await b.go('/account?events=999999&downloads=-4')).text, 'Recent security activity');
+    assert.match(wild, /Page 3 of 3/);
+  } finally { await srv.close(); }
+});

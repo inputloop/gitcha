@@ -223,7 +223,7 @@ const CHECK_LABELS = {
 
 const hours = (ms) => (ms % 3600000 === 0 ? `${ms / 3600000} hours` : `${Math.round(ms / 60000)} minutes`);
 
-export const accountPage = ({ csrf, user, email, checks, sessions, currentHash, audit, notice, error, recoveryLeft, mfaState }) => h`
+export const accountPage = ({ csrf, user, email, checks, sessions, currentHash, activity, notice, error, recoveryLeft, mfaState }) => h`
 <div class="page-head"><h1>Account security</h1><span class="badge ok">2FA enabled</span></div>
 ${alert(notice, 'info')}${alert(error)}
 <div class="account-grid">
@@ -276,12 +276,24 @@ ${alert(notice, 'info')}${alert(error)}
     </tbody>
   </table>
 </section>
-<section class="card">
-  <h2>Recent security activity</h2>
+${activitySection('Recent security activity', 'Things done with your account: sign-ins, codes, devices, settings, publishing.', activity.security, 'activity')}
+${activity.others.total ? activitySection('Changes other people made to you', 'A team owner adding or re-roling you. Kept apart so it cannot bury your own activity.', activity.others) : ''}
+${activity.traffic.total ? activitySection('Recent package downloads', 'Installs made with your account. Kept apart from security activity.', activity.traffic) : ''}`;
+
+const activityRow = (e) => h`<tr><td><code>${e.event}</code></td><td>${[e.package && (e.version ? `${e.package}@${e.version}` : e.package), e.to && `to ${e.to}`, e.team && `team ${e.team}`, e.by && `by ${e.by}`, e.name, e.method].filter(Boolean).join(' · ')}</td><td class="muted">${e.ip ?? ''}</td><td class="muted">${ago(e.at)}</td></tr>`;
+
+/** One audit list with Newer / Older links; `list.param` is the query parameter that holds its page number. */
+function activitySection(title, help, list, id) {
+  const link = (page, text) => h`<a href="/account?${list.param}=${page}${id ? '#' + id : ''}">${text}</a>`;
+  return h`<section class="card"${id ? raw(` id="${id}"`) : ''}>
+  <h2>${title}</h2>
+  <p class="small muted">${help}</p>
   <table class="table compact"><tbody>
-  ${audit.map((e) => h`<tr><td><code>${e.event}</code></td><td>${[e.package && (e.version ? `${e.package}@${e.version}` : e.package), e.to && `to ${e.to}`, e.name, e.method].filter(Boolean).join(' · ')}</td><td class="muted">${e.ip ?? ''}</td><td class="muted">${ago(e.at)}</td></tr>`)}
+  ${list.rows.map(activityRow)}
   </tbody></table>
+  ${list.pages > 1 ? h`<p class="small muted">Page ${list.page} of ${list.pages}: ${list.page > 1 ? link(list.page - 1, '‹ Newer') : ''} ${list.page < list.pages ? link(list.page + 1, 'Older ›') : ''}</p>` : ''}
 </section>`;
+}
 
 export const errorPage = ({ status, message }) => h`<div class="auth-card"><h1>${status}</h1><p>${message}</p><a class="btn" href="/">Home</a></div>`;
 

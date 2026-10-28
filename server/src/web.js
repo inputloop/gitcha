@@ -370,12 +370,24 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
 
 
   // ---- account security -----------------------------------------------------
+  /** The three audit lists on the Account page, each 15 rows to a page: ?events=, ?others= and ?downloads= are page numbers. */
+  const PER_PAGE = 15;
+  const activityLists = (ctx, userId) => {
+    const one = (kind, param) => {
+      const total = auth.store.auditCount(userId, kind);
+      const pages = Math.max(1, Math.ceil(total / PER_PAGE));
+      const page = Math.min(pages, Math.max(1, Math.floor(Number(ctx.url.searchParams.get(param))) || 1));
+      return { rows: auth.store.auditFor(userId, PER_PAGE, { kind, skip: (page - 1) * PER_PAGE }), page, pages, param, total };
+    };
+    return { security: one('security', 'events'), others: one('others', 'others'), traffic: one('traffic', 'downloads') };
+  };
+
   const accountView = (ctx, a, { notice, error, status = 200 } = {}) => {
     const sessions = auth.store.sessionsForUser(a.user.id).filter((s) => s.kind !== 'enroll').sort((x, y) => y.lastSeen - x.lastSeen);
     const state = auth.mfaState(a);
     page(ctx, 'Account', V.accountPage({
       csrf: csrfToken(ctx), user: a.user, email: auth.emailOf(a.user), checks: auth.checkSettings(a.user), sessions, currentHash: a.hash,
-      audit: auth.store.auditFor(a.user.id, 15), notice, error, recoveryLeft: a.user.recoveryCodes.length,
+      activity: activityLists(ctx, a.user.id), notice, error, recoveryLeft: a.user.recoveryCodes.length,
       mfaState: { verifiedAt: a.session.mfaAt, nextCheckAt: state.nextCheckAt },
     }), { user: a.user, status, wide: true });
   };
