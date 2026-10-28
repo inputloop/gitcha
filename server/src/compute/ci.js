@@ -66,16 +66,18 @@ export class CiService {
     const o = owner ?? this.ownerFor(user, team);
     // Permission to deploy is decided now, by whoever started the build.
     if (found.pipeline.deploy && sandboxAgent) throw new HttpError(403, 'sandbox_no_deploy', 'Sandbox runs cannot deploy sites; a person deploys.');
+    let deployTarget;
     if (found.pipeline.deploy) {
       const site = this.sites.get(found.pipeline.deploy.site);
       if (!this.sites.canManage(user, site)) throw new HttpError(403, 'site_forbidden', `You cannot deploy to "${site.name}".`);
+      deployTarget = this.sites.identity(site); // the site as it is now; a name made again later is another site
     }
     if (!sandboxAgent || paidByPlan) this.billing?.check(ownerKey(o), 'build_minutes');
     const sourceSha = sha256(tarball);
     this.store.writeBlob(sourceSha, tarball);
     const job = this.jobs.enqueue({
       kind: 'ci', owner: o, createdBy: user.username, trigger, sourceSha, pipelineFile: found.file,
-      spec: { pipeline: found.pipeline }, timeoutMs: found.pipeline.timeoutMs, deploy: found.pipeline.deploy, deployAllowedBy: found.pipeline.deploy ? user.username : null,
+      spec: { pipeline: found.pipeline }, timeoutMs: found.pipeline.timeoutMs, deploy: found.pipeline.deploy, deployAllowedBy: found.pipeline.deploy ? user.username : null, deployTarget,
       sandboxAgent, paidByBudget: Boolean(sandboxAgent && !paidByPlan),
     });
     this.store.tx(() => this.store.audit({ userId: user.id, event: 'ci.queued', ip, job: job.id, owner: ownerKey(o), trigger }));
@@ -112,8 +114,16 @@ export class CiService {
       this.jobs.appendLog(job, '\n[gitcha] the pipeline asked to deploy but the runner returned no artifacts\n');
       return;
     }
+    // The build may have run for an hour: deploy only if the same site is still there and its starter may still publish to it.
+    const target = this.store.data.sites[job.deploy.site];
+    const starter = this.store.userByName(job.deployAllowedBy);
+    const same = target && (job.deployTarget === undefined || this.sites.identity(target) === job.deployTarget);
+    if (!same || !starter || starter.status !== 'active' || !this.sites.canManage(starter, target)) {
+      this.jobs.appendLog(job, '\n[gitcha] not deployed: the site was removed or changed hands, or the person who started this build can no longer deploy to it\n');
+      return;
+    }
     // Artifacts come from ordinary tar inside the job: re-pack them into Gitcha's own format.
-    const files = unpackFiles(this.store.readBlob(job.artifactSha), { root: '', maxBytes: this.config.hosting.maxSiteBytes * 4 });
+    const files = unpackFiles(this.store.readBlob(job.artifactSha), { root: '', maxBytes: this.config.hosting.maxSiteBytes });
     const dep = this.sites.deploy(null, job.deploy.site, { tarball: packFiles(files), source: 'ci', jobId: job.id }, 'runner');
     this.store.tx((d) => { d.jobs[job.id].deployed = { site: job.deploy.site, deploy: dep.id }; });
     this.jobs.appendLog(job, `\n[gitcha] deployed to site ${job.deploy.site} as ${dep.id}\n`);
