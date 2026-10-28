@@ -1,0 +1,10 @@
+{
+  "name": "gitcha",
+  "version": "0.1.0",
+  "description": "Search, install and publish packages on a self-hosted Gitcha registry, with mandatory two-factor authentication.",
+  "author": { "name": "Gitcha contributors" },
+  "homepage": "https://github.com/inputloop/gitcha",
+  "repository": "https://github.com/inputloop/gitcha",
+  "license": "AGPL-3.0-or-later",
+  "keywords": ["package-registry", "2fa", "totp", "mcp", "free-software"]
+}

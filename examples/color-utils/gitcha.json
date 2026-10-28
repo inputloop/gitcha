@@ -1,0 +1,7 @@
+{
+  "name": "color-utils",
+  "version": "0.3.2",
+  "description": "Convert between hex, RGB and HSL, and compute WCAG contrast ratios.",
+  "license": "MIT",
+  "files": ["index.js"]
+}

@@ -1,0 +1,8 @@
+{
+  "name": "tiny-logger",
+  "version": "2.1.0",
+  "description": "Leveled, timestamped console logging in a dozen lines, with zero dependencies.",
+  "license": "GPL-3.0-or-later",
+  "homepage": "https://github.com/inputloop/gitcha/tree/main/examples/tiny-logger",
+  "files": ["src/"]
+}

@@ -1,0 +1,7 @@
+{
+  "name": "hello-world",
+  "version": "1.0.0",
+  "description": "The smallest possible Gitcha package: a friendly greeting.",
+  "license": "MIT",
+  "files": ["index.js"]
+}

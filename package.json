@@ -1,0 +1,15 @@
+{
+  "name": "gitcha-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Gitcha: a free, self-hosted software package registry with mandatory 2FA, plus a Claude extension.",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "workspaces": ["server", "extension"],
+  "scripts": {
+    "start": "npm --workspace server start",
+    "test": "npm --workspace server test && npm --workspace extension test",
+    "screenshots": "node scripts/screenshots.mjs"
+  },
+  "engines": { "node": ">=20" }
+}

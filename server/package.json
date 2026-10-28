@@ -1,0 +1,17 @@
+{
+  "name": "gitcha-server",
+  "version": "0.1.0",
+  "description": "Gitcha: a free, self-hosted software package registry with mandatory two-factor authentication.",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "bin": { "gitcha-server": "src/index.js" },
+  "main": "src/app.js",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "gitcha",
+  "owner": { "name": "Gitcha contributors" },
+  "metadata": { "description": "Claude extensions for the Gitcha free software package registry." },
+  "plugins": [
+    {
+      "name": "gitcha",
+      "source": "./extension",
+      "description": "Search, install and publish packages on a Gitcha registry, with mandatory two-factor authentication.",
+      "version": "0.1.0",
+      "license": "AGPL-3.0-or-later"
+    }
+  ]
+}

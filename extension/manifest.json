@@ -1,0 +1,44 @@
+{
+  "manifest_version": "0.2",
+  "name": "gitcha",
+  "display_name": "Gitcha",
+  "version": "0.1.0",
+  "description": "Search, install and publish packages on a self-hosted Gitcha registry, with mandatory two-factor authentication.",
+  "long_description": "Connects Claude Desktop to a Gitcha package registry. Run `gitcha login` once in a terminal (password + authenticator code); the extension reuses that device token and asks you for a fresh 2FA code when the registry requires one.",
+  "author": { "name": "Gitcha contributors" },
+  "repository": { "type": "git", "url": "https://github.com/inputloop/gitcha" },
+  "license": "AGPL-3.0-or-later",
+  "icon": "icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "bin/gitcha-mcp.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/bin/gitcha-mcp.js"],
+      "env": { "GITCHA_SERVER": "${user_config.server_url}" }
+    }
+  },
+  "tools": [
+    { "name": "gitcha_status", "description": "Show sign-in status and when the next 2FA check is due" },
+    { "name": "gitcha_search", "description": "Search packages" },
+    { "name": "gitcha_package_info", "description": "Package details, versions and README" },
+    { "name": "gitcha_install", "description": "Install a package with integrity verification" },
+    { "name": "gitcha_publish", "description": "Publish a package (sensitive: needs a fresh 2FA code)" },
+    { "name": "gitcha_yank", "description": "Yank or restore a version (sensitive)" },
+    { "name": "gitcha_verify_2fa", "description": "Complete an intermittent 2FA check with a code from the user" },
+    { "name": "gitcha_security_settings", "description": "View or toggle follow-up 2FA checks" }
+  ],
+  "user_config": {
+    "server_url": {
+      "type": "string",
+      "title": "Gitcha registry URL",
+      "description": "Base URL of your Gitcha server, e.g. https://packages.example.org",
+      "default": "http://localhost:4873",
+      "required": true
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": { "node": ">=20.0.0" }
+  }
+}

@@ -1,0 +1,7 @@
+node_modules/
+gitcha-data/
+gitcha_modules/
+*.tgz
+.env
+.env.*
+secret.key

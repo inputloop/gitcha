@@ -1,0 +1,17 @@
+services:
+  gitcha:
+    build: .
+    ports:
+      - "127.0.0.1:4873:4873"
+    environment:
+      # Set to the https:// URL users will reach (enables Secure cookies).
+      GITCHA_PUBLIC_URL: "http://localhost:4873"
+      # Trust X-Forwarded-For only when running behind your own reverse proxy.
+      GITCHA_TRUST_PROXY: "false"
+      # Example: force periodic re-verification on for everyone.
+      # GITCHA_LOCKED_CHECKS: "interval"
+    volumes:
+      - gitcha-data:/data
+    restart: unless-stopped
+volumes:
+  gitcha-data:

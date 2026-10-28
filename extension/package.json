@@ -1,0 +1,16 @@
+{
+  "name": "gitcha",
+  "version": "0.1.0",
+  "description": "Claude extension (MCP server) and CLI for the Gitcha free software package registry. Zero dependencies.",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "bin": {
+    "gitcha": "bin/gitcha.js",
+    "gitcha-mcp": "bin/gitcha-mcp.js"
+  },
+  "files": ["bin", "lib", "skills", "commands", "hooks", ".claude-plugin", ".mcp.json", "manifest.json", "README.md"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
