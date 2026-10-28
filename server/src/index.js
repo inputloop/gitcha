@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 import { loadConfig } from './config.js';
 import { createApp } from './app.js';
+import { installLastResort } from './http.js';
 
+installLastResort();
 const config = loadConfig(process.env, { trustProxy: /^(1|true)$/i.test(process.env.GITCHA_TRUST_PROXY ?? '') });
 const { server, version } = createApp(config);
 

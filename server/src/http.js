@@ -21,7 +21,11 @@ export class Router {
       if (!m) continue;
       if (r.method !== method && !(method === 'HEAD' && r.method === 'GET')) continue;
       const params = {};
-      r.keys.forEach((k, i) => { params[k] = decodeURIComponent(m[i + 1]); });
+      try {
+        r.keys.forEach((k, i) => { params[k] = decodeURIComponent(m[i + 1]); });
+      } catch {
+        throw new HttpError(400, 'bad_request', 'The address has a malformed % escape.');
+      }
       return { handler: r.handler, params };
     }
     return null;
@@ -52,13 +56,43 @@ export async function readForm(req, limit = 64 * 1024) {
   return Object.fromEntries(new URLSearchParams((await readBody(req, limit)).toString('utf8')));
 }
 
+/**
+ * A cookie we cannot decode keeps its raw text rather than failing the request: another app on a sibling
+ * subdomain can plant `a=%`, and that must not turn every page for the browser into an error.
+ */
 export function parseCookies(header = '') {
   const out = {};
-  for (const part of header.split(';')) {
+  for (const part of String(header).split(';')) {
     const i = part.indexOf('=');
-    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    if (i <= 0) continue;
+    const raw = part.slice(i + 1).trim();
+    let value = raw;
+    try { value = decodeURIComponent(raw); } catch { /* keep the raw text */ }
+    out[part.slice(0, i).trim()] = value;
   }
   return out;
+}
+
+/** The request target as a URL on a fixed base. `//x/y` stays a path; anything that is not a path is a 400. */
+export function requestUrl(req) {
+  const target = req.url ?? '';
+  if (!target.startsWith('/')) throw new HttpError(400, 'bad_request', 'The request target must be a path.');
+  try {
+    return new URL('http://localhost' + target);
+  } catch {
+    throw new HttpError(400, 'bad_request', 'The request target is not a valid address.');
+  }
+}
+
+/**
+ * Last resort for anything that escapes a handler: log it and keep serving. The request handler catches its own
+ * errors; this is for what no handler owns (a socket error with no listener, a rejection nobody awaited), so one
+ * stranger's request can never become an outage for everyone.
+ */
+export function installLastResort(proc = process, log = console.error) {
+  const keep = (kind) => (err) => log(`gitcha: ${kind} (kept serving): ${err?.stack ?? err}`);
+  proc.on('unhandledRejection', keep('unhandled rejection'));
+  proc.on('uncaughtException', keep('uncaught exception'));
 }
 
 export function cookie(name, value, { maxAge, secure, httpOnly = true } = {}) {
