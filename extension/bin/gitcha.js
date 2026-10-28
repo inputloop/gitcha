@@ -30,9 +30,10 @@ ${bold('Packages')}
   gitcha search [query]                         find packages
   gitcha info <name>                            show a package and its versions
   gitcha install [name[@version]] [--dir DIR]   install one package, or all from gitcha.json
+                                                (a yanked version needs --allow-yanked)
   gitcha publish [DIR] [--team T] [--private]  publish DIR (default: .), optionally owned by team T
                                                 (--dry-run lists the files and sizes, uploads nothing)
-  gitcha yank <name@version> [--undo]           hide a broken version from installs
+  gitcha yank <name@version> [--undo]           keep "latest" off a version; installing it by name needs --allow-yanked
   gitcha transfer <name> <team>                 share a package by moving it into a team
   gitcha access <name> team-only|public         who can see a team package
 
@@ -215,12 +216,16 @@ const commands = {
   async install({ _, flags }) {
     const client = authedClient(flags);
     const dir = flags.dir || process.cwd();
+    const allowYanked = Boolean(flags['allow-yanked']);
     const results = _[1]
-      ? [await withStepUp(client, () => installOne(client, parseSpec(_[1]), { dir }))]
-      : await withStepUp(client, () => installAll(client, { dir }));
+      ? [await withStepUp(client, () => installOne(client, parseSpec(_[1]), { dir, allowYanked }))]
+      : await withStepUp(client, () => installAll(client, { dir, allowYanked }));
     if (flags.json) return out(JSON.stringify(results, null, 2));
     if (!results.length) return out(dim('Nothing to install (no "dependencies" in gitcha.json).'));
-    for (const r of results) out(`${green('✓')} ${bold(r.name)}@${r.version} ${dim(`→ ${path.relative(process.cwd(), r.path) || r.path} (${r.files} files, ${r.integrity.slice(0, 19)}…)`)}`);
+    for (const r of results) {
+      out(`${green('✓')} ${bold(r.name)}@${r.version} ${dim(`→ ${path.relative(process.cwd(), r.path) || r.path} (${r.files} files, ${r.integrity.slice(0, 19)}…)`)}`);
+      for (const w of r.warnings) process.stderr.write(`${yellow('!')} ${w}\n`);
+    }
   },
 
   async publish({ _, flags }) {

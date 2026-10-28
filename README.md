@@ -868,7 +868,7 @@ gitcha verify [CODE]                          re-confirm 2FA now
 gitcha security [--interval on|off] [--new-network on|off] [--sensitive on|off]
 gitcha search [query]
 gitcha info <name>
-gitcha install [name[@version]] [--dir DIR]   one package, or everything in gitcha.json
+gitcha install [name[@version]] [--dir DIR] [--allow-yanked]   one package, or everything in gitcha.json
 gitcha publish [DIR] [--team T] [--private] [--dry-run]
 gitcha yank <name@version> [--undo]
 gitcha transfer <name> <team>                 move a package into a team to share it
@@ -922,7 +922,9 @@ A package is any directory with a `gitcha.json`:
 - `private` (optional, team packages only): `true` makes it visible to team
   members only.
 - `version`: semantic version. Published versions are immutable; yank a bad
-  one instead of overwriting it.
+  one instead of overwriting it. `latest` skips yanked versions; installing
+  one by name (or from a lockfile that pins it) needs `--allow-yanked` and
+  prints a warning.
 - `files` (optional): globs naming what to ship, relative to the project;
   the default is `src/`, `lib/` and `bin/`. `gitcha.json`, `README*` and
   `LICENSE*` always ship. A name that starts with a dot ships only when
@@ -938,7 +940,10 @@ A package is any directory with a `gitcha.json`:
 
 `gitcha install` extracts into `gitcha_modules/<name>/` and writes
 `gitcha-lock.json` with the exact version and SHA-256 hash. Commit the
-lockfile. A later install fails loudly if the bytes don't match.
+lockfile. A later install asks the registry for exactly the locked version
+and fails loudly if it answers another one or the bytes don't match. The
+ranges under `dependencies` are recorded but not resolved: only the lockfile
+pins versions.
 
 Working examples are in [`examples/`](examples).
 

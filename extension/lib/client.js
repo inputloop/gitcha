@@ -90,12 +90,20 @@ export class GitchaClient {
     return body.data;
   }
 
+  /**
+   * Download a tarball. The reply must carry the integrity and version headers, and when a version was asked
+   * for it must be that version: a registry that answers another one is refused, not believed.
+   */
   async download(name, version = 'latest') {
     const res = await this.request('GET', `/api/v1/packages/${encodeURIComponent(name)}/${encodeURIComponent(version)}/tarball`, { raw: true });
-    return {
-      data: Buffer.from(await res.arrayBuffer()),
-      integrity: res.headers.get('x-gitcha-integrity'),
-      version: res.headers.get('x-gitcha-version'),
-    };
+    const integrity = res.headers.get('x-gitcha-integrity');
+    const answered = res.headers.get('x-gitcha-version');
+    if (!integrity || !/^sha256-[0-9a-f]{64}$/.test(integrity) || !answered) {
+      throw new GitchaError(0, 'bad_response', `The registry sent ${name}@${version} without a valid integrity or version header. Refusing it.`);
+    }
+    if (version !== 'latest' && answered !== version) {
+      throw new GitchaError(0, 'version_mismatch', `Asked the registry for ${name}@${version} and it answered with ${answered}. Refusing it.`);
+    }
+    return { data: Buffer.from(await res.arrayBuffer()), integrity, version: answered };
   }
 }
