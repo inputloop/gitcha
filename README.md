@@ -65,6 +65,7 @@ ask *you* for the code.
 
 ## Contents
 
+- [Securing your deployment](#securing-your-deployment)
 - [Features](#features)
 - [Quick start](#quick-start)
 - [Walkthrough with screenshots](#walkthrough-with-screenshots)
@@ -101,6 +102,107 @@ ask *you* for the code.
 - [Project layout](#project-layout)
 - [Development](#development)
 - [License](#license)
+
+---
+
+## Securing your deployment
+
+Read this before a Gitcha server faces the internet. The code already does
+2FA, encryption at rest, CSRF, rate limits and keeping user code off the
+server; what remains is how the machines around it are set up.
+[DEPLOY.md](DEPLOY.md) has the setup steps these checks refer to.
+
+### Before going live
+
+- [ ] **Only the TLS proxy is reachable.** Gitcha listens on
+  `127.0.0.1:4873`; only Caddy (or your proxy) is open, on 443 and 80.
+  Firewall everything else, Gitcha's own port included.
+- [ ] **Proxy settings match reality.** Set `GITCHA_PUBLIC_URL=https://…`
+  and `GITCHA_TRUST_PROXY=true` only when a proxy you control is in front;
+  otherwise clients could fake their address past the rate limits and the
+  new-network check.
+- [ ] **Hosting domains are separate registrable domains** from the UI's
+  (`pages.example.net`, not `pages.gitcha.example.org`), so a hosted site
+  cannot set cookies for Gitcha.
+- [ ] **`secret.key` is backed up apart from the database**, ideally
+  offline. With both, a thief can undo the encryption; without the key, no
+  one can sign in.
+- [ ] **Payment keys live only in the environment** file
+  (`/etc/inputloop/gitcha/gitcha.env`, mode 640, root and group `gitcha`),
+  never in a repository. Use Stripe and PayPal test keys first.
+- [ ] **You registered first.** The first account becomes the administrator.
+  Then, if sign-up should be closed, set `GITCHA_OPEN_REGISTRATION=false`.
+- [ ] **The 2FA checks are locked on:**
+  `GITCHA_LOCKED_CHECKS=interval,new_network,sensitive`.
+- [ ] **Runners are isolated.** This matters most. bContain VMs still have
+  outbound network access, run everything as root, and have no disk quotas.
+  So:
+  - runners run on their own VMs, never on the server and never inside an
+    internal network;
+  - each runner VM may reach only the Gitcha server's HTTPS address and the
+    public internet, no private or internal addresses;
+  - give each runner VM a disk quota or its own partition;
+  - never use the `process` backend in production (it has no isolation).
+- [ ] **SSH for git** uses `deploy/sshd-gitcha.conf.example` as written: only
+  the Gitcha account gets the forced command, and admin SSH keeps its own
+  rules.
+- [ ] **C4OK's console key** file is mode 600 and owned by C4OK's account,
+  and only operations staff have the staff role.
+
+### Prove it on the live system
+
+- [ ] Nothing answers on Gitcha's port from outside (this should fail):
+
+  ```bash
+  nc -zv gitcha.example.org 4873
+  ```
+
+- [ ] The proxy is refused a certificate for an unknown name (expect `404`):
+
+  ```bash
+  curl -s -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:4873/api/v1/hosting/tls-allowed?domain=evil.example"
+  ```
+
+- [ ] A CI job cannot reach internal addresses: add a step like this to a
+  test pipeline, and it must fail:
+
+  ```bash
+  curl -m 5 http://10.0.0.1/
+  ```
+
+- [ ] Signing in from a new network asks for a code.
+- [ ] Publishing more than 10 minutes after your last code asks for a fresh
+  one.
+- [ ] A custom domain without its TXT record is not served.
+- [ ] A payment webhook with a wrong signature is rejected.
+- [ ] Git over SSH works for a registered key and refuses an unknown one.
+- [ ] A test job runs inside a real bContain VM.
+
+The last two have never been run against a real `sshd` and bContain VM, and
+billing has not yet met the real Stripe and PayPal sandboxes: try them first.
+
+### Keeping it secure
+
+- [ ] **Updates:** OS security updates on the server, the runner VMs and the
+  bContain base images; rebuild and reinstall the `.deb`s when Gitcha
+  changes.
+- [ ] **Backups:** `/var/lib/gitcha` (database, repositories, sites) daily,
+  and one practice restore on a spare VM.
+- [ ] **Watch:** `journalctl -u gitcha`, the proxy's access log, people's
+  security logs on their Account pages, and the operations queue in C4OK.
+- [ ] **Key hygiene:** revoke unused console, SSH, GPG, runner and agent
+  keys; rotate the payment webhook secrets yearly, or at once if someone who
+  had them leaves.
+- [ ] **If something leaks:** revoking a device or key works at once, and
+  deleting a runner cuts off its token. If `secret.key` may have leaked,
+  every account must reset its password and 2FA (there is no one-step key
+  rotation yet).
+
+**Known limits.** The database is one JSON file in one process, with no
+replication. `/api/v1/health` shows the version and 2FA policy to anyone;
+restrict it at the proxy if you prefer. Both systemd services already run as
+unprivileged users with systemd's sandboxing on, and the server can write
+only to `/var/lib/gitcha`.
 
 ---
 
