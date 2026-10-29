@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { api, startServer } from './helpers.js';
 import { packFiles } from '../../extension/lib/tar.js';
-import { setup, subscribe, billingOf, stripeEvent, postStripe, postPaypal, ppEvent, ppHeaders, STRIPE_WH, DAY } from './billing-fixtures.js';
+import { setup, subscribe, billingOf, auditRows, stripeEvent, postStripe, postPaypal, ppEvent, ppHeaders, STRIPE_WH, DAY } from './billing-fixtures.js';
 
 const post = (srv, token, p, body) => api(srv.url, 'POST', p, { token, body });
 const tgz = (files) => packFiles(Object.entries(files).map(([path, data]) => ({ path, data: Buffer.from(data) }))).toString('base64');
@@ -68,7 +68,7 @@ test('BIL-15 (M17): an event naming something that is not a Gitcha owner leaves 
     const ghost = (owner, id) => stripeEvent(srv, 'invoice.payment_failed', { subscription: 'sub_nobody', subscription_details: { metadata: { owner } } }, { id });
     assert.equal((await postStripe(srv, ghost('constructor', 'evt_c'))).body.reason, 'unknown_subscription');
     assert.equal((await postStripe(srv, ghost('user:zed', 'evt_z'))).body.reason, 'unknown_subscription');
-    const rows = srv.store.data.audit.filter((a) => a.event === 'billing.event_ignored');
+    const rows = auditRows(srv).filter((a) => a.event === 'billing.event_ignored');
     assert.deepEqual(rows.map((a) => a.owner), ['user:zed'], 'only the well-formed owner is written down');
     assert.ok(srv.store.data.billing.events['stripe:evt_c'], 'but both were marked seen');
   } finally { await srv.close(); }

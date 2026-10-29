@@ -3,7 +3,7 @@
 // BIL-2c: how long a delivered event is remembered, and what happens to one older than that.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { setup, subscribe, billingOf, stripeEvent, postStripe, postPaypal, ppEvent, ppHeaders, DAY } from './billing-fixtures.js';
+import { setup, subscribe, billingOf, auditRows, stripeEvent, postStripe, postPaypal, ppEvent, ppHeaders, DAY } from './billing-fixtures.js';
 
 const unknownSub = (srv, n, id) => stripeEvent(srv, 'invoice.payment_failed', { subscription: `sub_unknown_${n}` }, { id });
 
@@ -45,7 +45,7 @@ test('BIL-2c: a PayPal delivery created longer ago than events are remembered is
     assert.deepEqual(res.body, { ignored: true, reason: 'too_old' });
     const view = await billingOf(srv, token);
     assert.deepEqual([view.plan, view.subscription.status], ['pro', 'active']);
-    const row = srv.store.data.audit.find((a) => a.event === 'billing.event_ignored' && a.reason === 'too_old');
+    const row = auditRows(srv).find((a) => a.event === 'billing.event_ignored' && a.reason === 'too_old');
     assert.equal(row?.owner, 'user:alice', 'and the refusal is written down');
     // A recent one still applies.
     const fresh = ppEvent(srv, 'BILLING.SUBSCRIPTION.CANCELLED', { id: paid.subId, status: 'CANCELLED', custom_id: 'user:alice' }, { at: srv.clock() - DAY });

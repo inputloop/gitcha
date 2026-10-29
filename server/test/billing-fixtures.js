@@ -149,6 +149,11 @@ export async function subscribe(srv, fake, token, { plan = 'pro', provider = 'st
 
 export const billingOf = async (srv, token, owner) => (await api(srv.url, 'GET', `/api/v1/billing${owner ? `?owner=${encodeURIComponent(owner)}` : ''}`, { token })).body;
 export const dbAccount = (srv, key) => srv.store.data.billing.accounts[key];
+/** Every audit row, whichever shape the store keeps them in (one list, or per user in three). */
+export const auditRows = (srv) => {
+  const log = srv.store.data.audit;
+  return Array.isArray(log) ? log : Object.values(log).flatMap((s) => [...s.security, ...s.others, ...s.traffic]);
+};
 
 let seq = 0;
 export function stripeSign(body, t) {

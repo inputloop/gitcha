@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { api } from './helpers.js';
 import { BillingService } from '../src/billing/billing.js';
-import { setup, subscribe, billingOf, dbAccount, stripeEvent, postStripe, postPaypal, DAY } from './billing-fixtures.js';
+import { setup, subscribe, billingOf, dbAccount, auditRows, stripeEvent, postStripe, postPaypal, DAY } from './billing-fixtures.js';
 
 const confirm = (srv, token, body) => api(srv.url, 'POST', '/api/v1/billing/confirm', { token, body });
 const failedInvoice = (srv, subId, id, owner = 'user:alice') => stripeEvent(srv, 'invoice.payment_failed', { subscription: subId, subscription_details: { metadata: { owner } } }, { id });
@@ -126,7 +126,7 @@ test('BIL-5b: an event for a subscription the account does not hold is recorded 
     const view = await billingOf(srv, token);
     assert.equal(view.plan, 'pro');
     assert.equal(dbAccount(srv, 'user:alice').subscription.subscriptionId, subId);
-    assert.ok(srv.store.data.audit.some((a) => a.event === 'billing.event_ignored' && a.owner === 'user:alice'), 'an audit row says an event was ignored');
+    assert.ok(auditRows(srv).some((a) => a.event === 'billing.event_ignored' && a.owner === 'user:alice'), 'an audit row says an event was ignored');
   } finally { await srv.close(); }
 });
 

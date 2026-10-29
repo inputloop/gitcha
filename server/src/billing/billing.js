@@ -387,11 +387,11 @@ export class BillingService {
   // ---- writes ---------------------------------------------------------------------------------
   /**
    * Run `change(d)` and, if `seen` is given, mark that event seen in the same write. If the write fails, memory is put back
-   * (the account, the close queues, the audit rows and the marker) so nothing half-done is kept and the provider's retry starts clean.
+   * (the account, the close queues and the marker) so nothing half-done is kept and the provider's retry starts clean.
    */
   atomically(key, change, seen = null) {
     const bd = this.data;
-    const was = { account: key ? structuredClone(bd.accounts[key]) : undefined, closed: structuredClone(bd.closed), pending: structuredClone(bd.pendingCancels), audit: this.store.data.audit.length, marker: seen ? bd.events[seen] : undefined };
+    const was = { account: key ? structuredClone(bd.accounts[key]) : undefined, closed: structuredClone(bd.closed), pending: structuredClone(bd.pendingCancels), marker: seen ? bd.events[seen] : undefined };
     const put = (obj, k, v) => { if (v === undefined) delete obj[k]; else obj[k] = v; };
     try {
       return this.store.tx((d) => {
@@ -400,11 +400,12 @@ export class BillingService {
         return out;
       });
     } catch (err) {
-      if (key) put(bd.accounts, key, was.account);
-      put(bd, 'closed', was.closed);
-      put(bd, 'pendingCancels', was.pending);
-      if (seen) put(bd.events, seen, was.marker);
-      this.store.data.audit.length = Math.min(this.store.data.audit.length, was.audit);
+      // A failed write already put the store's memory back to the file (the audit rows with it); a throw before the write did not. Either way the billing state is put back as it was.
+      const now = this.data;
+      if (key) put(now.accounts, key, was.account);
+      put(now, 'closed', was.closed);
+      put(now, 'pendingCancels', was.pending);
+      if (seen) put(now.events, seen, was.marker);
       throw err;
     }
   }
@@ -430,9 +431,10 @@ export class BillingService {
 
   /** The history row and the audit rows for one change: what changed, by whom or what, and (for a webhook) which event. */
   trail(d, key, a, event, actor = {}, { status, plan, provider } = {}) {
-    const row = { status, plan, provider, by: actor.by, ...(actor.eventId ? { eventId: actor.eventId } : {}), ...(a.subscription?.subscriptionId ? { subscriptionId: a.subscription.subscriptionId } : {}) };
+    // `via` is what made the change (the member, the return page, a webhook, the refresh); `by` is the member's name, as the audit log reads it.
+    const row = { status, plan, provider, via: actor.by, ...(actor.username ? { by: actor.username } : {}), ...(actor.eventId ? { eventId: actor.eventId } : {}), ...(a.subscription?.subscriptionId ? { subscriptionId: a.subscription.subscriptionId } : {}) };
     a.history = [...(a.history ?? []).slice(-49), { at: this.clock(), event, ...row }];
-    const entry = { event: `billing.${event}`, owner: key, ...row, ...(actor.username ? { actor: actor.username } : {}) };
+    const entry = { event: `billing.${event}`, owner: key, ...row };
     const who = this.audience(key, actor);
     if (!who.length) this.store.audit(entry);
     for (const userId of who) this.store.audit({ userId, ...entry, ...(userId === actor.userId && actor.ip ? { ip: actor.ip } : {}) });

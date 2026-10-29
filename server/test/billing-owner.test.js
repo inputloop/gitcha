@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { api } from './helpers.js';
 import { BillingService } from '../src/billing/billing.js';
-import { setup, subscribe, billingOf, dbAccount } from './billing-fixtures.js';
+import { setup, subscribe, billingOf, dbAccount, auditRows } from './billing-fixtures.js';
 
 const post = (srv, token, p, body) => api(srv.url, 'POST', p, { token, body });
 
@@ -45,7 +45,7 @@ test('BIL-9: closeAccount (the team-deletion hook) cancels at the provider, clea
     assert.equal(dbAccount(srv, 'team:acme'), undefined, 'no record, so no portal customer and no plan');
     assert.equal(srv.store.data.billing.closed.at(-1).key, 'team:acme');
     assert.equal(srv.store.data.billing.pendingCancels.length, 0, 'nothing left to cancel');
-    assert.ok(srv.store.data.audit.some((a) => a.event === 'billing.account_closed' && a.owner === 'team:acme'));
+    assert.ok(auditRows(srv).some((a) => a.event === 'billing.account_closed' && a.owner === 'team:acme'));
     // The same owner can start again from Free.
     await post(srv, token, '/api/v1/teams', { name: 'acme' });
     assert.equal((await billingOf(srv, token, 'team:acme')).plan, 'free');
