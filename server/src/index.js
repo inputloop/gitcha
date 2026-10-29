@@ -13,12 +13,18 @@ function startOrExplain() {
     const config = loadConfig(process.env);
     return { config, ...createApp(config) };
   } catch (err) {
-    if (!(err instanceof StartupError)) throw err;
-    console.error(`gitcha: cannot start: ${err.message}`);
+    // The last-resort handlers keep a RUNNING server up; a server that never started must exit non-zero, or a
+    // supervisor (systemd Restart=on-failure, a container) would think it finished.
+    console.error(`gitcha: cannot start: ${err instanceof StartupError ? err.message : (err?.stack ?? err)}`);
     process.exit(1);
   }
 }
 const { config, server, version } = startOrExplain();
+server.once('error', (err) => {
+  if (server.listening) throw err;
+  console.error(`gitcha: cannot start: could not listen on ${config.host}:${config.port} (${err.code ?? err.message})`);
+  process.exit(1);
+});
 
 server.listen(config.port, config.host, () => {
   const h = (ms) => `${Math.round(ms / 60000)} min`;

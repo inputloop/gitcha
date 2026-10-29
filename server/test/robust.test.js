@@ -54,3 +54,18 @@ test('AUTH-1: the last-resort handlers log and return instead of ending the proc
   assert.match(lines[0], /unhandled rejection \(kept serving\).*nobody awaited me/s);
   assert.match(lines[1], /uncaught exception \(kept serving\).*no listener/s);
 });
+
+test('DEP-1: a server that cannot listen says so in one line and exits 1, not 0 "kept serving"', async () => {
+  const net = await import('node:net');
+  const held = net.createServer();
+  await new Promise((r) => held.listen(0, '127.0.0.1', r));
+  const { port } = held.address();
+  const srv = await spawnServer({ env: { GITCHA_PORT: String(port) } });
+  try {
+    assert.equal(srv.started, false);
+    assert.equal(await srv.exited, 1, `exit code, stderr: ${srv.err()}`);
+    const lines = srv.err().trim().split('\n');
+    assert.equal(lines.length, 1, srv.err());
+    assert.match(lines[0], /^gitcha: cannot start: could not listen on 127\.0\.0\.1:\d+ \(EADDRINUSE\)/);
+  } finally { await srv.stop(); held.close(); }
+});
