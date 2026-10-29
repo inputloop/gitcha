@@ -14,6 +14,21 @@ import { unpackFiles, extractTo } from '../../../extension/lib/tar.js';
 export const SITE_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const RESERVED = new Set(['www', 'api', 'admin', 'mail', 'smtp', 'imap', 'ftp', 'ns', 'ns1', 'ns2', 'gitcha', 'ring', 'ops', 'status', 'billing', 'static', 'cdn', 'login', 'auth', 'kiosk']);
 export const SITE_CONFIG = 'gitcha.site.json';
+// One owner may hold this many sites whatever the billing setting (each is a name a certificate can be ordered for).
+const MAX_SITES = 25;
+// One owner's sites together may hold this much on disk (all kept deploys, unpacked), whatever the billing setting.
+// A conservative default of ten times the per-site cap (the keepers can set config.hosting.maxOwnerBytes).
+const OWNER_BYTES_FACTOR = 10;
+// Public suffixes with a second level that is not itself registrable (co.uk, com.au). A short list, not the Public Suffix List.
+const SECOND_LEVELS = new Set(['co', 'com', 'org', 'net', 'gov', 'edu', 'ac', 'or', 'ne', 'go']);
+
+/** The registrable part of a host, by a coarse rule: the last two labels, three under a two-letter country code with a second level. */
+export function registrableDomain(host) {
+  const labels = String(host ?? '').toLowerCase().replace(/\.$/, '').split('.').filter(Boolean);
+  if (labels.length < 2) return null;
+  const n = labels.length >= 3 && labels.at(-1).length === 2 && SECOND_LEVELS.has(labels.at(-2)) ? 3 : 2;
+  return labels.slice(-n).join('.');
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -56,6 +71,14 @@ export class SiteService {
     Object.assign(this, { store, config, teams, clock });
     this.root = path.join(config.dataDir, 'sites');
     fs.mkdirSync(this.root, { recursive: true, mode: 0o700 });
+    // A hosting domain in the same registrable domain as the UI would make tenants' pages same-site with the UI's
+    // cookies. Refuse it at start. The rule is coarse (no Public Suffix List is bundled); see DEPLOY.md.
+    const ui = registrableDomain(new URL(config.publicUrl).hostname);
+    for (const d of config.hosting.domains) {
+      if (ui && registrableDomain(d) === ui) {
+        throw new Error(`GITCHA_HOSTING_DOMAINS: "${d}" shares the registrable domain ${ui} with GITCHA_PUBLIC_URL. Use a separate registrable domain for hosted sites.`);
+      }
+    }
   }
 
   // ---- ownership -----------------------------------------------------------
@@ -124,8 +147,9 @@ export class SiteService {
     if (this.store.data.sites[name]) throw new HttpError(409, 'site_exists', `The site name "${name}" is taken.`);
     const owner = this.ownerFor(user, team);
     const count = Object.values(this.store.data.sites).filter((s) => s.owner.type === owner.type && s.owner.name === owner.name).length;
+    if (count >= (this.config.hosting.maxSites ?? MAX_SITES)) throw new HttpError(403, 'site_limit', 'This account holds as many sites as it may.');
     this.billing?.check(`${owner.type}:${owner.name}`, 'sites', count);
-    const site = { name, owner, description: String(description).slice(0, 300), createdAt: this.clock(), createdBy: user.username, deploys: [], activeDeploy: null, config: {} };
+    const site = { name, uid: crypto.randomBytes(8).toString('hex'), owner, description: String(description).slice(0, 300), createdAt: this.clock(), createdBy: user.username, deploys: [], activeDeploy: null, config: {} };
     this.store.tx((d) => {
       d.sites[name] = site;
       this.store.audit({ userId: user.id, event: 'site.created', ip, site: name, owner: `${owner.type}:${owner.name}` });
@@ -133,30 +157,63 @@ export class SiteService {
     return site;
   }
 
+  /** Which site this is, so a name that was deleted and made again is not mistaken for it. */
+  identity(site) { return site.uid ?? String(site.createdAt); }
+
+  /** Unpacked bytes held by every kept deploy of the owner's sites. */
+  storageUsed(owner) {
+    let n = 0;
+    for (const s of Object.values(this.store.data.sites)) {
+      if (s.owner.type === owner.type && s.owner.name === owner.name) for (const d of s.deploys) n += d.bytes ?? d.size ?? 0;
+    }
+    return n;
+  }
+
   /** Store a deploy from a gzipped tarball (files rooted at package/). */
   deploy(user, name, { tarball, activate = true, source = 'upload', jobId = null }, ip) {
     const site = user ? this.manageable(user, name) : this.get(name);
     if (!Buffer.isBuffer(tarball) || !tarball.length) throw new HttpError(400, 'no_tarball', 'No site tarball was sent.');
-    if (tarball.length > this.config.hosting.maxSiteBytes) throw new HttpError(413, 'too_large', 'Site is too large.');
+    const cap = this.config.hosting.maxSiteBytes;
+    if (tarball.length > cap) throw new HttpError(413, 'too_large', 'Site is too large.');
     let files;
-    try { files = unpackFiles(tarball, { maxBytes: this.config.hosting.maxSiteBytes * 4 }); } catch (err) {
+    // The cap is on what the site holds once unpacked, not on the compressed upload.
+    try { files = unpackFiles(tarball, { maxBytes: cap }); } catch (err) {
+      if (err.code === 'ERR_BUFFER_TOO_LARGE' || /too large|exceeds|expands to more than/i.test(err.message)) throw new HttpError(413, 'too_large', 'Site is too large once unpacked.');
       throw new HttpError(400, 'bad_tarball', `Invalid site tarball: ${err.message}`);
     }
     if (!files.length) throw new HttpError(400, 'empty_site', 'The site has no files.');
+    const total = files.reduce((n, f) => n + f.data.length, 0);
+    if (total > cap) throw new HttpError(413, 'too_large', 'Site is too large once unpacked.');
+    const used = this.storageUsed(site.owner);
+    if (used + total > (this.config.hosting.maxOwnerBytes ?? cap * OWNER_BYTES_FACTOR)) {
+      throw new HttpError(413, 'storage_full', `${site.owner.name} already holds ${used} bytes of sites; delete a site or old deploys first.`);
+    }
+    this.billing?.check(`${site.owner.type}:${site.owner.name}`, 'site_bytes', used + total);
     const config = parseSiteConfig(files.find((f) => f.path === SITE_CONFIG)?.data);
     const id = `${new Date(this.clock()).toISOString().replace(/[-:T]/g, '').slice(0, 14)}-${crypto.randomBytes(3).toString('hex')}`;
     const dir = path.join(this.root, site.name, id);
-    extractTo(files.filter((f) => f.path !== SITE_CONFIG), dir);
     const record = {
       id, createdAt: this.clock(), by: user?.username ?? `ci:${jobId}`, source, jobId,
-      files: files.length, size: tarball.length, integrity: `sha256-${sha256(tarball)}`, config,
+      files: files.length, size: tarball.length, bytes: total, integrity: `sha256-${sha256(tarball)}`, config,
     };
-    this.store.tx((d) => {
-      const s = d.sites[site.name];
-      s.deploys.push(record);
-      if (activate) { s.activeDeploy = id; s.config = config; }
-      this.store.audit({ userId: user?.id, event: 'site.deployed', ip, site: site.name, deploy: id, source });
-    });
+    try {
+      extractTo(files.filter((f) => f.path !== SITE_CONFIG), dir);
+    } catch (err) {
+      // A deploy that fails leaves nothing behind: no directory in no record.
+      fs.rmSync(dir, { recursive: true, force: true });
+      throw new HttpError(400, 'bad_tarball', `The site cannot be unpacked (${err.code ?? 'conflicting paths'}).`);
+    }
+    try {
+      this.store.tx((d) => {
+        const s = d.sites[site.name];
+        s.deploys.push(record);
+        if (activate) { s.activeDeploy = id; s.config = config; }
+        this.store.audit({ userId: user?.id, event: 'site.deployed', ip, site: site.name, deploy: id, source });
+      });
+    } catch (err) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      throw err;
+    }
     this.prune(site.name);
     return record;
   }
@@ -189,6 +246,7 @@ export class SiteService {
     this.store.tx((d) => {
       delete d.sites[site.name];
       for (const [h, dom] of Object.entries(d.domains)) if (dom.site === site.name) delete d.domains[h];
+      for (const [h, claims] of Object.entries(d.domainClaims ?? {})) { delete claims[site.name]; if (!Object.keys(claims).length) delete d.domainClaims[h]; }
       this.store.audit({ userId: user.id, event: 'site.deleted', ip, site: site.name });
     });
     fs.rmSync(path.join(this.root, site.name), { recursive: true, force: true });
@@ -212,7 +270,7 @@ export class SiteService {
   isHostingHost(host) {
     host = String(host ?? '').toLowerCase().replace(/:\d+$/, '').replace(/\.$/, '');
     // Registered custom domains belong to hosting even before they verify, so they never reach the UI.
-    return this.config.hosting.domains.some((d) => host === d || host.endsWith(`.${d}`)) || Boolean(this.store.data.domains[host]);
+    return this.config.hosting.domains.some((d) => host === d || host.endsWith(`.${d}`)) || Boolean(this.store.data.domains[host] || this.store.data.domainClaims?.[host]);
   }
 
   /** Function route for this path, if the site maps one. */

@@ -16,6 +16,8 @@
 //   *.topoforge.json      a function that chains other functions, drawn in TopoForge
 import { HttpError } from '../errors.js';
 
+// An image reference starts with a letter or digit, so it can never be read as an option by the launcher (FMT-2).
+const IMAGE_RE = /^[A-Za-z0-9][\w./:@-]{0,199}$/;
 export const RUNTIMES = ['node', 'sh', 'python', 'chain', 'orgvm'];
 const ORG_LANG = { sh: 'sh', bash: 'sh', shell: 'sh', js: 'node', javascript: 'node', node: 'node', python: 'python', python3: 'python' };
 const MAX_STEPS = 50;
@@ -159,7 +161,7 @@ export function normalizePipeline(p, { maxTimeoutMs = 3_600_000, defaultImage } 
   if (!steps.length) throw bad('The pipeline has no steps.');
   if (steps.length > MAX_STEPS) throw bad(`At most ${MAX_STEPS} steps.`);
   const image = p.image ?? defaultImage;
-  if (!image || !/^[\w./:@-]{1,200}$/.test(image)) throw bad('Set "image" to the container image the steps run in.');
+  if (!image || !IMAGE_RE.test(image)) throw bad('Set "image" to the container image the steps run in.');
   const env = {};
   for (const [k, v] of Object.entries(p.env ?? {})) {
     if (!/^[A-Z_][A-Z0-9_]{0,63}$/.test(k)) throw bad(`Bad environment variable name "${k}".`);
@@ -204,6 +206,7 @@ export function normalizeFunction(f, files = new Map()) {
     chain = chainFromTopoForge(doc);
   }
   if (!RUNTIMES.includes(runtime)) throw bad(`"runtime" must be one of ${RUNTIMES.join(', ')}.`);
+  if (f.image && !IMAGE_RE.test(String(f.image))) throw bad('"image" must be a container image reference such as docker.io/library/node:22-alpine.');
   if (runtime !== 'chain' && (typeof entry !== 'string' || !(files.has(entry) || (runtime === 'orgvm' && files.has(entry.split('#')[0]))))) {
     throw bad(`The entry file "${entry}" is not in the upload.`);
   }

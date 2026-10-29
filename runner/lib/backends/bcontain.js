@@ -35,6 +35,8 @@ function walk(dir, base = dir, out = []) {
 
 /** The exact argv handed to bcontain (exported for tests and `--dry-run`). */
 export function command({ bin = 'bcontain', image, cpus = 1, memoryMb = 512, port, token }) {
+  // The image comes from a job; one that starts with "-" would be read as an option by the launcher.
+  if (!/^[A-Za-z0-9][\w./:@-]{0,199}$/.test(String(image))) throw new Error(`refusing image "${String(image).slice(0, 60)}": not a plain image reference`);
   const base = `http://${GUEST_HOST}:${port}/${token}`;
   const bootstrap = `set -e; mkdir -p /job; cd /job; wget -q -O b.tgz ${base}/bundle.tgz; tar xzf b.tgz; rm b.tgz; exec sh /job/package/run.sh`;
   return [bin, 'run', image, '--cpus', String(cpus), '--memory', `${memoryMb}M`, '--display', 'headless',
@@ -64,7 +66,7 @@ function fileServer(bundle, token, artifactPath, maxArtifact) {
   });
 }
 
-export async function run({ workdir, timeoutMs, onOutput, config, image, cpus, memoryMb }) {
+export async function run({ workdir, timeoutMs, onOutput, config, image, cpus, memoryMb, signal }) {
   const bundle = packFiles(walk(workdir));
   const token = crypto.randomBytes(16).toString('hex');
   const artifactPath = path.join(workdir, 'artifact.tgz');
@@ -81,7 +83,9 @@ export async function run({ workdir, timeoutMs, onOutput, config, image, cpus, m
       child.on('error', (err) => { output += `\ngitcha-runner: could not start ${argv[0]}: ${err.message}\n`; });
       // bContain boots a VM: allow time for boot on top of the job's own limit.
       const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, timeoutMs + (config.bootAllowanceMs ?? 60_000));
-      child.on('close', (code) => { clearTimeout(timer); resolve({ code: code ?? 137, output, timedOut }); });
+      const stop = () => child.kill('SIGKILL'); // the server said this job is over (cancelled)
+      if (signal?.aborted) stop(); else signal?.addEventListener('abort', stop, { once: true });
+      child.on('close', (code) => { clearTimeout(timer); signal?.removeEventListener('abort', stop); resolve({ code: code ?? 137, output, timedOut }); });
     });
   } finally {
     server.close();

@@ -57,11 +57,28 @@ export async function executeJob(client, config, { job, job_token: jobToken }, s
     partial = lines.pop();
     if (lines.length) pending += readOutput(lines.join('\n'), 0).log + '\n';
   };
-  const flush = async () => {
-    if (!pending) return;
-    const text = pending;
-    pending = '';
-    try { await client.log(job.id, jobToken, text); } catch { /* the server may have finished the job */ }
+  // The server keeps no more than a quarter of a megabyte per log call, so send in small pieces, keep what a failed call
+  // carried for the next try, and treat "this job is already over" (cancelled, timed out) as an order to stop.
+  const stopper = new AbortController();
+  let ticks = 0;
+  const PIECE = 16 * 1024; // characters, so at most 64 KiB on the wire
+  let sending = null;
+  const flush = () => (sending ??= sendPending().finally(() => { sending = null; })); // one call at a time
+  const sendPending = async () => {
+    if (stopper.signal.aborted) return;
+    if (!pending) {
+      // Silence still has to ask once in a while, or a cancelled build would run to its timeout unnoticed.
+      if (++ticks % 5 === 0) await client.log(job.id, jobToken, '').catch((err) => { if (err.status === 409 || err.status === 401) stopper.abort(); });
+      return;
+    }
+    while (pending && !stopper.signal.aborted) {
+      const piece = pending.slice(0, PIECE);
+      try { await client.log(job.id, jobToken, piece); } catch (err) {
+        if (err.status === 409 || err.status === 401) stopper.abort(); // finished on the server: nothing more to send
+        return; // anything else: the piece stays in `pending` for the next tick
+      }
+      pending = pending.slice(piece.length);
+    }
   };
   const ticker = job.kind === 'ci' ? setInterval(flush, 1000) : null;
   say(`job ${job.id} (${job.kind}) started`);
@@ -71,13 +88,15 @@ export async function executeJob(client, config, { job, job_token: jobToken }, s
     const image = job.kind === 'ci' ? job.spec.pipeline.image : (job.spec.fn.image ?? config.defaultImage);
     const result = await backend.run({
       workdir, timeoutMs: job.timeoutMs, config, image,
-      cpus: config.cpus, memoryMb: job.kind === 'fn' ? job.spec.fn.memoryMb : config.memoryMb,
-      onOutput: job.kind === 'ci' ? take : null,
+      cpus: config.cpus, memoryMb: job.kind === 'fn' ? Math.min(job.spec.fn.memoryMb, config.memoryMb ?? job.spec.fn.memoryMb) : config.memoryMb, // never above the operator's own cap
+      onOutput: job.kind === 'ci' ? take : null, signal: stopper.signal,
     });
+    if (stopper.signal.aborted) { say(`job ${job.id} was ended by the server; stopped`); return; }
     const parsed = readOutput(result.output, result.code);
     if (job.kind === 'ci') {
       if (partial) take('\n');
       await flush();
+      while (pending && !stopper.signal.aborted) { const before = pending.length; await flush(); if (pending.length === before) break; }
       const ok = !result.timedOut && parsed.exitCode === 0;
       const artifactFile = path.join(workdir, 'artifact.tgz');
       const artifact = ok && fs.existsSync(artifactFile) ? fs.readFileSync(artifactFile).toString('base64') : null;

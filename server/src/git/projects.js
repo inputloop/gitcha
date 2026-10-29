@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { HttpError } from '../errors.js';
 import { parseByline } from '../social/agents.js';
 
@@ -26,6 +26,56 @@ export function parseOwnerLabel(s) {
 export const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' };
 const git = (args, opts = {}) => execFileSync('git', args, { encoding: 'utf8', timeout: 30_000, maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'], env: GIT_ENV, ...opts });
 
+/**
+ * Run a program without stopping the event loop (a push must not freeze sites, runners and the API while git and gpg
+ * work). Resolves { status, stdout (Buffer), stderr } whatever the exit status; rejects if it cannot start, runs past
+ * `timeout`, or prints more than `max` bytes.
+ */
+function run(cmd, args, { input, env = GIT_ENV, timeout = 30_000, max = 32 * 1024 * 1024 } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const out = [];
+    const err = [];
+    let size = 0;
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`${cmd} ran too long`)); }, timeout);
+    const fail = (e) => { clearTimeout(timer); child.kill('SIGKILL'); reject(e); };
+    child.on('error', fail);
+    child.stdin.on('error', () => { /* it may exit before reading everything */ });
+    child.stdout.on('data', (c) => { size += c.length; if (size > max) fail(new Error(`${cmd} printed too much`)); else out.push(c); });
+    child.stderr.on('data', (c) => { if (err.length < 64) err.push(c); });
+    child.on('close', (status) => { clearTimeout(timer); resolve({ status, stdout: Buffer.concat(out), stderr: Buffer.concat(err).toString('utf8') }); });
+    child.stdin.end(input);
+  });
+}
+
+/** What a commit object says, read by its structure, never by delimiters that its message could contain. */
+function parseCommit(sha, body) {
+  const text = body.toString('utf8');
+  const gap = text.indexOf('\n\n');
+  const head = gap === -1 ? text : text.slice(0, gap);
+  const author = /^author (.*) <([^>]*)> \d+ [+-]\d{4}$/m.exec(head);
+  return { sha, authorName: author?.[1] ?? '', authorEmail: author?.[2] ?? '', signed: /^gpgsig /m.test(head), message: gap === -1 ? '' : text.slice(gap + 2) };
+}
+
+/** `git cat-file --batch` output: "<sha> <type> <size>\n<size bytes>\n" for each object asked for. */
+function parseBatch(buf) {
+  const commits = [];
+  let at = 0;
+  while (at < buf.length) {
+    const nl = buf.indexOf(0x0a, at);
+    if (nl === -1) break;
+    const [sha, type, size] = buf.subarray(at, nl).toString('utf8').split(' ');
+    const n = Number(size);
+    if (type !== 'commit' || !Number.isInteger(n)) { at = nl + 1; continue; } // "<sha> missing"
+    commits.push(parseCommit(sha, buf.subarray(nl + 1, nl + 1 + n)));
+    at = nl + 1 + n + 1;
+  }
+  return commits;
+}
+
+// Anything that is not printable goes from a name or subject before it is stored and shown.
+const printable = (s, n) => String(s ?? '').replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim().slice(0, n);
+
 export class ProjectService {
   constructor({ store, config, teams, agents, keys, clock = Date.now }) {
     Object.assign(this, { store, config, teams, agents, keys, clock });
@@ -33,6 +83,7 @@ export class ProjectService {
     this.root = path.join(config.dataDir, 'git');
     fs.mkdirSync(this.root, { recursive: true, mode: 0o700 });
     this.onWorkedTogether = null; // set by the task service
+    this.pushQueue = Promise.resolve(); // reading pushes one at a time keeps git and gpg from piling up
   }
 
   key(owner, name) { return `${ownerLabel(owner)}/${name}`; }
@@ -149,33 +200,46 @@ export class ProjectService {
     } catch { return {}; }
   }
 
-  /** Commits new in `after` that were not reachable from `before`. */
-  newCommits(p, before, after) {
+  /**
+   * Commits new in `after` that were not reachable from `before`, at most 500. The list of ids comes from rev-list and
+   * each commit is read from its own object, so what the pusher put in a message can neither add records nor change
+   * the count.
+   */
+  async newCommits(p, before, after) {
     const tips = [...new Set(Object.values(after))].filter((o) => !Object.values(before).includes(o));
     if (!tips.length) return [];
     const not = [...new Set(Object.values(before))];
-    const out = git(['-C', this.repoDir(p), 'log', '--format=%H%x1f%an%x1f%ae%x1f%G?%x1f%GF%x1f%B%x1e', '-n', '500', ...tips, ...(not.length ? ['--not', ...not] : [])]);
-    return out.split('\x1e').map((s) => s.trim()).filter(Boolean).map((rec) => {
-      const [sha, an, ae, sigStatus, sigFpr, ...msg] = rec.split('\x1f');
-      return { sha, authorName: an, authorEmail: ae, sigStatus, sigFpr, message: msg.join('\x1f') };
-    });
+    const dir = this.repoDir(p);
+    const listed = await run('git', ['-C', dir, 'rev-list', '-n', '500', ...tips, ...(not.length ? ['--not', ...not] : [])]);
+    if (listed.status !== 0) throw new Error('rev-list failed');
+    const shas = listed.stdout.toString('utf8').split('\n').filter((l) => /^[0-9a-f]{40,64}$/.test(l));
+    if (!shas.length) return [];
+    const read = await run('git', ['-C', dir, 'cat-file', '--batch'], { input: `${shas.join('\n')}\n` });
+    if (read.status !== 0) throw new Error('cat-file failed');
+    return parseBatch(read.stdout);
   }
 
-  /** Check signatures against the keys registered on Gitcha (not the server's own keyring). */
-  verifySignatures(p, commits) {
-    const signed = commits.filter((c) => c.sigStatus !== 'N');
-    if (!signed.length) return commits.map((c) => ({ ...c, verified: false, signer: null }));
+  /**
+   * Check signatures against the keys registered on Gitcha (not the server's own keyring). Registering a key proves
+   * nothing about holding it, so only keys registered by the person who pushed are loaded and trusted here.
+   */
+  async verifySignatures(p, commits, pusherId) {
+    const unsigned = (c) => ({ ...c, verified: false, signer: null });
+    const mine = pusherId ? Object.values(this.keys.data.gpg).filter((k) => k.owner === pusherId) : [];
+    if (!mine.length || !commits.some((c) => c.signed)) return commits.map(unsigned);
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gitcha-verify-'));
     try {
-      const armored = Object.values(this.keys.data.gpg).map((k) => k.armored).join('\n');
-      if (armored) execFileSync('gpg', ['--homedir', home, '--batch', '--import'], { input: armored, stdio: ['pipe', 'ignore', 'ignore'], timeout: 20_000 });
-      return commits.map((c) => {
-        if (c.sigStatus === 'N') return { ...c, verified: false, signer: null };
+      const imported = await run('gpg', ['--homedir', home, '--batch', '--import'], { input: mine.map((k) => k.armored).join('\n'), timeout: 20_000 });
+      if (imported.status !== 0) throw new Error('gpg could not load the keys');
+      const out = [];
+      for (const c of commits) {
+        if (!c.signed) { out.push(unsigned(c)); continue; }
         // --raw prints gpg's [GNUPG:] status lines on stderr, whether or not the check passes.
-        const r = spawnSync('git', ['-C', this.repoDir(p), 'verify-commit', '--raw', c.sha], { env: { ...GIT_ENV, GNUPGHOME: home }, encoding: 'utf8', timeout: 10_000 });
-        const v = this.signer(`${r.stdout ?? ''}\n${r.stderr ?? ''}`);
-        return { ...c, ...v, verified: r.status === 0 && v.verified };
-      });
+        const r = await run('git', ['-C', this.repoDir(p), 'verify-commit', '--raw', c.sha], { env: { ...GIT_ENV, GNUPGHOME: home }, timeout: 10_000 });
+        const v = this.signer(`${r.stdout.toString('utf8')}\n${r.stderr}`, pusherId);
+        out.push({ ...c, ...v, verified: r.status === 0 && v.verified });
+      }
+      return out;
     } catch {
       return commits.map((c) => ({ ...c, verified: false, signer: null, sigNote: 'gpg unavailable' }));
     } finally {
@@ -183,23 +247,34 @@ export class ProjectService {
     }
   }
 
-  signer(raw) {
+  signer(raw, pusherId) {
     const m = /\[GNUPG:\] VALIDSIG ([0-9A-F]{16,40})/.exec(raw);
     const good = /\[GNUPG:\] GOODSIG/.test(raw);
     if (!m) return { verified: false, signer: null };
     const k = this.keys.gpgByFingerprint(m[1]);
-    return { verified: good && Boolean(k), signer: k ? `${k.holder.kind}:${k.holder.name}` : null };
+    // A key someone else registered says nothing about this push: the registrant never showed they hold it (GIT-3).
+    if (!k || !pusherId || k.owner !== pusherId) return { verified: false, signer: null };
+    return { verified: good, signer: `${k.holder.kind}:${k.holder.name}` };
   }
 
-  /** Called after a successful receive-pack. */
+  /**
+   * Called after a successful receive-pack. Resolves to the push record once git and gpg are done; the refs are read
+   * now, the rest waits its turn and never blocks the event loop.
+   */
   afterPush(p, principal, before) {
     const after = this.refs(p);
-    let commits = [];
-    try { commits = this.verifySignatures(p, this.newCommits(p, before, after)); } catch { commits = []; }
+    const job = this.pushQueue.then(() => this.recordPush(p, principal, before, after));
+    this.pushQueue = job.catch(() => {});
+    return job;
+  }
+
+  async recordPush(p, principal, before, after) {
     const pushedBy = principal?.kind === 'agent' ? principal.agent : null;
     // A byline only counts for an agent of the person pushing, so nobody can
     // credit (or pair for a Second Reader) someone else's agent.
     const pusherId = principal?.kind === 'agent' ? principal.owner?.id : principal?.user?.id;
+    let commits = [];
+    try { commits = await this.verifySignatures(p, await this.newCommits(p, before, after), pusherId); } catch { commits = []; }
     const agents = new Map();
     for (const c of commits) {
       const named = this.agents.fromByline(parseByline(c.message));
@@ -214,7 +289,7 @@ export class ProjectService {
     if (!branches.length) return { at: this.clock(), by: null, branches: [], commits: [], agents: [] };
     const push = {
       at: this.clock(), by: principal ? (principal.kind === 'agent' ? `agent:${principal.agent.handle}` : `user:${principal.user.username}`) : 'unknown',
-      branches, commits: commits.slice(0, 50).map(({ sha, agent, verified, signer, authorName, message }) => ({ sha, agent, verified, signer, authorName, subject: message.split('\n')[0].slice(0, 120) })),
+      branches, commits: commits.slice(0, 50).map(({ sha, agent, verified, signer, authorName, message }) => ({ sha, agent, verified, signer, authorName: printable(authorName, 120), subject: printable(message.split('\n')[0], 120) })),
       agents: [...agents.keys()],
     };
     // Who else worked on these branches lately? Two different agents' work meeting is "working together".

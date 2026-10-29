@@ -74,12 +74,29 @@ be named as such in alphaOS's security model.
 4. Open the public URL and register. **The first account becomes the administrator.**
 5. Set `GITCHA_OPEN_REGISTRATION=false` afterwards if sign-up should be closed.
 
+### Running it
+
+- **Firewall:** open 443 and 80 for the proxy, and 22 if you offer git over SSH; nothing else (4873 stays on loopback).
+- **`GITCHA_TRUST_PROXY=true`** makes Gitcha believe `X-Forwarded-For`; turn it on only when the proxy on this host is the one way in, or anyone can choose the address that rate limits and the new-network check see.
+- **Upgrades:** the package restarts a running `gitcha` itself (`systemctl try-restart`); if you installed the new code any other way, run `systemctl restart gitcha`, or a security fix is installed and not live.
+- **One process per data directory:** the database is one file held in memory, so a second server on the same directory (a hand-started `gitcha-server` beside the unit, a second container on the volume) silently loses accounts.
+- **`GITCHA_LOCKED_CHECKS`** is a comma list of the two-factor checks people cannot turn off (`interval`, `new_network`, `sensitive`); it is empty unless you set it.
+- **Limits in the units:** the server unit caps memory at 2G and tasks at 512, the runner's at 6G and 1024, and both allow only `AF_UNIX`, `AF_INET` and `AF_INET6`. They are the keepers' numbers: change them with `systemctl edit`. The runner's unit also drops every capability, which has not been tried against a real bContain job yet.
+- **Settings:** `gitcha.env` lists every setting the server reads, with its default on a `#` line.
+- **Docker:** the image has `git` and `gpg`, no sshd, so there is no git over SSH there.
+
 ### TLS and DNS
 
-`/usr/share/doc/inputloop-gitcha/Caddyfile.example` puts Caddy in front with on-demand
-certificates. Caddy asks `GET /api/v1/hosting/tls-allowed?domain=NAME` first, and Gitcha says
-yes only for its own name, sites' subdomains on a hosting domain, and custom domains whose DNS
-check passed.
+`/usr/share/doc/inputloop-gitcha/Caddyfile.example` puts Caddy in front: a wildcard
+certificate for each hosting domain, and on-demand certificates for everything else. Caddy
+asks `GET /api/v1/hosting/tls-allowed?domain=NAME` before ordering one, and Gitcha says yes
+only for its own name, custom domains whose DNS check passed and still passes (Gitcha looks
+again every six hours and drops a domain after three misses in a row), and, as a stopgap for
+instances without a wildcard certificate, a site's subdomain while its owner has ordered fewer
+than ten new ones this week. A public CA caps how many certificates one registered domain may
+order per week, so use the wildcard certificate (it needs the DNS challenge, so a Caddy build
+with your DNS provider's module); an account may also hold at most 25 sites whatever the
+billing setting.
 
 `gitcha.env` sets `GITCHA_TRUST_PROXY=true`, which is right for this Caddyfile: Caddy replaces
 `X-Forwarded-For` with the client's address and Gitcha trusts one proxy hop. With nginx instead,
@@ -95,7 +112,12 @@ DNS records to create:
 | `hosting.example.net` A/AAAA | the server VM | optional: the CNAME target shown to people with custom domains (`GITCHA_HOSTING_CNAME`) |
 
 Use hosting domains that are **separate registrable domains** from the UI's, so a site's
-scripts cannot set cookies for Gitcha.
+scripts cannot set cookies for Gitcha. Gitcha refuses to start when a hosting domain shares a
+registrable domain with `GITCHA_PUBLIC_URL`. It guesses that from the last two labels (three
+under a country code such as `co.uk`); it carries no copy of the Public Suffix List. Sites on
+one hosting domain are still "same-site" with each other unless that domain is on the Public
+Suffix List, so a keeper who wants tenants kept apart from one another should have it added
+(https://publicsuffix.org/submit/).
 
 The keepers already hold several names (ils4 lists `ghostwheel.cloud`, whose wildcard points
 at gw10 today with a certificate for the apex only; `ghostwheel.chat`, `gwhee.lol`,
@@ -106,18 +128,38 @@ panel.
 **Custom domains.** A person adds a domain to a site. Gitcha shows a TXT record
 (`_gitcha-challenge.NAME` = `gitcha-verify=...`) and a CNAME target. Once the TXT record
 resolves, they press verify, and only then is the domain served and allowed a certificate.
+Until then it is only a claim: several people may claim one name, a claim lapses after a day,
+and an account holds at most ten waiting claims and 25 domains. Whoever proves DNS control
+first gets the name, and a later proof from another site takes it over. A verified domain is
+dropped when its TXT record has been gone for three checks in a row.
 
 ### Git over SSH
 
 Copy `/usr/share/doc/inputloop-gitcha/sshd-gitcha.conf.example` to
-`/etc/ssh/sshd_config.d/gitcha.conf`, set `GITCHA_SSH_HOST` and `GITCHA_SSH_USER=gitcha` in
+`/etc/ssh/sshd_config.d/gitcha.conf`, set `GITCHA_SSH_HOST` and `GITCHA_SSH_USER=git` in
 `gitcha.env`, and reload sshd. OpenSSH asks `gitcha-ssh-keys` for the offered key's
 fingerprint; a known key is forced through `gitcha-git-shell`, which runs only
 `git-upload-pack` or `git-receive-pack`, and only where that person or agent may. Both
 helpers talk to the server on loopback with a secret from `/var/lib/gitcha/internal.key`.
+Port 22 must be open in the firewall for this (the proxy's 443 and 80 are not enough).
 
-Status: built and unit-checked; **not yet run against a real sshd** (the machine this was
-written on had none).
+**The SSH user must not be the account the server runs as.** SSH-served git runs outside the
+server unit's sandbox, as whoever sshd runs it as; as `gitcha` that is the account that owns
+`db.json`, `secret.key` and `internal.key`. Use two: `gitcha` runs the daemon and owns the
+data; `git`, a system account in group `gitcha` with no password, is the SSH login. It needs
+to read `internal.key` (mode 640, group `gitcha`) and to read and write the repositories under
+`/var/lib/gitcha/git` (group-writable, set-gid, repositories `core.sharedRepository=group`),
+and `/var/lib/gitcha` itself must be traversable by the group (750). Nothing else in that
+directory should be group-readable. If git refuses a repository as "dubious ownership", set
+`safe.directory` in the `git` account's own git config, not in the server's.
+
+Pushes and reads over SSH meet the same periodic two-factor check as HTTPS: when it is due
+(no code entered on any of the person's devices within the step-up interval), the helper
+prints "run `gitcha verify`" and refuses. An agent's SSH key acts as the agent, as an agent
+key does.
+
+Status: built and unit-checked; **not yet run against a real sshd, nor with the two
+accounts** (the machine this was written on had no sshd).
 
 ### Backups
 
@@ -146,7 +188,10 @@ file's name rather than being overwritten.
    back to software emulation, which is slow.
 2. `apt install ./inputloop-gitcha-runner_*.deb`
 3. In Gitcha, an administrator creates a registration token (`POST
-   /api/v1/runners/registrations`; team owners can create one for a team runner).
+   /api/v1/runners/registrations`; team owners can create one for a team runner). It works
+   for one runner and for an hour (`{"uses": 5}` lets a fleet share one, up to 20);
+   `GET /api/v1/runners/registrations` lists the ones still open and `DELETE
+   /api/v1/runners/registrations/ID` revokes one.
 4. Register and start:
    ```sh
    sudo -u gitcha-runner GITCHA_RUNNER_HOME=/var/lib/gitcha-runner \

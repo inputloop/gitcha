@@ -21,7 +21,8 @@ export const q = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 export function prepare(workdir, job, source) {
   fs.mkdirSync(path.join(workdir, 'src'), { recursive: true });
   fs.mkdirSync(path.join(workdir, 'home'), { recursive: true });
-  if (source) extractTo(unpackFiles(source), path.join(workdir, 'src'));
+  // The server says how large a source may unpack to (four times its package limit); without it, 100 MiB.
+  if (source) extractTo(unpackFiles(source, { maxBytes: job.limits?.maxUnpackedBytes ?? 100 * 1024 * 1024 }), path.join(workdir, 'src'));
   fs.cpSync(HARNESS, path.join(workdir, 'harness'), { recursive: true });
   const script = job.kind === 'ci' ? ciScript(job.spec.pipeline) : fnScript(workdir, job.spec);
   fs.writeFileSync(path.join(workdir, 'run.sh'), script, { mode: 0o755 });

@@ -16,7 +16,11 @@ import { json, readJson, send } from '../http.js';
 import { principalKey } from '../social/principal.js';
 import { parseOwnerLabel, GIT_ENV } from './projects.js';
 
+// A push waits at most this long for its record before the client is told it is done (the checking carries on).
+const RECORD_WAIT_MS = 5000;
 const SERVICES = new Set(['git-upload-pack', 'git-receive-pack']);
+// A POST body is a git pack request and nothing else; http-backend refuses any other type without reading the body.
+const REQUEST_TYPES = { 'git-upload-pack': 'application/x-git-upload-pack-request', 'git-receive-pack': 'application/x-git-receive-pack-request' };
 
 function basicCreds(req) {
   const h = req.headers.authorization ?? '';
@@ -51,6 +55,18 @@ function mfaOk(auth, principal) {
   return auth.mfaState(principal.auth);
 }
 
+/**
+ * SSH carries no session, so the periodic check is read from the person's devices: the newest code entered on any of
+ * them must be inside the step-up interval (when the person's own settings keep that check on). Agents act as
+ * themselves, as with an agent key over HTTPS.
+ */
+function sshMfaOk(auth, principal) {
+  if (principal.kind !== 'user') return { ok: true };
+  if (!auth.checkSettings(principal.user).interval) return { ok: true };
+  const newest = Math.max(0, ...auth.store.sessionsForUser(principal.user.id).filter((s) => s.kind !== 'enroll').map((s) => s.mfaAt ?? 0));
+  return auth.clock() - newest > auth.config.policy.stepUpInterval ? { ok: false, reason: 'interval' } : { ok: true };
+}
+
 export function internalSecret(config) {
   const file = path.join(config.dataDir, 'internal.key');
   if (!fs.existsSync(file)) fs.writeFileSync(file, crypto.randomBytes(32).toString('hex') + '\n', { mode: 0o600 });
@@ -78,6 +94,9 @@ export function registerGit(router, { auth, projects, principals, config }) {
       if (!m.ok) return send(res, 403, `Your periodic two-factor check is due (${m.reason}). Run \`gitcha verify\`, then push again.\n`, { 'Content-Type': 'text/plain' });
     }
     if (write && !projects.canWrite(principal, p)) return send(res, 403, `You cannot push to ${projects.key(p.owner, p.name)}.\n`, { 'Content-Type': 'text/plain' });
+    if (tail !== 'info/refs' && String(req.headers['content-type'] ?? '').split(';')[0].trim().toLowerCase() !== REQUEST_TYPES[service]) {
+      return send(res, 415, `Send this as ${REQUEST_TYPES[service]}.\n`, { 'Content-Type': 'text/plain', Connection: 'close' });
+    }
     const before = write ? projects.refs(p) : null;
     const env = {
       PATH: process.env.PATH, GIT_CONFIG_GLOBAL: GIT_ENV.GIT_CONFIG_GLOBAL, GIT_CONFIG_NOSYSTEM: '1', GIT_PROJECT_ROOT: projects.root, GIT_HTTP_EXPORT_ALL: '1',
@@ -89,10 +108,18 @@ export function registerGit(router, { auth, projects, principals, config }) {
     };
     await new Promise((resolve) => {
       const child = spawn('git', ['http-backend'], { env, stdio: ['pipe', 'pipe', 'pipe'] });
-      req.pipe(child.stdin);
       let head = Buffer.alloc(0);
       let headerDone = false;
+      // http-backend may exit without reading the whole body (it refuses what it dislikes), and a client may leave
+      // mid-upload. Neither may become an uncaught error, which would end the whole server.
+      child.stdin.on('error', () => { /* EPIPE: the backend is done with its input */ });
+      child.on('error', (err) => { console.error('git http-backend could not run', err.message); });
+      res.on('error', () => { /* the client is gone */ });
+      req.on('error', () => child.kill());
+      req.on('close', () => { if (!req.complete) child.kill(); });
+      req.pipe(child.stdin);
       child.stdout.on('data', (chunk) => {
+        if (res.destroyed) return undefined;
         if (headerDone) return res.write(chunk);
         head = Buffer.concat([head, chunk]);
         const end = head.indexOf('\r\n\r\n');
@@ -111,12 +138,16 @@ export function registerGit(router, { auth, projects, principals, config }) {
         return res.write(head.subarray(end + 4));
       });
       child.stderr.on('data', () => { /* git's progress and errors go to the client inside the protocol */ });
-      child.on('close', (code) => {
-        if (!headerDone) send(res, 500, 'git http-backend failed.\n', { 'Content-Type': 'text/plain' });
-        else res.end();
+      child.on('close', async (code) => {
+        // The client hears that the push is done once it is recorded, but never waits long for the checking.
         if (write && code === 0) {
-          try { projects.afterPush(p, principal, before); } catch (err) { console.error('afterPush failed', err); }
+          const recorded = projects.afterPush(p, principal, before).catch((err) => console.error('afterPush failed', err));
+          let timer;
+          await Promise.race([recorded, new Promise((r) => { timer = setTimeout(r, RECORD_WAIT_MS); })]);
+          clearTimeout(timer);
         }
+        if (res.destroyed) { /* nobody is listening */ } else if (!headerDone) send(res, 500, 'git http-backend failed.\n', { 'Content-Type': 'text/plain' });
+        else res.end();
         resolve();
       });
     });
@@ -126,17 +157,25 @@ export function registerGit(router, { auth, projects, principals, config }) {
   const secret = internalSecret(config);
   const internal = (ctx) => {
     const local = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(ctx.req.socket.remoteAddress);
-    const given = String(ctx.req.headers['x-gitcha-internal'] ?? '');
-    if (!local || given.length !== secret.length || !crypto.timingSafeEqual(Buffer.from(given), Buffer.from(secret))) throw new HttpError(404, 'not_found', 'Not found.');
+    const given = Buffer.from(String(ctx.req.headers['x-gitcha-internal'] ?? ''));
+    const want = Buffer.from(secret);
+    if (!local || given.length !== want.length || !crypto.timingSafeEqual(given, want)) throw new HttpError(404, 'not_found', 'Not found.');
+  };
+  // The helpers read JSON, so a refusal says why instead of rendering a page they cannot read.
+  const helper = (fn) => async (ctx) => {
+    try { await fn(ctx); } catch (err) {
+      if (!(err instanceof HttpError)) throw err;
+      json(ctx.res, err.status, { error: err.code, message: err.message });
+    }
   };
 
-  router.get('/internal/ssh/keys', (ctx) => {
+  router.get('/internal/ssh/keys', helper((ctx) => {
     internal(ctx);
     const line = principals.keysLine(ctx.url.searchParams.get('fingerprint'));
     send(ctx.res, 200, line, { 'Content-Type': 'text/plain' });
-  });
+  }));
 
-  router.post('/internal/git/authorize', async (ctx) => {
+  router.post('/internal/git/authorize', helper(async (ctx) => {
     internal(ctx);
     const { fingerprint, command } = await readJson(ctx.req);
     const m = /^(git-upload-pack|git-receive-pack) '?\/?([^'/]+)\/([^'/]+?)(?:\.git)?\/?'?$/.exec(String(command ?? ''));
@@ -146,16 +185,19 @@ export function registerGit(router, { auth, projects, principals, config }) {
     const p = projects.find(parseOwnerLabel(m[2]), m[3]);
     const write = m[1] === 'git-receive-pack';
     if (!p || !projects.canRead(principal, p)) throw new HttpError(404, 'not_found', 'Repository not found.');
+    // The same periodic check an HTTPS push meets; a git client cannot answer a challenge, so say what to run.
+    const m2 = sshMfaOk(auth, principal);
+    if (!m2.ok) throw new HttpError(403, 'stepup_due', `Your periodic two-factor check is due (${m2.reason}). Run \`gitcha verify\`, then try again.`);
     if (write && !projects.canWrite(principal, p)) throw new HttpError(403, 'forbidden', `You cannot push to ${projects.key(p.owner, p.name)}.`);
     json(ctx.res, 200, { service: m[1], repo: projects.repoDir(p), project: projects.key(p.owner, p.name), principal: principalKey(principal), before: write ? projects.refs(p) : null });
-  });
+  }));
 
-  router.post('/internal/git/pushed', async (ctx) => {
+  router.post('/internal/git/pushed', helper(async (ctx) => {
     internal(ctx);
     const { fingerprint, project, before } = await readJson(ctx.req);
     const p = projects.store.data.projects[project];
     const principal = principals.fromSsh(fingerprint);
     if (!p || !principal || !projects.canWrite(principal, p)) throw new HttpError(403, 'forbidden', 'Not allowed.');
-    json(ctx.res, 200, projects.afterPush(p, principal, before ?? {}));
-  });
+    json(ctx.res, 200, await projects.afterPush(p, principal, before ?? {}));
+  }));
 }

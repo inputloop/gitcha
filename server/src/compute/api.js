@@ -1,11 +1,31 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // JSON API for runners, CI runs and functions.
-import { json, send, readJson, readBody } from '../http.js';
+import { json, send, readJson } from '../http.js';
 import { HttpError } from '../errors.js';
 import { makeGuards } from '../api.js';
 import { pipelineFromTarball } from './ci.js';
 import { parseOwner } from './functions.js';
+
+const LOG_PIECE = 256 * 1024;
+
+/** Read a request body, keeping at most `limit` bytes and discarding (not storing) up to 16 MiB more. */
+async function readCapped(req, limit) {
+  const kept = [];
+  let n = 0;
+  let over = false;
+  for await (const c of req) {
+    n += c.length;
+    if (n <= limit) kept.push(c);
+    else {
+      over = true;
+      const room = limit - (n - c.length);
+      if (room > 0) kept.push(c.subarray(0, room));
+      if (n > limit + 16 * 1024 * 1024) break;
+    }
+  }
+  return { body: Buffer.concat(kept), over };
+}
 
 const tarballFrom = (body) => Buffer.from(String(body.tarball ?? ''), 'base64');
 
@@ -19,8 +39,8 @@ export function registerComputeApi(router, { auth, jobs, ci, functions, config, 
     return r;
   };
   const jobAuth = (ctx) => {
-    runnerAuth(ctx);
-    return jobs.jobFor(ctx.params.id, ctx.req.headers['x-gitcha-job-token']);
+    const r = runnerAuth(ctx);
+    return jobs.jobFor(ctx.params.id, ctx.req.headers['x-gitcha-job-token'], r.id);
   };
 
   router.post('/api/v1/runner/register', async (ctx) => {
@@ -47,12 +67,15 @@ export function registerComputeApi(router, { auth, jobs, ci, functions, config, 
   router.get('/api/v1/runner/jobs/:id/source', (ctx) => {
     const j = jobAuth(ctx);
     if (!j.sourceSha) throw new HttpError(404, 'no_source', 'This job has no source.');
-    send(ctx.res, 200, auth.store.readBlob(j.sourceSha), { 'Content-Type': 'application/gzip' });
+    send(ctx.res, 200, j.ownSource ? jobs.readSource(j) : auth.store.readBlob(j.sourceSha), { 'Content-Type': 'application/gzip' });
   });
 
   router.post('/api/v1/runner/jobs/:id/log', async (ctx) => {
     const j = jobAuth(ctx);
-    jobs.appendLog(j, (await readBody(ctx.req, 256 * 1024)).toString('utf8'));
+    // A piece over the cap keeps its first part, is read to the end (so the connection stays usable) and gets a clear 413.
+    const { body, over } = await readCapped(ctx.req, LOG_PIECE);
+    jobs.appendLog(j, body.toString('utf8'));
+    if (over) throw new HttpError(413, 'log_piece_too_large', `Send the log in pieces under ${LOG_PIECE} bytes; the first ${LOG_PIECE} bytes of this one were kept.`);
     send(ctx.res, 204, '');
   });
 
@@ -69,8 +92,18 @@ export function registerComputeApi(router, { auth, jobs, ci, functions, config, 
   // ---- managing runners ------------------------------------------------------------
   router.post('/api/v1/runners/registrations', async (ctx) => {
     const a = verified(ctx, { sensitive: true });
-    const { team } = await readJson(ctx.req);
-    json(ctx.res, 201, jobs.createRegistration(a.user, { team }, ctx.ip));
+    const { team, uses } = await readJson(ctx.req);
+    json(ctx.res, 201, jobs.createRegistration(a.user, { team, uses }, ctx.ip));
+  });
+
+  router.get('/api/v1/runners/registrations', (ctx) => {
+    const a = verified(ctx);
+    json(ctx.res, 200, { registrations: jobs.registrationsFor(a.user) });
+  });
+
+  router.delete('/api/v1/runners/registrations/:id', (ctx) => {
+    const a = verified(ctx, { sensitive: true });
+    json(ctx.res, 200, jobs.revokeRegistration(a.user, ctx.params.id, ctx.ip));
   });
 
   router.get('/api/v1/runners', (ctx) => {
@@ -88,7 +121,7 @@ export function registerComputeApi(router, { auth, jobs, ci, functions, config, 
     // An agent key runs work in the paid sandbox for its agent.
     const tok = bearer(ctx.req);
     if (tok?.startsWith('gak_')) {
-      const p = principals.fromToken(tok, ctx.ip);
+      const p = principals.fromToken(tok, ctx.ip, { purpose: 'sandbox' }); // an agent key opens this door only
       if (!p) throw new HttpError(401, 'unauthenticated', 'That agent key is not valid.');
       const paid = billing.enabled && billing.plans[billing.planFor(`user:${p.owner.username}`)]?.paid;
       if (!paid && budgets.balance(`agent:${p.agent.handle}`) <= 0) throw new HttpError(402, 'budget_exhausted', `${p.agent.handle} has no sandbox budget left and its owner has no paid plan.`);
@@ -102,7 +135,7 @@ export function registerComputeApi(router, { auth, jobs, ci, functions, config, 
     const tarball = tarballFrom(body);
     // A build that publishes a site is as sensitive as deploying by hand.
     let found = null;
-    try { found = pipelineFromTarball(tarball, { defaultImage: config.compute.defaultImage }); } catch { /* run() reports it */ }
+    try { found = pipelineFromTarball(tarball, { defaultImage: config.compute.defaultImage, maxUnpackedBytes: 4 * config.maxPackageBytes }); } catch { /* run() reports it */ }
     if (found?.pipeline.deploy) a = verified(ctx, { sensitive: true });
     json(ctx.res, 201, ci.run(a.user, { tarball, team: body.team || undefined }, ctx.ip));
   });
@@ -115,12 +148,12 @@ export function registerComputeApi(router, { auth, jobs, ci, functions, config, 
   router.get('/api/v1/ci/runs/:id', (ctx) => {
     const a = verified(ctx);
     const j = ci.get(a.user, ctx.params.id);
-    json(ctx.res, 200, { ...jobs.view(j), log: jobs.readLog(j) });
+    json(ctx.res, 200, { ...jobs.view(j), spec: jobs.specOf(j), log: jobs.readLog(j) });
   });
 
-  router.post('/api/v1/ci/runs/:id/cancel', (ctx) => {
+  router.post('/api/v1/ci/runs/:id/cancel', async (ctx) => {
     const a = verified(ctx);
-    json(ctx.res, 200, jobs.view(jobs.cancel(a.user, ctx.params.id, (u, j) => ci.canManage(u, j))));
+    json(ctx.res, 200, jobs.view(await jobs.cancel(a.user, ctx.params.id, (u, j) => ci.canManage(u, j))));
   });
 
   // ---- functions -----------------------------------------------------------------------

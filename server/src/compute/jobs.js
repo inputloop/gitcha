@@ -15,8 +15,14 @@ import { randomToken, sha256 } from '../crypto.js';
 
 const LOG_LIMIT = 5 * 1024 * 1024;
 const JOB_HISTORY = 1000;
-const REG_TTL = 7 * 24 * 3600_000;
+// A registration token is the key to a runner that may see builds: one use, one hour, unless the keeper asks otherwise.
+const REG_TTL = 3600_000;
+const REG_MAX_USES = 20;
 const RUNNER_NAME_RE = /^[\w .@:-]{1,80}$/;
+// Conservative defaults the keepers can change (config.compute.maxActiveJobs, maxQueuedJobs, maxQueuedCalls).
+const MAX_ACTIVE_JOBS = 10;   // builds one owner may have queued or running
+const MAX_QUEUED_JOBS = 500;  // builds waiting anywhere on the instance
+const MAX_QUEUED_CALLS = 50;  // function calls of one owner waiting for a runner
 
 export const ownerKey = (o) => `${o.type}:${o.name}`;
 const newId = (prefix) => `${prefix}_${crypto.randomBytes(9).toString('base64url')}`;
@@ -30,20 +36,27 @@ export class JobService {
     this.data.jobs ??= {};
     this.logDir = path.join(config.dataDir, 'logs');
     fs.mkdirSync(this.logDir, { recursive: true, mode: 0o700 });
+    this.sourceDir = path.join(config.dataDir, 'job-sources');
+    fs.mkdirSync(this.sourceDir, { recursive: true, mode: 0o700 });
     this.queue = [];          // queued job ids, oldest first (CI + functions)
     this.live = new Map();    // in-memory function invocations by id
     this.waiters = [];        // runners blocked in claim()
     this.done = new Map();    // job id -> resolve() for awaitResult
     this.onComplete = null;   // set by the CI service (deploy artifacts)
     // Requeue CI jobs that were queued when the server stopped; fail ones that were running.
+    // The CI service meters the ones failed here (`restarted`) once, so a held budget does not stay held for ever.
+    this.restarted = [];
     for (const j of Object.values(this.data.jobs)) {
       if (j.status === 'queued') this.queue.push(j.id);
-      if (j.status === 'running') Object.assign(j, { status: 'failed', error: 'The server restarted while this job ran.', finishedAt: this.clock() });
+      if (j.status === 'running') {
+        Object.assign(j, { status: 'failed', error: 'The server restarted while this job ran.', finishedAt: this.clock() });
+        this.restarted.push(j.id);
+      }
     }
   }
 
   // ---- runner registration ----------------------------------------------------------
-  createRegistration(user, { team } = {}, ip) {
+  createRegistration(user, { team, uses = 1 } = {}, ip) {
     let scope;
     if (team) {
       const t = this.teams.get(team);
@@ -53,17 +66,43 @@ export class JobService {
       if (user.role !== 'admin') throw new HttpError(403, 'admin_only', 'Only an administrator can register instance-wide runners. Team owners can register runners for their team.');
       scope = { type: 'instance' };
     }
+    const n = Number(uses);
+    if (!Number.isInteger(n) || n < 1 || n > REG_MAX_USES) throw new HttpError(400, 'bad_uses', `"uses" is how many runners may register with the token: 1 to ${REG_MAX_USES}.`);
+    const ttl = this.config.compute.registrationTtlMs ?? REG_TTL;
     const token = randomToken('gtrr_');
     this.store.tx((d) => {
-      d.runnerRegs[sha256(token)] = { scope, createdBy: user.username, createdAt: this.clock(), expiresAt: this.clock() + REG_TTL };
-      this.store.audit({ userId: user.id, event: 'runner.registration_created', ip, scope: scope.type === 'team' ? `team:${scope.name}` : 'instance' });
+      d.runnerRegs[sha256(token)] = { scope, createdBy: user.username, createdAt: this.clock(), expiresAt: this.clock() + ttl, uses: n, used: 0 };
+      this.store.audit({ userId: user.id, event: 'runner.registration_created', ip, scope: scope.type === 'team' ? `team:${scope.name}` : 'instance', uses: n });
     });
-    return { token, scope, expiresAt: this.clock() + REG_TTL };
+    return { token, scope, expiresAt: this.clock() + ttl, uses: n };
+  }
+
+  canManageRegistration(user, reg) {
+    return user.role === 'admin' || (reg.scope.type === 'team' && this.teams.has(this.teams.get(reg.scope.name), user, 'owner'));
+  }
+
+  /** The registration tokens still good, as the person may see them (never the token itself). */
+  registrationsFor(user) {
+    return Object.entries(this.data.runnerRegs)
+      .filter(([, r]) => r.expiresAt >= this.clock() && (r.used ?? 0) < (r.uses ?? 1) && this.canManageRegistration(user, r))
+      .map(([hash, r]) => ({ id: hash.slice(0, 16), scope: r.scope, createdBy: r.createdBy, createdAt: r.createdAt, expiresAt: r.expiresAt, usesLeft: (r.uses ?? 1) - (r.used ?? 0) }));
+  }
+
+  revokeRegistration(user, id, ip) {
+    const hash = Object.keys(this.data.runnerRegs).find((h) => h.slice(0, 16) === String(id));
+    const reg = hash && this.data.runnerRegs[hash];
+    if (!reg || !this.canManageRegistration(user, reg)) throw new HttpError(404, 'not_found', 'No such registration token.');
+    this.store.tx((d) => {
+      delete d.runnerRegs[hash];
+      this.store.audit({ userId: user.id, event: 'runner.registration_revoked', ip, scope: reg.scope.type === 'team' ? `team:${reg.scope.name}` : 'instance' });
+    });
+    return { revoked: String(id) };
   }
 
   register({ token, name, labels = [], capabilities = ['ci', 'fn'], backend = 'unknown', version = '' }, ip) {
-    const reg = this.data.runnerRegs[sha256(String(token ?? ''))];
-    if (!reg || reg.expiresAt < this.clock()) throw new HttpError(401, 'bad_registration', 'That runner registration token is invalid or expired.');
+    const regKey = sha256(String(token ?? ''));
+    const reg = this.data.runnerRegs[regKey];
+    if (!reg || reg.expiresAt < this.clock() || (reg.used ?? 0) >= (reg.uses ?? 1)) throw new HttpError(401, 'bad_registration', 'That runner registration token is invalid or expired.');
     if (!RUNNER_NAME_RE.test(String(name ?? ''))) throw new HttpError(400, 'bad_name', 'Give the runner a short name.');
     const id = newId('run');
     const runnerToken = randomToken('gtrn_');
@@ -72,7 +111,7 @@ export class JobService {
       capabilities: capabilities.filter((c) => ['ci', 'fn'].includes(c)), backend: String(backend).slice(0, 30), version: String(version).slice(0, 30),
       tokenHash: sha256(runnerToken), createdAt: this.clock(), lastSeen: this.clock(), ip,
     };
-    this.store.tx((d) => { d.runners[id] = runner; });
+    this.store.tx((d) => { d.runners[id] = runner; d.runnerRegs[regKey].used = (reg.used ?? 0) + 1; });
     return { id, token: runnerToken, scope: runner.scope };
   }
 
@@ -108,6 +147,12 @@ export class JobService {
 
   /** kind 'ci' jobs persist; kind 'fn' jobs live in memory. */
   enqueue(job) {
+    if (job.kind === 'fn') {
+      // Calls nobody has picked up yet sit in memory; one owner's pile of them is bounded (FN-1).
+      let waiting = 0;
+      for (const j of this.live.values()) if (j.status === 'queued' && ownerKey(j.owner) === ownerKey(job.owner)) waiting++;
+      if (waiting >= (this.config.compute.maxQueuedCalls ?? MAX_QUEUED_CALLS)) throw new HttpError(429, 'busy', 'Too many calls to these functions are waiting for a runner; try again shortly.');
+    }
     const full = {
       id: newId(job.kind === 'fn' ? 'inv' : 'job'), status: 'queued', createdAt: this.clock(), labels: [], logBytes: 0, ...job,
       tokenHash: null,
@@ -120,6 +165,56 @@ export class JobService {
     this.queue.push(full.id);
     this.dispatch();
     return full;
+  }
+
+  /** One owner, and the instance, may only have so many builds waiting or running (LIM-2). */
+  assertRoom(owner) {
+    const mine = ownerKey(owner);
+    let active = 0;
+    let queued = 0;
+    for (const j of Object.values(this.data.jobs)) {
+      if (j.kind !== 'ci' || !['queued', 'running'].includes(j.status)) continue;
+      if (j.status === 'queued') queued++;
+      if (ownerKey(j.owner) === mine) active++;
+    }
+    if (active >= (this.config.compute.maxActiveJobs ?? MAX_ACTIVE_JOBS)) throw new HttpError(429, 'too_many_jobs', `${mine} already has ${active} builds queued or running; wait for some to finish, or cancel them.`);
+    if (queued >= (this.config.compute.maxQueuedJobs ?? MAX_QUEUED_JOBS)) throw new HttpError(429, 'queue_full', 'The build queue is full; try again shortly.');
+  }
+
+  /** Minutes the owner's waiting and running plan-paid builds may still use, counted at their timeouts (QUOTA-1). */
+  reservedMinutes(owner) {
+    const mine = ownerKey(owner);
+    let n = 0;
+    for (const j of Object.values(this.data.jobs)) {
+      if (j.kind === 'ci' && !j.paidByBudget && ['queued', 'running'].includes(j.status) && ownerKey(j.owner) === mine) n += Math.ceil(j.timeoutMs / 60_000);
+    }
+    return n;
+  }
+
+  /** The pipeline a build runs, kept once in a blob rather than in every job record (LIM-2). */
+  specOf(j) {
+    if (j.spec) return j.spec;
+    if (!j.pipelineSha) return null;
+    try { return { pipeline: JSON.parse(this.store.readBlob(j.pipelineSha).toString('utf8')) }; } catch { return null; }
+  }
+
+  /**
+   * A build's source is only needed until it ends, so it is kept in a file of its own, not in the blobs: those are
+   * named by the hash of their bytes, shared with packages and functions, and never deleted (LIM-1b). The key is
+   * stored in the job's `sourceSha`.
+   */
+  keepSource(buf) {
+    const key = crypto.randomBytes(16).toString('hex');
+    fs.writeFileSync(path.join(this.sourceDir, key), buf, { mode: 0o600 });
+    return key;
+  }
+
+  readSource(job) {
+    try { return fs.readFileSync(path.join(this.sourceDir, job.sourceSha)); } catch { throw new HttpError(404, 'no_source', 'This job\'s source is no longer kept.'); }
+  }
+
+  dropSource(job) {
+    if (job.kind === 'ci' && job.ownSource && job.sourceSha) fs.rmSync(path.join(this.sourceDir, job.sourceSha), { force: true });
   }
 
   trimHistory() {
@@ -154,10 +249,13 @@ export class JobService {
     if (job.kind === 'fn') Object.assign(job, patch);
     else this.store.tx((d) => Object.assign(d.jobs[job.id], patch));
     const j = this.get(job.id);
-    return {
-      job: { id: j.id, kind: j.kind, spec: j.spec, timeoutMs: j.timeoutMs, hasSource: Boolean(j.sourceSha), owner: j.owner },
+    const handed = {
+      job: { id: j.id, kind: j.kind, spec: this.specOf(j), timeoutMs: j.timeoutMs, hasSource: Boolean(j.sourceSha), owner: j.owner, limits: { maxUnpackedBytes: 4 * this.config.maxPackageBytes } },
       jobToken,
     };
+    // The runner has the caller's request now; the server need not keep its body while the call runs (FN-1).
+    if (j.kind === 'fn' && j.spec?.request) j.spec = { ...j.spec, request: { ...j.spec.request, body: '' } };
+    return handed;
   }
 
   /** Long-poll: resolves with { job, jobToken } or null after waitMs. */
@@ -179,11 +277,12 @@ export class JobService {
   }
 
   /** A job token is only good for its own job, while it runs. */
-  jobFor(id, token) {
+  jobFor(id, token, runnerId) {
     const j = this.get(id);
     if (!j || !token) throw new HttpError(401, 'bad_job_token', 'Unknown job or token.');
     if (j.status !== 'running') throw new HttpError(409, 'job_finished', `This job is already ${j.status}.`);
-    if (j.tokenHash !== sha256(token)) throw new HttpError(401, 'bad_job_token', 'Unknown job or token.');
+    // The token belongs to the runner that claimed the job, not to whoever else holds it (RUN-2).
+    if (j.tokenHash !== sha256(token) || (runnerId && j.runnerId !== runnerId)) throw new HttpError(401, 'bad_job_token', 'Unknown job or token.');
     return j;
   }
 
@@ -220,13 +319,18 @@ export class JobService {
     if (job.kind === 'fn') Object.assign(job, patch, { response });
     else this.store.tx((d) => Object.assign(d.jobs[job.id], patch));
     const final = this.get(job.id);
-    if (this.onComplete) {
-      try { await this.onComplete(final); } catch (err) { this.appendLog(final, `\n[gitcha] after-job step failed: ${err.message}\n`); }
-    }
+    await this.ended(final);
     this.done.get(job.id)?.(final);
     this.done.delete(job.id);
     if (job.kind === 'fn') setTimeout(() => this.live.delete(job.id), 60_000).unref();
     return final;
+  }
+
+  /** Every way a build can end comes through here: its source goes, and its minutes are metered (TRIG-1). */
+  async ended(job) {
+    this.dropSource(job);
+    if (!this.onComplete) return;
+    try { await this.onComplete(job); } catch (err) { this.appendLog(job, `\n[gitcha] after-job step failed: ${err.message}\n`); }
   }
 
   /** Wait for a job to finish (used for function invocations). */
@@ -236,19 +340,23 @@ export class JobService {
         this.done.delete(job.id);
         this.queue = this.queue.filter((id) => id !== job.id);
         if (['queued', 'running'].includes(job.status)) Object.assign(job, { status: 'timed_out', finishedAt: this.clock(), tokenHash: null });
+        // Nobody will read this call again: do not keep it, or the caller's body, in memory (FN-1).
+        if (job.kind === 'fn') { this.live.delete(job.id); if (job.spec?.request) job.spec = { ...job.spec, request: { ...job.spec.request, body: '' } }; }
         resolve(job);
       }, ms);
       this.done.set(job.id, (j) => { clearTimeout(t); resolve(j); });
     });
   }
 
-  cancel(user, id, canManage) {
+  async cancel(user, id, canManage) {
     const j = this.data.jobs[id];
     if (!j || !canManage(user, j)) throw new HttpError(404, 'not_found', 'No such job.');
     if (!['queued', 'running'].includes(j.status)) return j;
     this.queue = this.queue.filter((x) => x !== id);
     this.store.tx((d) => Object.assign(d.jobs[id], { status: 'cancelled', finishedAt: this.clock(), tokenHash: null }));
-    return this.get(id);
+    const final = this.get(id);
+    await this.ended(final); // the minutes it used are metered; the runner learns on its next log call and stops
+    return final;
   }
 
   /** Mark CI jobs past their deadline as timed out. Call periodically. */
@@ -256,12 +364,13 @@ export class JobService {
     for (const j of Object.values(this.data.jobs)) {
       if (j.status === 'running' && j.deadline < this.clock()) {
         this.store.tx((d) => Object.assign(d.jobs[j.id], { status: 'timed_out', finishedAt: this.clock(), tokenHash: null }));
+        this.ended(this.data.jobs[j.id]).catch(() => {});
       }
     }
   }
 
   view(j) {
-    const { tokenHash, log, ...rest } = j;
+    const { tokenHash, log, spec, pipelineSha, ...rest } = j;
     return rest;
   }
 }

@@ -20,7 +20,9 @@ MAINT="inputloop <nathanielfrankford@gmail.com>"
 REV=$(git -C "$here" rev-parse --short=7 HEAD 2>/dev/null || echo nogit)
 VER=$(node -p "require('$here/package.json').version")+git$REV
 
-stage() { S=$OUT/.stage/$1; rm -rf "$S"; mkdir -p "$S/DEBIAN" "$S/usr/share/doc/$1"; }
+# A stage directory of our own: alphaOS's other parts share $OUT/.stage, which this script must not remove.
+STAGE=$OUT/.stage-gitcha
+stage() { S=$STAGE/$1; rm -rf "$S"; mkdir -p "$S/DEBIAN" "$S/usr/share/doc/$1"; }
 finish() {   # finish NAME DEPENDS DESCRIPTION [RECOMMENDS]
   n=$1 dep=$2 desc=$3 rec=${4:-}
   printf 'Copyright 2026 Bryant Frankford and Corwin Brust and Contributors.\nCode: GPL-3.0-or-later OR LGPL-3.0-or-later. Writing: CC-BY-SA-4.0 (TERMS v2, 2026-10-10).\nThe full texts: /usr/share/common-licenses/GPL-3 and LGPL-3.\n' > "$S/usr/share/doc/$n/copyright"
@@ -75,6 +77,8 @@ if [ "$1" = configure ]; then
   getent passwd gitcha >/dev/null || adduser --system --ingroup gitcha --home /var/lib/gitcha --shell /bin/sh gitcha
   chown root:gitcha /etc/inputloop/gitcha/gitcha.env; chmod 640 /etc/inputloop/gitcha/gitcha.env
   systemctl daemon-reload >/dev/null 2>&1 || true
+  # Nothing starts by itself, but a service that is running keeps the old code until it restarts.
+  systemctl try-restart gitcha.service >/dev/null 2>&1 || true
 fi
 EOF
 chmod 755 "$S/DEBIAN/postinst"
@@ -119,4 +123,4 @@ chmod 755 "$S/DEBIAN/postinst"
 finish inputloop-gitcha-runner "nodejs (>= 20), adduser" "Gitcha runner: CI jobs and functions in bContain VMs
 Registers with a Gitcha server, takes jobs, runs each in its own throwaway
 bContain VM, streams the log back and reports the result.  Does not start by itself." "bcontain"
-rm -rf "$OUT/.stage"
+rm -rf "$STAGE"

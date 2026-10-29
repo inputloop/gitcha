@@ -5,6 +5,8 @@
 // paid features it offers) and lists the peers it links to. Peers come from
 // configuration or from announcements an admin has approved. Nothing a peer
 // says is trusted beyond being shown, escaped, as a link.
+import dns from 'node:dns';
+import net from 'node:net';
 import { HttpError } from '../errors.js';
 
 export const RING_PATH = '/.well-known/gitcha-ring.json';
@@ -15,6 +17,23 @@ export function normalizePeerUrl(url) {
   try { u = new URL(String(url)); } catch { throw new HttpError(400, 'bad_url', `"${url}" is not a URL.`); }
   if (!/^https?:$/.test(u.protocol) || u.username || u.password) throw new HttpError(400, 'bad_url', 'Ring members must be plain http(s) URLs.');
   return u.origin;
+}
+
+/** An address nobody on the public internet can be at: loopback, private, link-local, shared, multicast, reserved. */
+export function privateAddress(ip) {
+  const v4 = (a) => {
+    const [x, y] = a.split('.').map(Number);
+    return x === 0 || x === 10 || x === 127 || x >= 224 || (x === 100 && y >= 64 && y <= 127) || (x === 169 && y === 254) || (x === 172 && y >= 16 && y <= 31)
+      || (x === 192 && (y === 168 || (y === 0 && a.startsWith('192.0.0.')))) || (x === 198 && (y === 18 || y === 19));
+  };
+  if (net.isIPv4(ip)) return v4(ip);
+  if (!net.isIPv6(ip)) return true;
+  const low = ip.toLowerCase();
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(low);
+  if (mapped) return v4(mapped[1]);
+  const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(low); // how URL prints a mapped IPv4 address
+  if (hex) { const hi = parseInt(hex[1], 16); const lo = parseInt(hex[2], 16); return v4(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`); }
+  return low === '::' || low === '::1' || /^f[cd]/.test(low) || /^fe[89ab]/.test(low) || low.startsWith('ff');
 }
 
 function clean(s, n) { return typeof s === 'string' ? s.slice(0, n) : ''; }
@@ -32,8 +51,9 @@ export function sanitizeManifest(m, origin) {
 }
 
 export class RingService {
-  constructor({ store, config, version, features, clock = Date.now, fetchImpl = globalThis.fetch }) {
-    Object.assign(this, { store, config, version, features, clock, fetchImpl });
+  // `lookup` resolves a peer's name before we call it; it is off when a test supplies its own fetch.
+  constructor({ store, config, version, features, clock = Date.now, fetchImpl = globalThis.fetch, lookup = fetchImpl === globalThis.fetch ? dns.promises.lookup : null }) {
+    Object.assign(this, { store, config, version, features, clock, fetchImpl, lookup });
     this.self = new URL(config.publicUrl).origin;
   }
 
@@ -87,8 +107,36 @@ export class RingService {
     }
   }
 
+  /** Look at the members again on a schedule (config.ring.refresh), soon after start and then every interval. */
+  startRefresh(every = this.config.ring.refresh) {
+    if (this.timer || !(every > 0)) return;
+    const go = () => this.refresh().catch((err) => console.error('ring refresh failed', err.message));
+    this.timer = setInterval(go, every);
+    this.timer.unref();
+    this.first = setTimeout(go, Math.min(every, 10_000));
+    this.first.unref();
+  }
+
+  stop() { clearInterval(this.timer); clearTimeout(this.first); this.timer = this.first = null; }
+
+  /** A stranger asked for this address to be called: only a public one is (RING-2). */
+  async assertPublic(origin) {
+    const host = new URL(origin).hostname.replace(/^\[|\]$/g, '');
+    if (net.isIP(host)) { if (privateAddress(host)) throw new Error('not public'); return; }
+    if (host === 'localhost' || !host.includes('.') || /\.(localhost|local|internal|lan|home\.arpa)$/.test(host)) throw new Error('not public');
+    if (!this.lookup) return;
+    const found = await this.lookup(host, { all: true });
+    if (!found.length || found.some((a) => privateAddress(a.address))) throw new Error('not public');
+  }
+
   /** Refresh what we know about each member. Failures are recorded, not thrown. */
   async refresh() {
+    if (this.refreshing) return this.refreshing;
+    this.refreshing = this.refreshAll().finally(() => { this.refreshing = null; });
+    return this.refreshing;
+  }
+
+  async refreshAll() {
     const results = {};
     for (const url of this.memberUrls()) {
       try {
@@ -110,10 +158,10 @@ export class RingService {
     if (Object.values(this.store.data.ring.announcements).filter((a) => a.status === 'pending').length >= 200) {
       throw new HttpError(429, 'ring_busy', 'Too many pending ring requests; try later.');
     }
+    // One answer for every way this can fail, so nobody learns what is behind an address by asking.
+    const refused = new HttpError(400, 'ring_unreachable', `${origin} did not answer with a Gitcha ring manifest.`);
     let info;
-    try { info = await this.fetchPeer(origin); } catch (err) {
-      throw new HttpError(400, 'ring_unreachable', `Could not read ${origin}${RING_PATH}: ${err.message}`);
-    }
+    try { await this.assertPublic(origin); info = await this.fetchPeer(origin); } catch { throw refused; }
     this.store.tx((d) => {
       d.ring.announcements[origin] = { url: origin, name: info.name, status: 'pending', at: this.clock(), ip };
     });

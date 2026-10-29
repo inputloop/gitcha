@@ -16,7 +16,7 @@ export function assertAllowed(config) {
 }
 
 /** Run workdir/run.sh. Resolves { code, output, timedOut }. */
-export function run({ workdir, timeoutMs, onOutput }) {
+export function run({ workdir, timeoutMs, onOutput, signal }) {
   return new Promise((resolve) => {
     const child = spawn('sh', [path.join(workdir, 'run.sh')], {
       cwd: workdir, detached: true,
@@ -32,8 +32,12 @@ export function run({ workdir, timeoutMs, onOutput }) {
       timedOut = true;
       try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already gone */ }
     }, timeoutMs);
+    // The server said this job is over (cancelled): stop it now.
+    const stop = () => { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* already gone */ } };
+    if (signal?.aborted) stop(); else signal?.addEventListener('abort', stop, { once: true });
     child.on('close', (code) => {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', stop);
       resolve({ code: code ?? 137, output, timedOut });
     });
   });
