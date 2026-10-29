@@ -42,14 +42,54 @@ function bool(value, fallback) {
   return /^(1|true|yes|on)$/i.test(value);
 }
 
+/** A key is 32 bytes in base64; anything else (an empty or half-written file, a typo) must stop the server, not run it. */
+function checkKey(key, where) {
+  if (Buffer.from(String(key), 'base64').length !== 32) {
+    throw new StartupError(`${where} is not a 32-byte key in base64. Restore the key you backed up, or (only for a brand-new install) delete it so a new one is made.`);
+  }
+  return key;
+}
+
+/**
+ * A new key over a database that already holds accounts would make every one of them unreadable (sealed passwords
+ * and authenticator secrets, 500s for known users and 401s for unknown ones). So with accounts, or with a db.json
+ * that cannot be read to find out, no key is made: the operator restores the one that belongs to it (AUTH-14).
+ */
+function refuseIfAccounts(dataDir, file) {
+  const dbFile = path.join(dataDir, 'db.json');
+  if (!fs.existsSync(dbFile)) return;
+  let users;
+  try {
+    users = Object.keys(JSON.parse(fs.readFileSync(dbFile, 'utf8')).users ?? {}).length;
+  } catch (err) {
+    throw new StartupError(`${dbFile} exists but cannot be read (${err.message}), and there is no ${file}. Not making a new key over it: restore db.json and its key from the same backup.`);
+  }
+  if (users > 0) {
+    throw new StartupError(`${dbFile} holds ${users} account(s) but there is no ${file} and GITCHA_SECRET_KEY is not set. A new key would lock every account out. Restore the key that goes with this database (set GITCHA_SECRET_KEY or put it in ${file}).`);
+  }
+}
+
 /** Load (or create) the 32-byte key used to encrypt TOTP secrets at rest. */
 function loadSecretKey(dataDir, envKey) {
-  if (envKey) return envKey;
+  if (envKey) return checkKey(envKey, 'GITCHA_SECRET_KEY');
   const file = path.join(dataDir, 'secret.key');
-  if (fs.existsSync(file)) return fs.readFileSync(file, 'utf8').trim();
+  const read = () => checkKey(fs.readFileSync(file, 'utf8').trim(), file);
+  if (fs.existsSync(file)) return read();
+  refuseIfAccounts(dataDir, file);
+  // Written whole under a temporary name and then linked into place: link fails if another start got there first, and
+  // nobody can ever read a half-written key (a second start that read an empty file would have run with no key).
   const key = crypto.randomBytes(32).toString('base64');
-  fs.writeFileSync(file, key + '\n', { mode: 0o600 });
-  return key;
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, key + '\n', { mode: 0o600, flag: 'w' });
+  try {
+    fs.linkSync(tmp, file);
+    return key;
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+    return read();
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
 }
 
 export function loadConfig(env = process.env, overrides = {}) {

@@ -125,6 +125,12 @@ Back up `/var/lib/gitcha`. Keep `secret.key` apart from the database backups: pa
 (as AES-256-GCM-sealed scrypt hashes) and authenticator secrets are encrypted with it, so the
 database alone is useless to a thief, and the database without the key is useless to you.
 
+To restore, put back `db.json` **and the `secret.key` that was current when it was saved** (or set
+`GITCHA_SECRET_KEY` to it). The server will not start on a `db.json` that holds accounts when it has no key:
+it prints `gitcha: cannot start: ...` and exits 1 instead of making a new key, which would lock every
+account out. It also refuses a `db.json` it cannot read and a key file that is empty or not 32 bytes in
+base64. A new key is made only on a first start, or when `db.json` holds no accounts.
+
 ## Runners
 
 1. Install bContain on the runner VM and check it: `bcontain doctor`. The runner VM needs

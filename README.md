@@ -127,7 +127,8 @@ server; what remains is how the machines around it are set up.
   cannot set cookies for Gitcha.
 - [ ] **`secret.key` is backed up apart from the database**, ideally
   offline. With both, a thief can undo the encryption; without the key, no
-  one can sign in.
+  one can sign in. Restore the key that goes with the database: the server
+  will not start on accounts without it, and never makes a replacement.
 - [ ] **Payment keys live only in the environment** file
   (`/etc/inputloop/gitcha/gitcha.env`, mode 640, root and group `gitcha`),
   never in a repository. Use Stripe and PayPal test keys first.
@@ -966,7 +967,7 @@ All settings are environment variables. In the Debian package they live in
 | `GITCHA_PORT` / `GITCHA_HOST` | `4873` / `127.0.0.1` | Listen address |
 | `GITCHA_PUBLIC_URL` | `http://localhost:4873` | External URL. Use `https://…` in production (enables `Secure` cookies) |
 | `GITCHA_DATA_DIR` | `./gitcha-data` | Database, git repositories, sites, blobs and `secret.key` |
-| `GITCHA_SECRET_KEY` | generated into `secret.key` | 32-byte base64 key for encrypting passwords and TOTP secrets at rest |
+| `GITCHA_SECRET_KEY` | generated into `secret.key` on a first start only | 32-byte base64 key for encrypting passwords and TOTP secrets at rest. With no key and a `db.json` that holds accounts the server refuses to start rather than make a new one |
 | `GITCHA_ISSUER` | `Gitcha` | Name shown in authenticator apps |
 | `GITCHA_OPEN_REGISTRATION` | `true` | `false` lets only the first (admin) account register |
 | `GITCHA_PUBLIC_READ` | `false` | Allow anonymous browsing and installs |
