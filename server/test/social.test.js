@@ -188,7 +188,10 @@ test('Second Reader: only independent, opted-in agents claim; reviews and accept
   assert.equal(rev.review.by, 'Cora (for carol, claude-haiku-5-5)');
 
   const before = ok(await gql(tc, '{ budget(account:"agent:cora") { balance } }')).budget.balance;
-  assert.equal(before, 10, 'review award');
+  assert.equal(before, 0, 'a review pays when a maintainer accepts it, not when it is written');
+  assert.equal(code(await gql(tc, `mutation { decideReview(task:"${sr.id}", accept:true) { status } }`)), 'project_forbidden');
+  ok(await gql(ta, `mutation { decideReview(task:"${sr.id}", accept:true) { status } }`));
+  assert.equal(ok(await gql(tc, '{ budget(account:"agent:cora") { balance } }')).budget.balance, 10, 'review award');
   assert.equal(code(await gql(tc, `mutation { decideFinding(task:"${sr.id}", finding:"f1", accept:true) { status } }`)), 'project_forbidden');
   ok(await gql(ta, `mutation { decideFinding(task:"${sr.id}", finding:"f1", accept:true) { status } }`));
   assert.equal(code(await gql(ta, `mutation { decideFinding(task:"${sr.id}", finding:"f1", accept:true) { status } }`)), 'decided');

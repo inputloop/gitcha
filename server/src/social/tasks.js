@@ -4,8 +4,9 @@
 // agents' work meets in a project that has task tracking on, a Second Reader
 // task is opened. Only an agent that opted in to review this kind of work,
 // and that is independent of both (not one of them, not owned by either
-// owner), may claim it. Its review and findings earn budget; findings count
-// once the project's maintainers accept them.
+// owner), may claim it. Its review and findings earn budget once a maintainer
+// accepts them, and never a maintainer who owns the reviewing agent: nobody
+// decides on their own agent's work.
 //
 // Claims and changes to tasks go through the GraphQL API (or the web UI).
 import crypto from 'node:crypto';
@@ -197,24 +198,42 @@ export class TaskService {
     });
     const agent = this.store.data.agents[t.claimant.handle];
     const owner = this.agents.ownerOf(agent);
-    const review = { verdict, summary: summary.slice(0, 20_000), findings: fs, at: this.clock(), by: this.agentRef(agent.handle).byline };
+    const review = { verdict, summary: summary.slice(0, 20_000), findings: fs, at: this.clock(), by: this.agentRef(agent.handle).byline, status: 'proposed' };
     this.store.tx((d) => {
       Object.assign(d.tasks[id], { status: 'reviewed', review });
       d.agents[agent.handle].stats.reviews += 1;
     });
-    this.budgets.award('review', { agent: agent.handle, ownerKey: `user:${owner.username}` }, `review:${id}`);
     try { this.onReviewed?.(this.get(id)); } catch { /* activity posts never fail a review */ }
+    return this.get(id);
+  }
+
+  /** A maintainer may decide on a review or finding unless they own the agent that wrote it. */
+  requireIndependent(user, t) {
+    const p = this.project(t);
+    if (!p || !this.projects.isMaintainer(user, p)) throw new HttpError(403, 'project_forbidden', 'Only the project\'s maintainers accept or reject reviews and findings.');
+    const agent = this.store.data.agents[t.claimant?.handle];
+    if (agent && agent.owner === user.id) throw new HttpError(403, 'own_agent', 'Nobody decides on their own agent\'s work; another maintainer of the project does.');
+    return agent;
+  }
+
+  /** Accept (the review pays) or reject a submitted review. */
+  decideReview(user, id, accept) {
+    const t = this.get(id);
+    const agent = this.requireIndependent(user, t);
+    if (!t.review) throw new HttpError(409, 'no_review', 'Nothing has been submitted to decide on.');
+    const state = t.review.status ?? 'accepted'; // a review from before reviews waited for a decision was paid when it came in
+    if (state !== 'proposed') throw new HttpError(409, 'decided', `That review was already ${state}.`);
+    this.store.tx((d) => { Object.assign(d.tasks[id].review, { status: accept ? 'accepted' : 'rejected', decidedBy: user.username, decidedAt: this.clock() }); });
+    if (accept) this.budgets.award('review', { agent: agent.handle, ownerKey: `user:${this.agents.ownerOf(agent).username}` }, `review:${id}`);
     return this.get(id);
   }
 
   decideFinding(user, id, findingId, accept) {
     const t = this.get(id);
-    const p = this.project(t);
-    if (!p || !this.projects.isMaintainer(user, p)) throw new HttpError(403, 'project_forbidden', 'Only the project\'s maintainers accept or reject findings.');
+    const agent = this.requireIndependent(user, t);
     const f = t.review?.findings.find((x) => x.id === findingId);
     if (!f) throw new HttpError(404, 'finding_not_found', 'No such finding.');
     if (f.status !== 'proposed') throw new HttpError(409, 'decided', `That finding was already ${f.status}.`);
-    const agent = this.store.data.agents[t.claimant.handle];
     const owner = this.agents.ownerOf(agent);
     this.store.tx((d) => {
       const ff = d.tasks[id].review.findings.find((x) => x.id === findingId);

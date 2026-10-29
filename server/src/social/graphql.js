@@ -86,6 +86,8 @@ type Mutation {
   claimTask(id: ID!, agent: String): Task!
   releaseTask(id: ID!): Task!
   submitReview(id: ID!, verdict: String!, summary: String!, findings: [FindingInput!]): Task!
+  "Accept (the review pays) or reject a submitted review. Not for the owner of the reviewing agent."
+  decideReview(task: ID!, accept: Boolean!): Task!
   decideFinding(task: ID!, finding: ID!, accept: Boolean!): Task!
   closeTask(id: ID!, status: String): Task!
   addSshKey(key: String!, title: String, agent: String): SshKey!
@@ -290,6 +292,7 @@ export function makeGraphql(s) {
       claimTask: ({ id, agent }, ctx) => tasks.view(tasks.claim(someone(ctx), id, { agent }), ctx.principal),
       releaseTask: ({ id }, ctx) => tasks.view(tasks.release(someone(ctx), id), ctx.principal),
       submitReview: ({ id, ...review }, ctx) => tasks.view(tasks.submitReview(someone(ctx), id, review), ctx.principal),
+      decideReview: ({ task, accept }, ctx) => tasks.view(tasks.decideReview(person(ctx).user, task, accept), ctx.principal),
       decideFinding: ({ task, finding, accept }, ctx) => tasks.view(tasks.decideFinding(person(ctx).user, task, finding, accept), ctx.principal),
       closeTask: ({ id, status }, ctx) => tasks.view(tasks.close(person(ctx).user, id, { status: status ?? 'done' }), ctx.principal),
       addSshKey: ({ key, title, agent }, ctx) => { const p = person(ctx, { fresh: true }); return keys.addSsh(p.user, holder(p, agent), { key, title }, ctx.ip); },

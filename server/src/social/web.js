@@ -224,6 +224,7 @@ export function registerSocialWeb(router, s) {
     });
     tasks.submitReview(principalOf(a), ctx.params.id, { verdict: f.verdict, summary: f.summary, findings });
   }));
+  router.post('/tasks/:id/decision', taskPost((ctx, a, f) => tasks.decideReview(a.user, ctx.params.id, f.accept === 'yes')));
   router.post('/tasks/:id/findings/:finding', taskPost((ctx, a, f) => tasks.decideFinding(a.user, ctx.params.id, ctx.params.finding, f.accept === 'yes')));
 
   // ---- support (tickets, as their reporters and tenants see them) ---------------------------------
