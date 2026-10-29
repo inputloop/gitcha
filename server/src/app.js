@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Builds the whole server: it creates every service (accounts, packages, teams, hosting, CI,
 // billing, social, git and more), connects them, registers their web routes, and returns an
@@ -158,6 +159,10 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
   // Every 30 seconds, mark running jobs past their deadline as timed out, and remove expired sign-ups
   // and sessions. unref() means this
   // timer alone does not keep the process running.
+  // Save once now that every service has added its collections (jobs, keys, ops and the rest). From here
+  // on, db.json always holds every collection, so a change that fails and is rolled back (store.tx) can
+  // go back to the file without losing a collection that had never been written.
+  store.tx(() => {});
   const sweeper = setInterval(() => { services.jobs.sweep(); auth.sweep(); }, 30_000);
   sweeper.unref();
   // When the server closes, stop the timer, answer any waiting runner requests with nothing, and

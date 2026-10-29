@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // What the MCP server accepts (EXT-1b, EXT-13, EXT-2b) and what it passes on to the model (EXT-4). Each registry is a
 // loopback stub that says whatever the test needs, hostile text included.

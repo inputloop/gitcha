@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -153,5 +154,27 @@ test('names and versions that every object already has are refused, not a 500 (P
     assert.equal((await publish(srv, token, tarball({ name: 'fine', version: '1.0.1', team: 'constructor' }))).status, 404);
     // the registry is still serving
     assert.equal((await api(srv.url, 'GET', '/api/v1/packages/fine', { token })).status, 200);
+  } finally { await srv.close(); }
+});
+
+test('a package homepage must be an http or https address; any other kind is refused, and never drawn as a link', async () => {
+  const srv = await startServer({ env: { GITCHA_PUBLIC_READ: 'true' } });
+  try {
+    const token = await deviceLogin(srv, createUser(srv));
+    for (const homepage of ['javascript:alert(document.cookie)', ' JavaScript:alert(1)', 'data:text/html,<script>alert(1)</script>', 'vbscript:x', 'https://ok.example/a b', '//no-scheme.example', `https://example.org/${'a'.repeat(300)}`, 42]) {
+      const r = await publish(srv, token, tarball({ name: 'bad-home', version: '1.0.0', homepage }));
+      assert.equal(r.status, 400, `refused: ${String(homepage).slice(0, 40)}`);
+      assert.match(r.body.message, /homepage/);
+    }
+    const good = await publish(srv, token, tarball({ name: 'good-home', version: '1.0.0', homepage: 'https://example.org/good-home' }));
+    assert.equal(good.status, 201, JSON.stringify(good.body));
+    const page = await (await fetch(`${srv.url}/packages/good-home`)).text();
+    assert.match(page, /<a href="https:\/\/example\.org\/good-home" rel="nofollow noopener">/);
+
+    // A homepage stored before this rule is shown as text, not as a link.
+    srv.store.tx((d) => { d.packages['good-home'].homepage = 'javascript:alert(1)'; });
+    const old = await (await fetch(`${srv.url}/packages/good-home`)).text();
+    assert.doesNotMatch(old, /href="javascript:/i);
+    assert.match(old, /<dd>javascript:alert\(1\)<\/dd>/);
   } finally { await srv.close(); }
 });

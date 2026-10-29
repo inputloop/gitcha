@@ -15,7 +15,8 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "test:strict": "GITCHA_STRICT_STORE=1 node --test test/*.test.js"
   },
   "dependencies": {
     "graphql": "^16.9.0",

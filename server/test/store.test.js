@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // The store: the audit log's per-user caps (AUTH-5 / STORE-3 / AUTH-11) and, below, its files (STORE-1, 4, 5, 6).
 import { test } from 'node:test';

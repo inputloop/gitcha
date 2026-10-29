@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Accounts and sign-in: registering, setting up two-factor login (2FA: a code from an authenticator
 // app on top of the password), logging in, web sessions and device tokens, and the intermittent

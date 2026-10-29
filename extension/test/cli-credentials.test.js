@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // How the CLI and the SessionStart hook treat the registry and the device token: EXT-5 (the hook), EXT-6 and EXT-6b
 // (the token on disk and logout), EXT-10 (the hidden prompt).

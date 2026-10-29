@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // What `gitcha publish` ships (EXT-9, EXT-9b, EXT-9c). A published version cannot be deleted, so the
 // default is an allowlist and a deny list sits under it.
@@ -123,4 +124,14 @@ test('EXT-9b: the publish tool takes dry_run, returns the list, and its descript
     assert.match(r.content[0].text, /src\/index\.js \(5 bytes\)/);
     assert.match(r.content[0].text, /Nothing was uploaded/);
   } finally { p.kill(); }
+});
+
+test('isWebLink: only plain http and https addresses are links', async () => {
+  const { isWebLink, validateManifest } = await import('../lib/manifest.js');
+  for (const ok of ['https://example.org', 'http://example.org/a?b=c#d', 'https://例え.jp/']) assert.ok(isWebLink(ok), ok);
+  for (const bad of ['javascript:alert(1)', 'JAVASCRIPT:alert(1)', 'data:text/html,x', 'file:///etc/passwd', 'ftp://x.example', '//x.example', 'https://', 'https://a b.example', 'https://x.example/\u0000', '', null, 7]) {
+    assert.equal(isWebLink(bad), false, String(bad));
+  }
+  assert.deepEqual(validateManifest({ name: 'a', version: '1.0.0', homepage: 'https://example.org' }), []);
+  assert.match(validateManifest({ name: 'a', version: '1.0.0', homepage: 'javascript:alert(1)' }).join(), /homepage/);
 });

@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Teams: groups of users that own packages together. Teams live in the store's `teams` collection,
 // keyed by their lowercase name, and each lists its members and their roles. Roles, highest first:

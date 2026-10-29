@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Custom domains for hosted sites (for example, serving a site at www.example.com).
 // You prove you own a domain with a DNS TXT record (a short text note you can
@@ -89,10 +90,13 @@ export class DomainService {
     const all = this.store.data.domainClaims[h];
     if (!all) return {};
     const now = this.clock();
-    let changed = false;
-    for (const [site, c] of Object.entries(all)) if (c.expiresAt < now || !this.store.data.sites[site]) { delete all[site]; changed = true; }
-    if (!Object.keys(all).length) { delete this.store.data.domainClaims[h]; changed = true; }
-    if (changed) this.store.flush();
+    const gone = Object.entries(all).filter(([site, c]) => c.expiresAt < now || !this.store.data.sites[site]).map(([site]) => site);
+    if (gone.length) {
+      this.store.tx((d) => {
+        for (const site of gone) delete d.domainClaims[h][site];
+        if (!Object.keys(d.domainClaims[h]).length) delete d.domainClaims[h];
+      });
+    }
     return this.store.data.domainClaims[h] ?? {};
   }
 

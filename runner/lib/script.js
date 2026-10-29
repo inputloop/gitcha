@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Builds the job folder that every backend runs: the source code, the harnesses (small wrappers that
 // call a function) and a generated run.sh script. Backends differ only in where run.sh runs, so a job

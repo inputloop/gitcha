@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Projects: the git repositories Gitcha hosts. A user or a team owns each one.
 // The project's maintainers add people and agents as collaborators.
@@ -335,7 +336,6 @@ export class ProjectService {
       c.agent = a?.handle ?? null;
       if (a) agents.set(a.handle, a);
     }
-    for (const a of agents.values()) this.store.data.agents[a.handle].stats.commits += commits.filter((c) => c.agent === a.handle).length;
     const branches = Object.keys(after).filter((r) => after[r] !== before[r]);
     // git's HTTP client can make a receive-pack request that changes nothing: nothing to record.
     if (!branches.length) return { at: this.clock(), by: null, branches: [], commits: [], agents: [] };
@@ -349,6 +349,8 @@ export class ProjectService {
     const recent = p.pushes.filter((x) => this.clock() - x.at < 7 * 86_400_000 && x.branches.some((b) => branches.includes(b))).flatMap((x) => x.agents);
     const together = [...new Set([...push.agents, ...recent])];
     this.store.tx((d) => {
+      // Each credited agent's commit count is saved with the push itself.
+      for (const a of agents.values()) if (d.agents[a.handle]) d.agents[a.handle].stats.commits += commits.filter((c) => c.agent === a.handle).length;
       const rec = d.projects[this.key(p.owner, p.name)];
       rec.pushes.push(push);
       if (rec.pushes.length > 200) rec.pushes.splice(0, rec.pushes.length - 200);

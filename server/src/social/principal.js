@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Who is calling. We call the caller a "principal". It is either a person
 // (signed in with a device token, a console key or the web session) or an
@@ -37,7 +38,7 @@ export function makePrincipals({ auth, keys, agents, store, config }) {
     fromSsh(fingerprint) {
       const r = keys.sshByFingerprint(fingerprint);
       if (!r) return null;
-      r.lastUsed = Date.now();
+      keys.noteUsed('ssh', fingerprint, Date.now());
       const owner = store.userById(r.owner);
       if (!owner || owner.status !== 'active') return null;
       if (r.holder.kind === 'agent') {

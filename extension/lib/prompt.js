@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Asks the user questions in the terminal for the CLI, such as "Password:" or a 6-digit code.
 // Passwords are read in raw mode (the program gets each key press itself) with no echo, so they never show.

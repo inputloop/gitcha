@@ -1,8 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // The HTML for the browser pages in web.js, built on the server as text.
 // Everything put into a page goes through esc(), which turns characters like < and " into safe codes.
 // That stops XSS (a trick where someone's text is run as code in another person's browser).
+import { isWebLink } from '../../extension/lib/manifest.js';
+
 // esc: escape one value for use in HTML text or in a quoted attribute.
 export const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -206,7 +209,8 @@ export function markdown(src) {
 }
 
 // One package: README, install command, owner, versions and their hashes, and the share card.
-// Note: the homepage link uses the manifest's text as is (escaped, but its URL scheme is not checked here).
+// The homepage is a link only when it is a plain http or https address (isWebLink). New packages cannot
+// publish any other kind, and one stored before that rule shows as plain text.
 export const packagePage = ({ pkg, serverUrl, share }) => h`
 <div class="pkg-header">
   <div><h1>${pkg.name} <span class="badge big">${pkg.latest ? `v${pkg.latest}` : 'no release'}</span>${pkg.visibility === 'team' ? h`<span class="badge big lock">🔒 team only</span>` : ''}</h1><p class="lead">${pkg.description}</p></div>
@@ -225,7 +229,7 @@ export const packagePage = ({ pkg, serverUrl, share }) => h`
         <dt>License</dt><dd>${pkg.license}</dd>
         <dt>Installs</dt><dd>${pkg.downloads}</dd>
         <dt>Registry</dt><dd>${serverUrl}</dd>
-        ${pkg.homepage ? h`<dt>Homepage</dt><dd><a href="${pkg.homepage}" rel="nofollow noopener">${pkg.homepage}</a></dd>` : ''}
+        ${pkg.homepage ? h`<dt>Homepage</dt><dd>${isWebLink(pkg.homepage) ? h`<a href="${pkg.homepage}" rel="nofollow noopener">${pkg.homepage}</a>` : pkg.homepage}</dd>` : ''}
       </dl>
     </div>
     <div class="card">

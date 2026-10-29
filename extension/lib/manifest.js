@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Rules for gitcha.json, the package manifest (the file that names a package and its version).
 // The server and the client share this file, so both check packages the same way.
@@ -9,6 +10,18 @@ export const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 export const isPackageName = (name) => typeof name === 'string' && NAME_RE.test(name) && !(name in Object.prototype);
 // A semantic version (semver), such as 1.2.3 or 1.2.3-beta.1. No leading zeros.
 export const VERSION_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$/;
+
+/**
+ * Is this a plain web address (http or https) that is safe to show as a link? A "javascript:" or "data:"
+ * address would run code or show a page made by whoever wrote the manifest, so those are not links.
+ * Spaces and control characters are refused too, and so is anything over 300 characters.
+ */
+export function isWebLink(s) {
+  if (typeof s !== 'string' || s.length > 300 || /[\s\u0000-\u001f\u007f]/.test(s)) return false;
+  let u;
+  try { u = new URL(s); } catch { return false; }
+  return (u.protocol === 'https:' || u.protocol === 'http:') && Boolean(u.hostname);
+}
 
 // Check a parsed gitcha.json. Returns a list of error messages, empty when the manifest is fine.
 // "files" entries must stay inside the project, so a package cannot pack files from elsewhere.
@@ -21,6 +34,7 @@ export function validateManifest(m) {
     errors.push('"description" must be a string of at most 500 characters');
   }
   if (m.license !== undefined && typeof m.license !== 'string') errors.push('"license" must be an SPDX identifier string');
+  if (m.homepage !== undefined && !isWebLink(m.homepage)) errors.push('"homepage" must be a web address that starts with https:// or http:// (at most 300 characters)');
   if (m.team !== undefined && !/^[a-z0-9][a-z0-9_-]{1,31}$/.test(m.team)) errors.push('"team" must be a team name');
   if (m.private !== undefined && typeof m.private !== 'boolean') errors.push('"private" must be true or false');
   if (m.private && !m.team) errors.push('"private" packages must belong to a team (set "team")');

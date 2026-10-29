@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // A small MCP server. MCP (Model Context Protocol) is how an AI assistant such as Claude calls outside tools.
 // Messages travel over stdin and stdout as JSON-RPC 2.0 (one JSON request or reply per line).

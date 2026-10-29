@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // A small cookie-keeping browser for the web tests: it follows no redirects, keeps what Set-Cookie sends and
 // posts the CSRF token the server issued, as a real browser does with a form.

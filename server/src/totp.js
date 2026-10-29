@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // One-time codes for two-factor login. HOTP (RFC 4226) makes a code from a secret and a counter.
 // TOTP (RFC 6238) uses the current 30-second time slot as the counter, which gives the 6-digit codes an

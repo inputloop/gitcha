@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // The server's database: one JSON file (db.json) in the data folder, kept in memory and written back
 // whole after every change. Each write is atomic (all or nothing): write a temporary file, fsync it
@@ -168,10 +169,21 @@ export class Store {
     this.lockNonce = null;
   }
 
-  /** Run `fn` on the data, then save it to disk. If the write fails, memory goes back to what is on disk. */
+  /**
+   * Run `fn` on the data, then save it to disk. All of the change is kept, or none of it:
+   * - If `fn` throws partway through, the part it already changed is undone (memory goes back to
+   *   what is on disk), so a later save cannot write a half-made change.
+   * - If the write fails, memory goes back to what is on disk too (see restore).
+   */
   tx(fn) {
-    const result = fn(this.data);
-    this.flush();
+    let result;
+    try {
+      result = fn(this.data);
+      this.flush();
+    } catch (err) {
+      this.restore();
+      throw err;
+    }
     return result;
   }
 
@@ -186,9 +198,11 @@ export class Store {
   }
 
   /**
-   * A write failed (disk full, I/O error). Memory now holds changes that the disk does not, and a later write
-   * would save them as if they had been accepted (STORE-5). So put memory back to the last file, in place. Other
-   * services keep a reference to the top-level `data` object, so it is emptied and refilled, not replaced.
+   * A write failed (disk full, I/O error), or a change threw partway through. Memory now holds changes that the
+   * disk does not, and a later write would save them as if they had been accepted (STORE-5). So put memory back
+   * to the last file, in place. Other services keep a reference to the top-level `data` object, so it is emptied
+   * and refilled, not replaced. Services must read their collections through the store each time (as getters),
+   * never keep a reference to one, because the collections themselves are replaced.
    */
   restore() {
     let disk;

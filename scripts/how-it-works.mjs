@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Builds HOW-IT-WORKS.md from docs/how-it-works.src.md.
 //
@@ -81,8 +82,13 @@ export function render(text) {
   return out;
 }
 
-const header = '<!-- SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors -->\n<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->\n<!-- Made by scripts/how-it-works.mjs from docs/how-it-works.src.md. Edit that file, then run: npm run docs -->\n\n';
-const src = fs.readFileSync(SRC, 'utf8').replace(/^<!--[\s\S]*?-->\n(<!--[\s\S]*?-->\n)*\n?/, '');
+// The guide carries the same copyright and license lines as its source (the SPDX comments at the top),
+// followed by a note saying it is generated. The source's other opening comments are left out.
+const text = fs.readFileSync(SRC, 'utf8');
+const opening = text.match(/^(<!--[^\n]*-->\n)+/)?.[0] ?? '';
+const spdx = opening.split('\n').filter((l) => /SPDX-/.test(l)).join('\n');
+const header = `${spdx}\n<!-- Made by scripts/how-it-works.mjs from docs/how-it-works.src.md. Edit that file, then run: npm run docs -->\n\n`;
+const src = text.slice(opening.length).replace(/^\n/, '');
 const built = header + render(src);
 if (process.argv.includes('--check')) {
   const now = fs.existsSync(OUT) ? fs.readFileSync(OUT, 'utf8') : '';

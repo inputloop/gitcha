@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // The job queue and the runner registry (the list of known runners). The
 // Gitcha server never runs user code. Runners do: gitcha-runner, normally on
@@ -42,9 +43,11 @@ const newId = (prefix) => `${prefix}_${crypto.randomBytes(9).toString('base64url
  * job until it ends.
  */
 export class JobService {
+  /** The whole database. Read through the store each time, so a restore of the store is seen here too. */
+  get data() { return this.store.data; }
+
   constructor({ store, config, teams, clock = Date.now }) {
     Object.assign(this, { store, config, teams, clock });
-    this.data = store.data;
     this.data.runners ??= {};
     this.data.runnerRegs ??= {};
     this.data.jobs ??= {};
@@ -63,10 +66,13 @@ export class JobService {
     this.restarted = [];
     for (const j of Object.values(this.data.jobs)) {
       if (j.status === 'queued') this.queue.push(j.id);
-      if (j.status === 'running') {
-        Object.assign(j, { status: 'failed', error: 'The server restarted while this job ran.', finishedAt: this.clock() });
-        this.restarted.push(j.id);
-      }
+      if (j.status === 'running') this.restarted.push(j.id);
+    }
+    // Save the "failed" mark at once, so a second restart does not find these jobs running again.
+    if (this.restarted.length) {
+      this.store.tx((d) => {
+        for (const id of this.restarted) Object.assign(d.jobs[id], { status: 'failed', error: 'The server restarted while this job ran.', finishedAt: this.clock() });
+      });
     }
   }
 
@@ -138,14 +144,16 @@ export class JobService {
     return { id, token: runnerToken, scope: runner.scope };
   }
 
-  // Find the runner for a runner token (by its hash), or null. Also notes when it was last seen.
+  // Find the runner for a runner token (by its hash), or null. Also notes when it was last seen:
+  // saved at most once a minute, like a session's, since a runner calls every few seconds.
   authRunner(token) {
     if (!token) return null;
     const h = sha256(token);
     const r = Object.values(this.data.runners).find((x) => x.tokenHash === h);
     if (!r || r.disabled) return null;
-    r.lastSeen = this.clock();
-    return r;
+    const now = this.clock();
+    if (now - (r.lastSeen ?? 0) >= 60_000) this.store.tx((d) => { d.runners[r.id].lastSeen = now; });
+    return this.data.runners[r.id];
   }
 
   // Runners a user may see: all of them for admins, else their teams' runners.
@@ -183,7 +191,7 @@ export class JobService {
       if (waiting >= (this.config.compute.maxQueuedCalls ?? MAX_QUEUED_CALLS)) throw new HttpError(429, 'busy', 'Too many calls to these functions are waiting for a runner; try again shortly.');
     }
     const full = {
-      id: newId(job.kind === 'fn' ? 'inv' : 'job'), status: 'queued', createdAt: this.clock(), labels: [], logBytes: 0, ...job,
+      id: newId(job.kind === 'fn' ? 'inv' : 'job'), status: 'queued', createdAt: this.clock(), labels: [], ...(job.kind === 'fn' ? { logBytes: 0 } : {}), ...job,
       tokenHash: null,
     };
     if (full.kind === 'fn') this.live.set(full.id, full);
@@ -296,6 +304,17 @@ export class JobService {
     return handed;
   }
 
+  /**
+   * Put a job that was handed to a runner back at the front of the queue, as if it had never started
+   * (the runner went away before it got the job). A CI job's record is saved at once.
+   */
+  requeue(job) {
+    const patch = { status: 'queued', tokenHash: null, startedAt: null, runnerId: null, runnerName: null, deadline: null };
+    if (job.kind === 'fn') Object.assign(job, patch);
+    else this.store.tx((d) => Object.assign(d.jobs[job.id], patch));
+    this.queue.unshift(job.id);
+  }
+
   /** Long-poll: resolves with { job, jobToken }, or null after waitMs (at most 30 seconds). */
   claim(runner, waitMs = 25_000) {
     return new Promise((resolve) => {
@@ -332,17 +351,24 @@ export class JobService {
   // memory; a CI log goes to a file on disk.
   appendLog(job, text) {
     const buf = Buffer.from(String(text));
-    const room = LOG_LIMIT - (job.logBytes ?? 0);
+    // A function's log lives in memory with its byte count. A CI log's size is the size of its file,
+    // so nothing about it needs saving in the database while the job runs.
+    const used = job.kind === 'fn' ? (job.logBytes ?? 0) : this.logSize(job.id);
+    const room = LOG_LIMIT - used;
     if (room <= 0) return;
     const chunk = buf.subarray(0, room);
     if (job.kind === 'fn') {
       job.log = (job.log ?? '') + chunk.toString('utf8');
-      job.logBytes = (job.logBytes ?? 0) + chunk.length;
+      job.logBytes = used + chunk.length;
       return;
     }
     fs.appendFileSync(this.logPath(job.id), chunk);
-    this.data.jobs[job.id].logBytes = (job.logBytes ?? 0) + chunk.length;
     if (chunk.length < buf.length) fs.appendFileSync(this.logPath(job.id), '\n[log truncated at 5 MB]\n');
+  }
+
+  /** How many bytes a CI job's log file holds (0 when there is no file yet). */
+  logSize(id) {
+    try { return fs.statSync(this.logPath(id)).size; } catch { return 0; }
   }
 
   readLog(job) {

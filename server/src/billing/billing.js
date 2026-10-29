@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Plans, usage metering (counting what each account uses) and quotas
 // (limits), with Stripe and PayPal as payment providers. A billing account
@@ -53,6 +54,7 @@ function hookExit() {
 export class BillingService {
   constructor({ store, config, teams, clock = Date.now, fetchImpl = globalThis.fetch, log = { info: (m) => console.log(m), error: (m) => console.error(m) } }) {
     Object.assign(this, { store, config, teams, clock, log, flushMs: 2000, flushFailures: 0 });
+    this.pending = new Map(); // usage counts not saved yet: account -> month -> { metric: count }
     store.data.billing ??= { accounts: {}, usage: {}, events: {} };
     this.plans = config.billing.plansFile ? JSON.parse(fs.readFileSync(config.billing.plansFile, 'utf8')) : DEFAULT_PLANS;
     if (!this.plans.free) throw new Error('The plans file must define a "free" plan.');
@@ -74,15 +76,16 @@ export class BillingService {
       this.log.info(p.mode === 'unknown' ? `billing: ${name} keys are neither live nor test keys; records of the two modes cannot be told apart` : `billing: ${name} is in ${p.mode} mode`);
     }
     let changed = 0;
-    for (const [key, a] of Object.entries(this.data.accounts)) {
-      if (a.ownerRef === undefined) { a.ownerRef = this.ownerRef(key) ?? GONE; changed++; }
-      // A record from before modes existed is taken to be in the mode the keys are in now.
-      if (a.subscription && a.subscription.mode === undefined && this.providers[a.subscription.provider]) { a.subscription.mode = this.providers[a.subscription.provider].mode; changed++; }
-    }
-    if (changed) {
-      this.log.info(`billing: bound ${changed} billing record(s) to their owner or mode`);
-      try { this.store.flush(); } catch (err) { this.log.error(`billing: could not save the bindings: ${err.message}`); }
-    }
+    try {
+      this.store.tx(() => {
+        for (const [key, a] of Object.entries(this.data.accounts)) {
+          if (a.ownerRef === undefined) { a.ownerRef = this.ownerRef(key) ?? GONE; changed++; }
+          // A record from before modes existed is taken to be in the mode the keys are in now.
+          if (a.subscription && a.subscription.mode === undefined && this.providers[a.subscription.provider]) { a.subscription.mode = this.providers[a.subscription.provider].mode; changed++; }
+        }
+      });
+      if (changed) this.log.info(`billing: bound ${changed} billing record(s) to their owner or mode`);
+    } catch (err) { this.log.error(`billing: could not save the bindings: ${err.message}`); }
     const other = Object.keys(this.data.accounts).filter((k) => { const s = this.data.accounts[k].subscription; return s && !this.modeOk(s); }).length;
     if (other) this.log.info(`billing: ${other} subscription record(s) were written in the other mode and are not honoured`);
     const upkeep = () => this.reconcile().then(() => this.refresh()).catch((err) => this.log.error(`billing: ${err.message}`));
@@ -258,16 +261,25 @@ export class BillingService {
 
   /** This month's counts for an account (a copy). */
   usage(key, t = this.clock()) {
-    return { ...(this.data.usage[key]?.[month(t)] ?? {}) };
+    const m = month(t);
+    const out = { ...(this.data.usage[key]?.[m] ?? {}) };
+    // Add the counts that are not saved yet (see record).
+    for (const [metric, n] of Object.entries(this.pending.get(key)?.get(m) ?? {})) out[metric] = Math.max(0, (out[metric] ?? 0) + n);
+    return out;
   }
 
   /** Adds `n` to this month's count, or to the month `at` falls in. `n` may be negative, but a count never goes below zero. */
   record(key, metric, n = 1, at = this.clock()) {
     if (!METRICS[metric]) return;
     const m = month(at);
-    const u = (this.data.usage[key] ??= {});
-    (u[m] ??= {})[metric] = Math.max(0, (u[m][metric] ?? 0) + n);
     // Usage is written to disk soon after, not with every count. A stop signal writes it too (see hookExit).
+    // Until then the count waits here, beside the database and not in it: if the store has to go back to
+    // what is on disk (a failed write, or a change that failed halfway), the waiting counts are not lost.
+    if (!this.pending.has(key)) this.pending.set(key, new Map());
+    const byMonth = this.pending.get(key);
+    const counts = byMonth.get(m) ?? {};
+    counts[metric] = (counts[metric] ?? 0) + n;
+    byMonth.set(m, counts);
     unflushed.add(this);
     hookExit();
     this.scheduleFlush();
@@ -287,11 +299,27 @@ export class BillingService {
     this.flushTimer.unref?.();
   }
 
-  /** Writes the store to disk now (usage counts included). */
+  /**
+   * Writes the waiting usage counts to disk now, in one save. If the save fails, the counts stay
+   * waiting, so the next try writes them.
+   */
   flushNow() {
     clearTimeout(this.flushTimer);
     this.flushTimer = null;
-    this.store.flush();
+    if (this.pending.size) {
+      const batch = this.pending;
+      this.store.tx((d) => {
+        for (const [key, byMonth] of batch) {
+          const u = (d.billing.usage[key] ??= {});
+          for (const [m, counts] of byMonth) {
+            const row = (u[m] ??= {});
+            for (const [metric, n] of Object.entries(counts)) row[metric] = Math.max(0, (row[metric] ?? 0) + n);
+          }
+        }
+      });
+      // Only after the save worked: counts made during it would be lost if a new map had been started earlier.
+      if (this.pending === batch) this.pending = new Map();
+    }
     unflushed.delete(this);
   }
 

@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // A sign-up that never finishes (AUTH-15 / OPS-8 / PROD-3 / PROD-7): it cannot be taken over, it does not strand a
 // closed server, and it is removed once its enrolment window has passed.

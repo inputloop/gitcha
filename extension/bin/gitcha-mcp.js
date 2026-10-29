@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // The Gitcha Claude extension: an MCP server (a program that offers tools to Claude) that lets Claude
 // search, install and publish packages on a Gitcha registry, manage teams, and take part in Second Reader

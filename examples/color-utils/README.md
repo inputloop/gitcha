@@ -1,4 +1,5 @@
 <!-- SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors -->
+<!-- SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st> -->
 <!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
 # color-utils
 

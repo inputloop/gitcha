@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // The JSON API for runners, CI runs and functions. A runner is a machine
 // that does build work: it asks the server for a job, runs it, and sends back
@@ -75,7 +76,7 @@ export function registerComputeApi(router, { auth, jobs, ci, functions, config, 
     if (closed && got) {
       // The runner went away while we were handing it a job: put the job back.
       const j = jobs.get(got.job.id);
-      if (j) { Object.assign(j, { status: 'queued', tokenHash: null }); jobs.queue.unshift(j.id); jobs.dispatch(); }
+      if (j) { jobs.requeue(j); jobs.dispatch(); }
       return;
     }
     if (!got) return send(ctx.res, 204, '');

@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Lambda functions. A function is a small program owned by a user or team.
 // It is deployed from a tarball (a packed archive) that holds gitcha.fn.json
@@ -167,7 +168,9 @@ export class FunctionService {
     // the owner nothing (FN-1b).
     if (done.startedAt) {
       this.billing?.record(ownerKey(fn.owner), 'fn_invocations', 1);
-      this.store.data.functions[this.key(fn.owner, fn.name)].invocations = (fn.invocations ?? 0) + 1;
+      const k = this.key(fn.owner, fn.name);
+      // Count on the stored record, not the copy this call started with: other calls may have counted since.
+      this.store.tx((d) => { if (d.functions[k]) d.functions[k].invocations = (d.functions[k].invocations ?? 0) + 1; });
     }
     if (done.status === 'succeeded' && done.response) return { ...normalizeResponse(done.response), ms: this.clock() - started, log: done.log ?? '' };
     if (done.status === 'timed_out' && !done.startedAt) {

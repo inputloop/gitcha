@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Operations: tickets and changes. They are for the people who run this
 // instance (C4OK is meant to be their kiosk, a staff screen) and for everyone
@@ -133,15 +134,18 @@ export class OpsService {
     }
     // Only staff may raise urgency above normal on someone else's behalf;
     // anyone can say it is urgent for them.
-    const id = `T-${String(++this.d.seq.ticket).padStart(4, '0')}`;
     const now = this.clock();
-    const t = {
-      id, scope, kind, title, body: String(body ?? '').slice(0, 20_000), status: 'new', priority, tenant,
-      reporter: `user:${user.username}`, assignee: null, createdAt: now, updatedAt: now, links: links ?? {},
-      events: [{ at: now, by: user.username, type: 'filed', via: via ?? null }], comments: [],
-    };
-    this.store.tx((d) => { d.ops.tickets[id] = t; });
-    return t;
+    // The ticket number is taken inside the same save as the ticket, so a number is never used twice.
+    return this.store.tx((d) => {
+      const id = `T-${String(++d.ops.seq.ticket).padStart(4, '0')}`;
+      const t = {
+        id, scope, kind, title, body: String(body ?? '').slice(0, 20_000), status: 'new', priority, tenant,
+        reporter: `user:${user.username}`, assignee: null, createdAt: now, updatedAt: now, links: links ?? {},
+        events: [{ at: now, by: user.username, type: 'filed', via: via ?? null }], comments: [],
+      };
+      d.ops.tickets[id] = t;
+      return t;
+    });
   }
 
   // One ticket the user may see, or 404 (so hidden tickets look the same as missing ones).
@@ -212,17 +216,21 @@ export class OpsService {
     if (!RISKS[risk]) throw new HttpError(400, 'bad_risk', 'Risk is low, medium or high.');
     title = String(title ?? '').trim();
     if (title.length < 5) throw new HttpError(400, 'bad_title', 'Give the change a title of at least 5 characters.');
-    const id = `C-${String(++this.d.seq.change).padStart(4, '0')}`;
     const now = this.clock();
-    const c = {
-      id, title: title.slice(0, 200), summary: String(summary ?? '').slice(0, 20_000), risk, requiredApprovals: RISKS[risk],
-      systems: systems.map(String).slice(0, 20), plan: String(plan).slice(0, 20_000), rollback: String(rollback).slice(0, 20_000),
-      tickets: tickets.filter((t) => own(this.d.tickets, t)).slice(0, 50), window: { start: windowStart ?? null, end: windowEnd ?? null },
-      status: 'draft', author: user.username, approvals: [], createdAt: now, updatedAt: now,
-      events: [{ at: now, by: user.username, type: 'created', via: via ?? null }],
-    };
-    this.store.tx((d) => { d.ops.changes[id] = c; });
-    return c;
+    const linked = tickets.filter((t) => own(this.d.tickets, t)).slice(0, 50);
+    // Like tickets, the change number is taken inside the save that stores the change.
+    return this.store.tx((d) => {
+      const id = `C-${String(++d.ops.seq.change).padStart(4, '0')}`;
+      const c = {
+        id, title: title.slice(0, 200), summary: String(summary ?? '').slice(0, 20_000), risk, requiredApprovals: RISKS[risk],
+        systems: systems.map(String).slice(0, 20), plan: String(plan).slice(0, 20_000), rollback: String(rollback).slice(0, 20_000),
+        tickets: linked, window: { start: windowStart ?? null, end: windowEnd ?? null },
+        status: 'draft', author: user.username, approvals: [], createdAt: now, updatedAt: now,
+        events: [{ at: now, by: user.username, type: 'created', via: via ?? null }],
+      };
+      d.ops.changes[id] = c;
+      return c;
+    });
   }
 
   // One change, for staff only.

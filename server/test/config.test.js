@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // A setting the server cannot honour stops it with one clear line (AUTH-9). The key and data-file rules (AUTH-14,
 // STORE-1) are in the same file because they are the same kind of promise: refuse to start rather than start wrong.

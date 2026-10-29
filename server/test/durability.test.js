@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // What the store promises about the data directory: one process owns it (STORE-1), a blob is whole or absent
 // (STORE-4), a failed write leaves memory as the disk is (STORE-5), and a write reaches the disk before it is

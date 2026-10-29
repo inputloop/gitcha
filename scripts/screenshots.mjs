@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Makes docs/screenshots/*.png again from a real, freshly started Gitcha server in a temp folder.
 // It takes browser pages with Playwright (a tool that drives a real browser), and it draws real CLI

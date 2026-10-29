@@ -55,7 +55,7 @@ never sees your password**. When Gitcha asks for a 2FA check, Claude has to
 ask *you* for the code.
 
 > **Status, honestly.** Everything below is built and covered by the test
-> suite (335 tests), and the screenshots come from a real running server. Some
+> suite (346 tests), and the screenshots come from a real running server. Some
 > parts have only been tested against stand-ins, not the real thing:
 > git over a real `sshd`, a job inside a real bContain VM, the Stripe and
 > PayPal sandboxes, a live NextTime instance, and C4OK's door inside a full
@@ -982,6 +982,9 @@ A package is any directory with a `gitcha.json`:
 
 - `name`: lowercase letters, digits, `.`, `_`, `-` (max 64). The first person
   (or team) to publish a name owns it.
+- `homepage` (optional): a web address starting with `https://` or
+  `http://`, at most 300 characters. Anything else (a `javascript:` or `data:`
+  address, for example) is refused when you pack or publish.
 - `team` (optional): publish a new package owned by this team (you must be a
   maintainer or owner of it).
 - `private` (optional, team packages only): `true` makes it visible to team
@@ -1249,7 +1252,11 @@ the source, from `docs/how-it-works.src.md`. Its links name functions, not line
 numbers, and the script finds the lines; `npm run docs:check` fails if the
 guide is out of date or names something that no longer exists.
 
-The tests (335 of them: 253 for the server, 65 for the extension and CLI,
+`npm run test:strict --workspace server` runs the server tests while watching
+every write to the database: a test fails if the server changed data without
+saving it, and the message names the line that did it.
+
+The tests (346 of them: 263 for the server, 66 for the extension and CLI,
 17 for the runner) cover RFC 4226/6238 TOTP vectors, encryption at rest,
 replay protection, enrollment and the follow-up checks, CSRF and sign-in
 hardening, proxy addresses, the store's locking and crash safety, teams,
@@ -1278,5 +1285,6 @@ later**, at your choice. Its writing, screenshots, logo and icon are under
 [REUSE.toml](REUSE.toml); the full texts are in [LICENSES/](LICENSES), and
 [LICENSE](LICENSE) has the summary.
 
-Copyright 2026 Bryant Frankford and Contributors; the deployment files are
-also Copyright 2026 Corwin Brust.
+Copyright 2026 Bryant Frankford and Contributors, and Corwin Brust: the two
+are Gitcha's co-creators. The screenshots, logo and icon are Copyright 2026
+Bryant Frankford.

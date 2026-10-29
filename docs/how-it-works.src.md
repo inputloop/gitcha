@@ -1,4 +1,5 @@
 <!-- SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors -->
+<!-- SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st> -->
 <!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
 <!-- The source of HOW-IT-WORKS.md. References like [[file#name]] become links with line numbers: run npm run docs. -->
 
@@ -151,8 +152,28 @@ memory, and every change goes through [[server/src/store.js#tx]]:
    it to disk (fsync), and then renames it over `db.json`. A rename is
    all-or-nothing, so a crash leaves either the old file or the new one, never
    half of each.
-3. If the write fails, [[server/src/store.js#restore]] reloads the last good
-   copy, so memory and disk agree again.
+3. If the change throws partway through, or the write fails,
+   [[server/src/store.js#restore]] reloads the last good copy, so memory and
+   disk agree again. A half-made change can never be saved by a later write.
+   This is why `createApp` saves once at start-up
+   ([[server/src/app.js#"store.tx(() => {});"]]): from then on every collection
+   is on disk, so going back to the file never loses one.
+
+Two rules follow for code that uses the store:
+
+- **Change data only inside `store.tx`.** A change made outside it stays in
+  memory only until some later save, and a crash loses it. Things that change
+  very often, like the time a session, key or runner was last seen, are saved
+  at most once a minute ([[server/src/compute/jobs.js#authRunner]],
+  [[server/src/social/keys.js#noteUsed]]). Billing's usage counts wait in a
+  list beside the database and are saved together every few seconds
+  ([[server/src/billing/billing.js#flushNow]]).
+- **Read collections through the store each time** (as getters), never keep a
+  reference to one, because a restore replaces them.
+
+`npm run test:strict --workspace server` checks the first rule: it watches
+every write during the tests and fails a test whose server changed data
+without saving it ([[server/test/helpers.js#watchUnsavedWrites]]).
 
 When the server starts, [[server/src/store.js#acquireLock]] creates `db.lock`.
 A second server on the same folder is refused, because two servers writing one
@@ -288,7 +309,10 @@ device token.
    by upper and lower case. It also stops a "zip bomb" (a small file that
    expands to a huge one).
 3. `gitcha.json` is read and checked by
-   [[extension/lib/manifest.js#validateManifest]].
+   [[extension/lib/manifest.js#validateManifest]]. For example, a homepage
+   must be a plain `https` or `http` address
+   ([[extension/lib/manifest.js#isWebLink]]), because the package page shows it
+   as a link.
 4. The rules are checked: versions are never overwritten, only maintainers can
    publish, and a hidden team package answers "name not available" so
    outsiders cannot learn it exists.
@@ -684,7 +708,8 @@ signed-in person how many teams they are in.
   encrypted; tokens and recovery codes are stored as hashes.
 - **Private means invisible.** Private projects and team-only packages answer
   "not found" to outsiders, and their activity never reaches public feeds.
-- **Every change to data goes through `store.tx`.**
+- **Every change to data goes through `store.tx`,** and is saved whole or not
+  at all.
 - **Outside text is data.** Text from other people is escaped in HTML and
   labelled for Claude.
 - **Names are looked up with `Object.hasOwn`,** so a name like `__proto__` or

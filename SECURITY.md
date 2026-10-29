@@ -1,4 +1,5 @@
 <!-- SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors -->
+<!-- SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st> -->
 <!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
 # Security model
 
@@ -84,6 +85,8 @@ Gitcha server**.
   absolute paths or `..` are rejected on both server and client. A stored tarball
   is written whole (temporary name, sync, rename) and is hashed again the first time
   this process serves it; a damaged one is refused (500 `blob_damaged`), not served.
+  A package's homepage must be an `https` or `http` address; a `javascript:` or `data:`
+  address is refused at pack and publish time, and an older one is shown as text, not a link.
 - The client refuses plain `http://` for anything but localhost.
 - Every security-relevant event is written to a per-user audit log shown on
   the Account page. The log is kept per user (1,000 security rows, 200 rows of

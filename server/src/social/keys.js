@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Keys other than passwords.
 //
@@ -147,10 +148,21 @@ export class KeyService {
    */
   agentForKey(token, purpose) {
     if (!token?.startsWith('gak_')) return null;
-    const k = this.data.agent[sha256(token)];
+    const hash = sha256(token);
+    const k = this.data.agent[hash];
     if (!k || k.revoked || k.purpose !== purpose || this.expiresAt(k) < this.clock()) return null;
-    k.lastUsed = this.clock();
-    return k;
+    this.noteUsed('agent', hash);
+    return this.data.agent[hash];
+  }
+
+  /**
+   * Save when a key was last used. Like a session's last-seen time, it is written at most once a
+   * minute per key, so a busy key does not cost a database write on every request.
+   */
+  noteUsed(kind, id, now = this.clock()) {
+    const k = this.data[kind]?.[id];
+    if (!k || now - (k.lastUsed ?? 0) < 60_000) return;
+    this.store.tx((d) => { if (d.keys[kind][id]) d.keys[kind][id].lastUsed = now; });
   }
 
   /** The owner's agent keys, newest first. Never the secret. */

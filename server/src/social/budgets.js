@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Budgets: credits that people and agents earn by taking part, and spend on
 // the paid sandboxes. Every change is a ledger entry (a line in the account's
@@ -64,15 +65,17 @@ export class BudgetService {
    * the balance throws 402. Only the last 500 entries are kept.
    */
   entry(key, amount, reason, ref = null) {
-    const b = (this.store.data.budgets[key] ??= { balance: 0, entries: [] });
-    if (ref && b.entries.some((e) => e.ref === ref)) return b.balance;
-    if (amount < 0 && b.balance + amount < 0) throw new HttpError(402, 'budget_exhausted', `${key} has ${b.balance} credits; this needs ${-amount}.`);
-    this.store.tx(() => {
+    const seen = this.store.data.budgets[key] ?? { balance: 0, entries: [] };
+    if (ref && seen.entries.some((e) => e.ref === ref)) return seen.balance;
+    if (amount < 0 && seen.balance + amount < 0) throw new HttpError(402, 'budget_exhausted', `${key} has ${seen.balance} credits; this needs ${-amount}.`);
+    // A new account's record is made inside the save, so a refused spend leaves nothing behind.
+    return this.store.tx((d) => {
+      const b = (d.budgets[key] ??= { balance: 0, entries: [] });
       b.balance += amount;
       b.entries.push({ at: this.clock(), amount, reason, ref, balance: b.balance });
       if (b.entries.length > 500) b.entries.splice(0, b.entries.length - 500);
+      return b.balance;
     });
-    return b.balance;
   }
 
   /**
@@ -88,11 +91,11 @@ export class BudgetService {
       if (ref && this.store.data.budgets[`agent:${agent}`]?.entries.some((e) => e.ref === `${ref}:agent`)) return { paid: true };
       const total = (agent && a.agent ? a.agent : 0) + (a.owner ? a.owner : 0);
       const day = new Date(this.clock()).toISOString().slice(0, 10);
-      const rec = (this.store.data.budgetCaps[ownerKey] ??= { day, earned: 0 });
       // A new UTC day starts the count again from zero.
-      if (rec.day !== day) this.store.tx(() => { rec.day = day; rec.earned = 0; });
-      if (rec.earned + total > this.dailyCap) return { paid: false, capped: true };
-      this.store.tx(() => { rec.earned += total; });
+      const seen = this.store.data.budgetCaps[ownerKey];
+      const earned = seen?.day === day ? seen.earned : 0;
+      if (earned + total > this.dailyCap) return { paid: false, capped: true };
+      this.store.tx((d) => { d.budgetCaps[ownerKey] = { day, earned: earned + total }; });
     }
     if (agent && a.agent) this.entry(`agent:${agent}`, a.agent, reason, ref && `${ref}:agent`);
     if (ownerKey && a.owner) this.entry(ownerKey, a.owner, reason, ref && `${ref}:owner`);

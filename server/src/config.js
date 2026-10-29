@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Reads the server's settings from environment variables (GITCHA_*, STRIPE_*, PAYPAL_*, NEXTTIME_*)
 // and turns them into one config object. It also loads or creates the secret key that encrypts

@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Installs packages for `gitcha install`. It downloads each package, checks its hash, and unpacks it
 // into ./gitcha_modules/. It also keeps gitcha-lock.json (the lockfile), which records each package's
