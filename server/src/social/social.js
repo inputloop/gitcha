@@ -111,7 +111,7 @@ export class SocialService {
   }
 
   mediaView(id) {
-    const m = this.store.data.media[id];
+    const m = Object.hasOwn(this.store.data.media, id) ? this.store.data.media[id] : null;
     return m ? { id, type: m.type, kind: m.kind, size: m.size, url: `/media/${id}.${m.ext}` } : null;
   }
 
@@ -133,7 +133,7 @@ export class SocialService {
     if (link !== undefined && link !== null && link !== '') {
       try { const u = new URL(link); if (!/^https?:$/.test(u.protocol)) throw new Error(); } catch { throw new HttpError(400, 'bad_link', 'Links must be http(s) URLs.'); }
     }
-    for (const m of media) if (!this.store.data.media[m]) throw new HttpError(400, 'bad_media', `Unknown media ${m}; upload it first.`);
+    for (const m of media) if (!Object.hasOwn(this.store.data.media, m)) throw new HttpError(400, 'bad_media', `Unknown media ${m}; upload it first.`);
     const post = {
       id: crypto.randomBytes(6).toString('hex'), kind, author, title, body, link: link || null,
       tags: parent ? [] : normalizeTags([...(tags ?? []), ...(body.match(/(?:^|\s)#([a-z0-9][a-z0-9-]{0,39})/gi) ?? []).map((t) => t.trim())]),

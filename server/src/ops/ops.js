@@ -40,6 +40,9 @@ const CHANGE_FLOW = {
 
 export const isStaff = (user) => user && (user.role === 'admin' || user.role === 'staff');
 
+// A record by an id the caller typed: only the table's own entries, never something every object has (GQL-4).
+const own = (table, id) => (Object.hasOwn(table, id) ? table[id] : undefined);
+
 /** What an approval covers: everything a reader of the change relies on (OPS-1). */
 export const changeHash = (c) => sha256(JSON.stringify([c.title, c.summary, c.risk, c.systems, c.plan, c.rollback, c.window?.start ?? null, c.window?.end ?? null]));
 
@@ -116,7 +119,7 @@ export class OpsService {
   }
 
   ticket(user, id) {
-    const t = this.d.tickets[id];
+    const t = own(this.d.tickets, id);
     if (!t || !this.canSee(user, t)) throw new HttpError(404, 'ticket_not_found', 'No such ticket.');
     return t;
   }
@@ -179,7 +182,7 @@ export class OpsService {
     const c = {
       id, title: title.slice(0, 200), summary: String(summary ?? '').slice(0, 20_000), risk, requiredApprovals: RISKS[risk],
       systems: systems.map(String).slice(0, 20), plan: String(plan).slice(0, 20_000), rollback: String(rollback).slice(0, 20_000),
-      tickets: tickets.filter((t) => this.d.tickets[t]).slice(0, 50), window: { start: windowStart ?? null, end: windowEnd ?? null },
+      tickets: tickets.filter((t) => own(this.d.tickets, t)).slice(0, 50), window: { start: windowStart ?? null, end: windowEnd ?? null },
       status: 'draft', author: user.username, approvals: [], createdAt: now, updatedAt: now,
       events: [{ at: now, by: user.username, type: 'created', via: via ?? null }],
     };
@@ -189,7 +192,7 @@ export class OpsService {
 
   change(user, id) {
     this.staff(user);
-    const c = this.d.changes[id];
+    const c = own(this.d.changes, id);
     if (!c) throw new HttpError(404, 'change_not_found', 'No such change.');
     return c;
   }

@@ -5,7 +5,7 @@
 // projects, tasks, claims, reviews and budgets. Agents in the sandboxes call
 // it with their agent key; people with a device or console key (or the web
 // session, with a CSRF header).
-import { buildSchema, graphql, GraphQLError, GraphQLScalarType, Kind } from 'graphql';
+import { buildSchema, getNamedType, graphql, GraphQLError, GraphQLScalarType, Kind, TypeInfo, visit, visitWithTypeInfo } from 'graphql';
 import { HttpError, mfaRequired } from '../errors.js';
 import { json, readJson, parseCookies } from '../http.js';
 import { safeEqual } from '../crypto.js';
@@ -166,7 +166,26 @@ function makeMeter() {
   return m;
 }
 
+// GQL-4: names every object has. They are never an id of ours, and a lookup that is handed one must not find a prototype.
 const PROTO_IDS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/** Refuse, before anything runs, an ID argument that is (or holds) one of those names. */
+function refuseProtoIds(schema, doc, variables) {
+  const bad = (v) => (typeof v === 'string' && PROTO_IDS.has(v)) || (Array.isArray(v) && v.some(bad));
+  const holds = (node) => {
+    if (node.kind === Kind.STRING) return bad(node.value);
+    if (node.kind === Kind.LIST) return node.values.some(holds);
+    if (node.kind === Kind.VARIABLE) return bad(variables?.[node.name.value]);
+    return false;
+  };
+  const info = new TypeInfo(schema);
+  visit(doc, visitWithTypeInfo(info, {
+    Argument(node) {
+      const arg = info.getArgument();
+      if (arg && getNamedType(arg.type).name === 'ID' && holds(node.value)) throw new HttpError(400, 'bad_id', 'That is not a valid id.');
+    },
+  }));
+}
 
 const JSONScalar = new GraphQLScalarType({
   name: 'JSON',
@@ -243,10 +262,10 @@ export function makeGraphql(s) {
       project: ({ owner, name }, ctx) => { const p = projects.find(owner, name); return p && tasks.access.read(ctx.principal, p) ? projectView(ctx)(p) : null; },
       // A list shows what you belong to or the public; an administrator opens a private project by its name, which tells its owner.
       projects: (_, ctx) => ctx.meter.spend(projects.list(ctx.principal).filter((p) => tasks.access.how(ctx.principal, p) !== 'admin')).map(projectView(ctx)),
-      post: ({ id }, ctx) => { const p = social.posts[id]; return p ? postView(ctx)(p) : null; },
+      post: ({ id }, ctx) => { const p = Object.hasOwn(social.posts, id) ? social.posts[id] : null; return p ? postView(ctx)(p) : null; },
       feed: ({ tag, author, sort, limit, before }, ctx) => ctx.meter.spend(social.feed({ tag, author, sort: sort.toLowerCase(), limit, before })).map(postView(ctx)),
       topics: ({ limit }, ctx) => ctx.meter.spend(social.topics(limit)),
-      task: ({ id }, ctx) => { const t = tasks.data[id]; if (!t) return null; tasks.readable(ctx.principal, t); return tasks.view(t, ctx.principal); },
+      task: ({ id }, ctx) => { const t = Object.hasOwn(tasks.data, id) ? tasks.data[id] : null; if (!t) return null; tasks.readable(ctx.principal, t); return tasks.view(t, ctx.principal); },
       reviewPool: ({ agent }, ctx) => {
         const a = tasks.actingAgent(someone(ctx), agent);
         if (!a) throw new HttpError(400, 'agent_required', 'Name one of your agents.');
@@ -355,6 +374,7 @@ export function makeGraphql(s) {
     const isMutation = doc.definitions.some((d) => d.operation === 'mutation');
     if (isMutation && ctx.req.method === 'GET') throw new HttpError(405, 'use_post', 'Mutations must be sent with POST.');
     measure(doc, { introspection });
+    refuseProtoIds(schema, doc, body.variables);
     const principal = principalFor(ctx, isMutation);
     // People must have passed their periodic 2FA check, as everywhere else.
     if (principal?.kind === 'user' && principal.auth) auth.requireMfa(principal.auth);

@@ -763,6 +763,9 @@ most 10 fields, select at most 400 fields (a fragment counts each time it is
 used) and build at most 5,000 list items; past a limit it answers 400
 (`too_deep`, `too_many_aliases`, `too_complex`, `too_costly`). Schema
 introspection is off unless the operator sets `GITCHA_GRAPHQL_INTROSPECTION=yes`.
+An id argument of `__proto__`, `constructor` or `prototype` answers 400
+(`bad_id`). Approving or rejecting a change is the one action `stepUp` does not
+unlock: the code goes in that call's `code` argument.
 
 ```graphql
 query {
