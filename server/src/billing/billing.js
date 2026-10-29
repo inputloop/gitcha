@@ -489,8 +489,11 @@ export class BillingService {
   setCheckout(key, slot, event, actor) { this.atomically(key, (d) => this.putCheckout(d, key, slot, event, actor)); }
 
   // ---- checkout ---------------------------------------------------------------------------
+  /** A configured provider by the name a client sent; names like "constructor" are not providers. */
+  providerNamed(name) { return typeof name === 'string' && Object.hasOwn(this.providers, name) ? this.providers[name] : undefined; }
+
   provider(name) {
-    const p = this.providers[name];
+    const p = this.providerNamed(name);
     if (!this.enabled || !p) throw new HttpError(400, 'provider_unavailable', `Payments with ${name} are not set up on this instance.`);
     return p;
   }
@@ -626,7 +629,7 @@ export class BillingService {
   }
 
   async webhook(provider, rawBody, headers) {
-    const p = this.providers[provider];
+    const p = this.providerNamed(provider);
     if (!this.enabled || !p) throw new HttpError(404, 'not_found', 'Not found.');
     const ev = await p.verifyWebhook(rawBody, headers); // throws 400 on a bad signature
     return this.applyEvent(provider, ev);

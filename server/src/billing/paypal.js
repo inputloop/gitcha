@@ -135,7 +135,7 @@ export class PayPalProvider {
     const ok = await this.deliveryVerified(`${sig.transmission_id}|${sig.transmission_sig}|${crypto.createHash('sha256').update(rawBody).digest('hex')}`,
       async () => (await this.call('POST', '/v1/notifications/verify-webhook-signature', { ...sig, webhook_id: this.webhookId, webhook_event: event })).verification_status === 'SUCCESS');
     if (!ok) throw new HttpError(400, 'bad_signature', 'PayPal signature check failed.');
-    if (!(event.event_type in EVENT_STATUS)) return { id: event.id, type: event.event_type, owner: null };
+    if (!Object.hasOwn(EVENT_STATUS, event.event_type)) return { id: event.id, type: event.event_type, owner: null };
     const r = event.resource ?? {};
     const status = EVENT_STATUS[event.event_type] ?? STATUS[r.status] ?? null;
     const at = Date.parse(event.create_time); // PayPal's own time for the event

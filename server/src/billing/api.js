@@ -15,25 +15,25 @@ export function registerBillingApi(router, { auth, billing, config }) {
   // Starting, changing or cancelling payment is sensitive: a fresh 2FA code.
   router.post('/api/v1/billing/checkout', async (ctx) => {
     const a = verified(ctx, { sensitive: true });
-    const body = await readJson(ctx.req);
+    const body = (await readJson(ctx.req)) ?? {};
     json(ctx.res, 200, await billing.checkout(a.user, { owner: body.owner, plan: body.plan, provider: body.provider }, ctx.ip));
   });
 
   router.post('/api/v1/billing/confirm', async (ctx) => {
     const a = verified(ctx);
-    const body = await readJson(ctx.req);
+    const body = (await readJson(ctx.req)) ?? {};
     json(ctx.res, 200, await billing.confirmReturn(a.user, { owner: body.owner, provider: body.provider, sessionId: body.session_id, subscriptionId: body.subscription_id }, ctx.ip));
   });
 
   router.post('/api/v1/billing/cancel', async (ctx) => {
     const a = verified(ctx, { sensitive: true });
-    const body = await readJson(ctx.req);
+    const body = (await readJson(ctx.req)) ?? {};
     json(ctx.res, 200, await billing.cancel(a.user, { owner: body.owner }, ctx.ip));
   });
 
   router.post('/api/v1/billing/portal', async (ctx) => {
     const a = verified(ctx, { sensitive: true });
-    const body = await readJson(ctx.req);
+    const body = (await readJson(ctx.req)) ?? {};
     json(ctx.res, 200, await billing.portal(a.user, { owner: body.owner }));
   });
 
