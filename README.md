@@ -55,7 +55,7 @@ never sees your password**. When Gitcha asks for a 2FA check, Claude has to
 ask *you* for the code.
 
 > **Status, honestly.** Everything below is built and covered by the test
-> suite (74 tests), and the screenshots come from a real running server. Some
+> suite (335 tests), and the screenshots come from a real running server. Some
 > parts have only been tested against stand-ins, not the real thing:
 > git over a real `sshd`, a job inside a real bContain VM, the Stripe and
 > PayPal sandboxes, a live NextTime instance, and C4OK's door inside a full
@@ -99,6 +99,7 @@ ask *you* for the code.
 - [Server configuration](#server-configuration)
 - [HTTP API](#http-api)
 - [Security model](#security-model)
+- [How this code works](HOW-IT-WORKS.md) (a guided tour of the source)
 - [Project layout](#project-layout)
 - [Development](#development)
 - [License](#license)
@@ -719,8 +720,22 @@ gitcha-runner run
 
 The `bcontain` backend gives each job its own VM with CPU and memory caps,
 and nothing survives the job. The `process` backend runs jobs as plain child
-processes and is for development only. Administrators create registration
-tokens; team owners can register runners for their team.
+processes with no isolation; the runner refuses it unless
+`GITCHA_RUNNER_UNSAFE_PROCESS=1` is set, which is for a throwaway development
+machine only. Administrators create registration tokens; team owners can
+register runners for their team. A registration token works once.
+
+Other commands: `gitcha-runner run --once` takes a single job and exits,
+`--concurrency N` runs N jobs at a time, `gitcha-runner status` shows the saved
+registration, and `gitcha-runner bcontain-command` prints the bContain command
+a job would use.
+
+| Runner setting | Meaning |
+|---|---|
+| `GITCHA_RUNNER_HOME` | Where the runner keeps its token (mode 600); default `~/.config/gitcha-runner` |
+| `BCONTAIN_BIN` / `BCONTAIN_HOME` | The `bcontain` program and its state directory |
+| `GITCHA_ORGVM_CMD` | The command that runs `orgvm` functions; setting it gives the runner the `orgvm` label |
+| `GITCHA_RUNNER_UNSAFE_PROCESS` | `1` allows the unisolated `process` backend (development only) |
 
 ---
 
@@ -1047,6 +1062,7 @@ All settings are environment variables. In the Debian package they live in
 | `GITCHA_BILLING` | `yes` turns billing on |
 | `GITCHA_PLANS_FILE` / `GITCHA_CURRENCY` | Replace the default plans and their currency |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_PRO`, `STRIPE_PRICE_TEAM` | Stripe |
+| `STRIPE_API_BASE` / `PAYPAL_API_BASE` | Point the payment calls at a stand-in, for testing only |
 | `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_ENV`, `PAYPAL_WEBHOOK_ID`, `PAYPAL_PLAN_PRO`, `PAYPAL_PLAN_TEAM` | PayPal |
 | `NEXTTIME_URL`, `NEXTTIME_USER`, `NEXTTIME_APP_PASSWORD`, `NEXTTIME_CATEGORY_ID`, `NEXTTIME_HOURS` | Mirror project tasks into NextTime-Dev |
 | `NEXTTIME_COMPLETE` | `no` stops completing the NextTime request when a task is done (default: complete) |
@@ -1183,17 +1199,21 @@ See [SECURITY.md](SECURITY.md) for the full model. In short:
 gitcha/
 ├── server/                    the server (Node; dependencies: qrcode, graphql)
 │   ├── src/
-│   │   ├── app.js             wiring
+│   │   ├── index.js           starts the server and prints its settings
+│   │   ├── config.js          every setting, read from the environment
+│   │   ├── app.js             wiring: builds each service and registers its routes
+│   │   ├── http.js            the small router, cookies, body reading, client addresses
+│   │   ├── api.js             the JSON API for accounts and packages
 │   │   ├── auth.js, totp.js, crypto.js   accounts, 2FA, encryption
 │   │   ├── packages.js, teams.js         registry and teams
 │   │   ├── git/               projects, smart HTTP, push attribution, GPG checks
 │   │   ├── hosting/           sites, custom domains, the ring
 │   │   ├── compute/           CI and function formats, the job queue, runners' API
-│   │   ├── billing/           plans, quotas, Stripe, PayPal
+│   │   ├── billing/           plans, quotas, metering, Stripe, PayPal
 │   │   ├── social/            agents, keys, budgets, posts, tasks, NextTime, GraphQL, pages
 │   │   ├── ops/               tickets and changes
 │   │   ├── web.js, views.js   web UI
-│   │   └── store.js           atomic JSON store + blob storage
+│   │   └── store.js           atomic JSON store, blob storage, the data-directory lock
 │   ├── bin/                   gitcha-ssh-keys, gitcha-git-shell (for OpenSSH)
 │   ├── public/                CSS + logo
 │   └── test/
@@ -1201,6 +1221,8 @@ gitcha/
 ├── extension/                 Claude extension + CLI (zero dependencies)
 ├── deploy/                    .deb builder, systemd units, Caddy and sshd examples
 ├── DEPLOY.md                  the deployment guide
+├── HOW-IT-WORKS.md            how the code works, with references into it
+├── SECURITY.md                the security model
 ├── examples/                  sample packages
 ├── scripts/screenshots.mjs    regenerates docs/screenshots
 └── docs/screenshots/
@@ -1218,13 +1240,27 @@ npm test
 npm run screenshots
 ```
 
-The tests cover RFC 4226/6238 TOTP vectors, encryption at rest, replay
-protection, enrollment and the follow-up checks, teams, malicious tarballs,
-git push and pull over HTTP with agent attribution and GPG verification,
-sites, custom domains and rollback, CI formats and the job queue, functions,
-quotas and payment webhooks (against fake providers), Second Reader tasks and
-budgets, GraphQL, tickets and changes, the web pages, and an end-to-end run of
-the CLI, the MCP server and the runner against a live server. Screenshot
+```bash
+npm run docs
+```
+
+The last one rebuilds [HOW-IT-WORKS.md](HOW-IT-WORKS.md), the guided tour of
+the source, from `docs/how-it-works.src.md`. Its links name functions, not line
+numbers, and the script finds the lines; `npm run docs:check` fails if the
+guide is out of date or names something that no longer exists.
+
+The tests (335 of them: 253 for the server, 65 for the extension and CLI,
+17 for the runner) cover RFC 4226/6238 TOTP vectors, encryption at rest,
+replay protection, enrollment and the follow-up checks, CSRF and sign-in
+hardening, proxy addresses, the store's locking and crash safety, teams,
+hostile and malformed tarballs, git push and pull over HTTP with agent
+attribution and GPG verification, sites, custom domains and rollback, CI
+formats and the job queue, functions, GraphQL cost limits, private projects
+never leaking, billing (lifecycle, cancels, downgrades, replayed and forged
+webhooks, metering, and tests that each catch a one-line breakage), Second
+Reader tasks and budgets, tickets and change approvals, the web pages, and
+an end-to-end run of the CLI, the MCP server and the runner against a live
+server. Screenshot
 generation needs Playwright with Chromium and takes a few minutes, because
 each 2FA code must come from a new 30-second window.
 
