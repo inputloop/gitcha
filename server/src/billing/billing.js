@@ -26,6 +26,7 @@ export const DEFAULT_PLANS = {
 
 const month = (t) => new Date(t).toISOString().slice(0, 7);
 const GRACE_MS = 7 * 86_400_000; // a failed payment keeps the paid limits this long
+const READONLY_GRACE_MS = 14 * 86_400_000; // after the paid limits end, sites over the new limit keep taking changes this long
 const GONE = '(gone)'; // the binding of an account whose owner no longer exists
 
 // Services holding usage that is not on disk yet; a stop signal ends in process.exit, which writes them (flushOnExit).
@@ -260,17 +261,46 @@ export class BillingService {
     unflushed.delete(this);
   }
 
+  /** The sites an account owns. */
+  sitesOf(key) {
+    const [type, ...rest] = key.split(':');
+    const name = rest.join(':');
+    return Object.values(this.store.data.sites ?? {}).filter((s) => s.owner?.type === type && s.owner?.name === name);
+  }
+
+  /** How much of a metric an account has used: this month's count, or for sites how many it owns. */
+  held(key, metric) {
+    return metric === 'sites' ? this.sitesOf(key).length : this.usage(key)[metric] ?? 0;
+  }
+
+  /**
+   * The accounts that share one Free allowance: a person's own and those of the teams they created, so making teams does not
+   * multiply it. A paid account stands alone, and so does one whose team has no creator on record.
+   */
+  poolOf(key) {
+    if (this.plans[this.planFor(key)]?.paid) return [key];
+    const [type, ...rest] = key.split(':');
+    const name = rest.join(':');
+    const creator = type === 'user' ? name : this.store.team(name)?.createdBy;
+    if (!creator) return [key];
+    const made = Object.values(this.store.data.teams ?? {}).filter((t) => t.createdBy === creator).map((t) => `team:${t.name}`);
+    return [...new Set([key, `user:${creator}`, ...made])].filter((k) => !this.plans[this.planFor(k)]?.paid);
+  }
+
   /**
    * Throw 402 when taking `n` more would pass the owner's plan limit. `current` overrides the monthly count (e.g. number of sites).
+   * On Free the count is shared across the person's own account and the teams they created (see poolOf).
    */
   check(key, metric, current, n = 1) {
     if (!this.enabled) return;
     const plan = this.plans[this.planFor(key)];
     const limit = plan.limits?.[metric];
     if (limit === undefined || limit === null) return;
-    const used = current ?? this.usage(key)[metric] ?? 0;
+    const pool = this.poolOf(key);
+    const used = pool.reduce((sum, k) => sum + (k === key && current !== undefined ? current : this.held(k, metric)), 0);
     if (used + n > limit) {
-      throw new HttpError(402, 'quota_exceeded', `${key} has used ${used} of ${limit} ${METRICS[metric]} on the ${plan.name} plan${current === undefined ? ' this month' : ''}. Upgrade at ${this.config.publicUrl}/billing.`, { metric, limit, used, plan: this.planFor(key) });
+      const shared = pool.length > 1 ? ` (Free is one allowance for ${pool.length} accounts: a person's own and the teams they created)` : '';
+      throw new HttpError(402, 'quota_exceeded', `${key} has used ${used} of ${limit} ${METRICS[metric]} on the ${plan.name} plan${current === undefined && metric !== 'sites' ? ' this month' : ''}${shared}. Upgrade at ${this.config.publicUrl}/billing.`, { metric, limit, used, plan: this.planFor(key) });
     }
   }
 
@@ -295,12 +325,40 @@ export class BillingService {
   /** The work never ran (a platform failure, a job that never started). */
   release(reservation) { this.settle(reservation, 0); }
 
+  /**
+   * Sites beyond what the plan now allows (the newest ones; deleting an older site frees a place), and from when they stop taking
+   * changes: the end of the paid period or its grace, plus fourteen days. Null while that is not in view: an account that never paid
+   * keeps what it has (it cannot add more). Nothing is deleted and the sites stay served.
+   */
+  overQuota(key) {
+    const none = { over: [], limit: null, plan: null, readOnlyFrom: null };
+    if (!this.enabled) return none;
+    const plan = this.plans[this.planFor(key)];
+    const limit = plan.limits?.sites;
+    if (limit === undefined || limit === null) return none;
+    const all = this.poolOf(key).flatMap((k) => this.sitesOf(k)).sort((x, y) => x.createdAt - y.createdAt || x.name.localeCompare(y.name));
+    const [type, ...rest] = key.split(':');
+    const over = all.slice(limit).filter((x) => x.owner.type === type && x.owner.name === rest.join(':')).map((x) => x.name);
+    const ended = this.paidUntil(key);
+    return { over, limit, plan: plan.name, readOnlyFrom: over.length && ended != null ? ended + READONLY_GRACE_MS : null };
+  }
+
+  /** For a deploy or an activation: throw 402 if this site is over its owner's plan and the grace after the paid period has run out. */
+  requireWritableSite(key, site) {
+    const q = this.overQuota(key);
+    if (!q.over.includes(site) || q.readOnlyFrom === null || this.clock() < q.readOnlyFrom) return;
+    throw new HttpError(402, 'site_read_only', `${site} is over the ${q.plan} plan's ${q.limit} sites and takes no more changes (it is still served). Remove ${q.over.length} site(s) or upgrade at ${this.config.publicUrl}/billing.`, { metric: 'sites', limit: q.limit, over: q.over, since: q.readOnlyFrom });
+  }
+
   view(user, owner) {
     const o = this.account(user, owner);
     const plan = this.planFor(o.key);
     const sub = this.subscription(o.key);
+    const pool = this.poolOf(o.key);
+    const over = this.overQuota(o.key);
     return {
-      owner: o.key, enabled: this.enabled, plan, planName: this.plans[plan].name, limits: this.plans[plan].limits, usage: this.usage(o.key),
+      owner: o.key, enabled: this.enabled, plan, planName: this.plans[plan].name, limits: this.plans[plan].limits, usage: this.countedUsage(o.key),
+      ...(pool.length > 1 ? { sharedWith: pool.length - 1 } : {}), ...(over.over.length ? { overQuota: { sites: over.over, limit: over.limit, readOnlyFrom: over.readOnlyFrom } } : {}),
       subscription: sub ? { provider: sub.provider, plan: sub.plan, status: sub.status === 'active' && this.standing(sub) !== 'paid' ? 'past_due' : sub.status, currentPeriodEnd: sub.currentPeriodEnd ?? null } : null,
       pendingCheckout: this.accountOf(o.key)?.checkout ? { provider: this.accountOf(o.key).checkout.provider, plan: this.accountOf(o.key).checkout.plan } : null,
       plans: Object.entries(this.plans).map(([id, p]) => ({ id, name: p.name, price: p.price, limits: p.limits, paid: Boolean(p.paid) })),
@@ -308,6 +366,13 @@ export class BillingService {
       // The money history is for the people who manage the account, not for every member of a team.
       ...(this.mayManage(user, o) ? { history: [...(this.accountOf(o.key)?.history ?? [])].reverse().slice(0, 25) } : {}),
     };
+  }
+
+  /** What counts against the limits: this month's metered use and the sites held, summed over the accounts that share the allowance. */
+  countedUsage(key) {
+    const out = {};
+    for (const m of Object.keys(METRICS)) out[m] = this.poolOf(key).reduce((sum, k) => sum + this.held(k, m), 0);
+    return out;
   }
 
   mayManage(user, o) {
@@ -370,11 +435,13 @@ export class BillingService {
   /** Change the account's subscription record inside a write; `replace` starts a fresh one instead of merging over the old. */
   putSubscription(d, key, patch, event, { replace = false, clearCheckout = false, actor } = {}) {
     const a = this.ensureAccount(d, key);
-    const before = replace ? {} : a.subscription ?? {};
+    const prior = a.subscription;
+    const before = replace ? {} : prior ?? {};
     a.subscription = { ...before, ...patch, updatedAt: this.clock() };
     // The grace is counted from the first moment of a past-due spell; a write that changes nothing cannot move it.
     if (a.subscription.status !== 'past_due') delete a.subscription.pastDueSince;
     else a.subscription.pastDueSince = before.status === 'past_due' ? before.pastDueSince ?? before.updatedAt : this.clock();
+    this.markPaidSpell(a, before, prior);
     if (clearCheckout) delete a.checkout;
     this.trail(d, key, a, event, actor, a.subscription);
   }
@@ -384,6 +451,38 @@ export class BillingService {
     const a = this.ensureAccount(d, key);
     if (slot) a.checkout = slot; else delete a.checkout;
     this.trail(d, key, a, event, actor, { status: 'pending', plan: slot?.plan, provider: slot?.provider });
+  }
+
+  /**
+   * Remember when a paid spell began and ended, so a downgrade can be dated (see overQuota). `kept` is the record the new one grew
+   * from (so activatedAt carries over); `prior` is the record it replaced, whose end counts if the new one is not paid.
+   */
+  markPaidSpell(a, kept, prior) {
+    const s = a.subscription;
+    const now = this.clock();
+    if (s.status === 'active') s.activatedAt = kept.activatedAt ?? now;
+    else if (kept.activatedAt !== undefined) s.activatedAt = kept.activatedAt;
+    if (s.status === 'canceled') s.canceledAt = kept.canceledAt ?? now; else delete s.canceledAt;
+    if (this.plans[s.plan]?.paid && this.standing(s) !== 'none') { delete a.paidEnded; return; }
+    const ended = this.endOf(s) ?? this.endOf(prior);
+    if (ended != null) a.paidEnded = ended;
+  }
+
+  /** When a subscription's paid limits stopped, or null if it never carried them. (For a live one this is a time ahead; callers check they are not paid.) */
+  endOf(s) {
+    if (!s || !this.plans[s.plan]?.paid) return null;
+    if (s.status === 'active') return s.currentPeriodEnd == null ? null : s.currentPeriodEnd + GRACE_MS;
+    if (s.status === 'past_due') return (s.pastDueSince ?? s.updatedAt) + GRACE_MS;
+    if (s.status === 'canceled' && s.activatedAt !== undefined) return s.canceledAt ?? s.updatedAt;
+    return null;
+  }
+
+  /** When this account last stopped being on a paid plan (null while it is on one, or if it never was). */
+  paidUntil(key) {
+    const a = this.accountOf(key);
+    if (!a || this.plans[this.planFor(key)]?.paid) return null;
+    if (a.subscription && !this.modeOk(a.subscription)) return null;
+    return a.paidEnded ?? this.endOf(a.subscription);
   }
 
   setSubscription(key, patch, event, opts) { this.atomically(key, (d) => this.putSubscription(d, key, patch, event, opts)); }

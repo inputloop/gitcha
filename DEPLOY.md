@@ -247,6 +247,10 @@ Off unless `GITCHA_BILLING=yes`. Then:
   member who acted), saying who or what made it: the member (with the network address), the return
   page, a webhook (with the provider's event id) or the refresh. Owners see the last 25 in
   `GET /api/v1/billing` as `history`; plain team members do not.
+- The Free limits are one allowance for a person's own account and the teams they created (a paid team
+  has its own). When a paid plan ends, the newest sites over the Free limit stay served but are refused
+  new deploys fourteen days after the paid period and its grace ended; an account that never paid is
+  not locked, it just cannot add more. `GET /api/v1/billing` lists them as `overQuota`.
 - Deleting a team closes its billing account: its subscription is cancelled at the provider (a
   refused cancel is retried and logged) and a team that later takes the name starts on Free.
 

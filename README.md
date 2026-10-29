@@ -574,7 +574,11 @@ so making keys never stretches the ten-minute or twelve-hour checks.
 Billing is off unless the operator turns it on. When it is on, the Billing
 page shows the plan, this month's usage against its limits, and checkout
 through Stripe or PayPal. Plans sell capacity (build minutes, function
-invocations, sites); every feature works on the free plan.
+invocations, sites); every feature works on the free plan. The free
+allowance is one per person: your own account and the teams you created
+share it, so more teams do not mean more room. When a paid plan ends,
+sites over the free limit (the newest ones) stay online but take no new
+deploys after fourteen days; nothing is deleted.
 
 ![The billing page](docs/screenshots/25-billing.png)
 

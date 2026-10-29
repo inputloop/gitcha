@@ -95,3 +95,37 @@ test('BIL-9: accounts are bound to the owner\'s id, and records from before bind
     assert.equal(fake.st.subs.sub_legacy_1.status, 'active');
   } finally { await srv.close(); }
 });
+
+test('BIL-9b: Free is one allowance for a person and the teams they created, not one per team', async () => {
+  const { srv, fake, people } = await setup({ users: ['alice', 'bob'] });
+  const { alice, bob } = people;
+  const site = (who, name, team) => post(srv, who.token, '/api/v1/sites', { name, ...(team ? { team } : {}) });
+  try {
+    for (const t of ['farm1', 'farm2', 'farm3']) assert.equal((await post(srv, alice.token, '/api/v1/teams', { name: t })).status, 201);
+    // Three sites in all, wherever they are: the fourth is refused, in a team that has none of its own yet.
+    assert.equal((await site(alice, 'a1')).status, 201);
+    assert.equal((await site(alice, 'a2', 'farm1')).status, 201);
+    assert.equal((await site(alice, 'a3', 'farm2')).status, 201);
+    const refused = await site(alice, 'a4', 'farm3');
+    assert.equal(refused.status, 402, 'a third team does not bring a new allowance');
+    assert.equal(refused.body.code ?? refused.body.error, 'quota_exceeded');
+    assert.equal((await site(alice, 'a5')).status, 402);
+    const v = await billingOf(srv, alice.token, 'team:farm3');
+    assert.equal(v.usage.sites, 3, 'the page shows the figure the limit is checked against');
+    assert.equal(v.sharedWith, 3);
+
+    // The same holds for the metered counts.
+    srv.billing.record('team:farm1', 'build_minutes', 200);
+    assert.throws(() => srv.billing.reserve('team:farm2', 'build_minutes', 101), (e) => e.status === 402);
+    srv.billing.reserve('team:farm2', 'build_minutes', 100);
+
+    // Someone else's team is someone else's allowance, and a paid team stands on its own limits.
+    assert.equal((await post(srv, bob.token, '/api/v1/teams', { name: 'bobs' })).status, 201);
+    assert.equal((await site(bob, 'b1', 'bobs')).status, 201);
+    const paid = await subscribe(srv, fake, alice.token, { plan: 'pro', owner: 'team:farm3' });
+    assert.equal(paid.confirm.body.plan, 'pro');
+    assert.equal((await site(alice, 'a6', 'farm3')).status, 201, 'the paid team has its Pro limit');
+    assert.equal((await billingOf(srv, alice.token, 'team:farm3')).sharedWith, undefined);
+    assert.equal((await site(alice, 'a7')).status, 402, 'and the rest of the pool is still full');
+  } finally { await srv.close(); }
+});
