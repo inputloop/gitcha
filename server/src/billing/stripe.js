@@ -32,8 +32,10 @@ export function verifyStripeSignature(rawBody, header, secret, nowS) {
   const t = Number(parts.t);
   if (!t || !sigs.length) return false;
   if (Math.abs(nowS - t) > TOLERANCE_S) return false;
-  const expected = crypto.createHmac('sha256', secret).update(`${t}.${rawBody.toString('utf8')}`).digest('hex');
-  return sigs.some((s) => s.length === expected.length && crypto.timingSafeEqual(Buffer.from(s), Buffer.from(expected)));
+  // The MAC is over the exact bytes Stripe sent; the compare is on decoded bytes, after the lengths agree in characters and in bytes.
+  const expected = crypto.createHmac('sha256', secret).update(`${t}.`).update(rawBody).digest('hex');
+  const want = Buffer.from(expected, 'hex');
+  return sigs.some((s) => { const got = Buffer.from(s, 'hex'); return s.length === expected.length && got.length === want.length && crypto.timingSafeEqual(got, want); });
 }
 
 export class StripeProvider {
