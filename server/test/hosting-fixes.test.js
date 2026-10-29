@@ -246,3 +246,43 @@ test('DOM-3: a site\'s subdomain gets a certificate only inside the owner\'s wee
     assert.equal(await tlsAllowed(srv, 'two.pages.test'), true, 'a week later it is allowed');
   } finally { await srv.close(); }
 });
+
+// ---- the ring (RING-1, RING-2) ---------------------------------------------------------------------------------
+test('RING-1: the ring looks at its members on its own, so names and paid badges appear without anyone calling refresh', async () => {
+  const fetchImpl = async (url) => {
+    if (new URL(url).origin !== 'https://b.example') return { ok: false, status: 404, text: async () => '' };
+    return { ok: true, status: 200, text: async () => JSON.stringify({ name: 'B Gitcha', features: { hosting: true, paid: ['functions'] } }) };
+  };
+  const { srv } = await setup({ appOpts: { fetchImpl }, overrides: { publicUrl: 'https://a.example', ring: { peers: ['https://b.example'], refresh: 30 } } });
+  try {
+    let b;
+    for (let i = 0; i < 100 && !b?.name; i++) {
+      await new Promise((r) => setTimeout(r, 30));
+      b = (await api(srv.url, 'GET', '/api/v1/ring')).body.members.find((m) => m.url === 'https://b.example');
+    }
+    assert.equal(b?.name, 'B Gitcha');
+    assert.deepEqual(b.paid, ['functions']);
+  } finally { await srv.close(); }
+});
+
+test('RING-2: announcing never makes the server call a private address, and the refusal says nothing about what is there', async () => {
+  const seen = [];
+  const fetchImpl = async (url) => { seen.push(url); return { ok: true, status: 200, text: async () => 'SECRET-INTERNAL-BODY' }; };
+  const { srv } = await setup({ appOpts: { fetchImpl }, overrides: { publicUrl: 'https://a.example' } });
+  try {
+    const refusals = new Set();
+    for (const url of ['http://127.0.0.1:8081', 'http://localhost:5432', 'http://10.1.2.3', 'http://192.168.0.1', 'http://169.254.169.254', 'http://[::1]:80', 'http://[::ffff:127.0.0.1]', 'http://intranet']) {
+      const err = await srv.ring.announce(url, '127.0.0.1').then(() => null, (e) => e); // the route allows five an hour
+      assert.equal(err?.code, 'ring_unreachable', `${url}: ${err?.message}`);
+      assert.equal(err.status, 400);
+      refusals.add(err.message.replace(/https?:\/\/[^ ]+/, 'X'));
+    }
+    assert.deepEqual(seen, [], 'no request was made to any of them');
+    // A public name that answers badly gets the same sentence, and the body it sent is not repeated.
+    const bad = await api(srv.url, 'POST', '/api/v1/ring/announce', { body: { url: 'https://peer.example' } });
+    assert.equal(bad.status, 400);
+    assert.ok(!JSON.stringify(bad.body).includes('SECRET'), JSON.stringify(bad.body));
+    refusals.add(bad.body.message.replace(/https?:\/\/[^ ]+/, 'X'));
+    assert.equal(refusals.size, 1, `one generic message: ${[...refusals].join(' | ')}`);
+  } finally { await srv.close(); }
+});
