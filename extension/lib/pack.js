@@ -1,30 +1,37 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Turn a project directory into a Gitcha package tarball.
+// Turns a project folder into a Gitcha package tarball (a .tgz archive) for `gitcha publish` and `gitcha pack`.
+// It decides which files go in, then hands them to tar.js.
 import fs from 'node:fs';
 import path from 'node:path';
 import { packFiles } from './tar.js';
 import { MANIFEST_FILE, validateManifest } from './manifest.js';
 
-// What ships is what "files" names (default: src lib bin), plus gitcha.json, README* and LICENSE*. A name that
-// starts with a dot ships only when a "files" entry names it exactly; "*" never matches a leading dot.
+// What ships: the paths that "files" names (default: src, lib, bin), plus gitcha.json and top-level README* and
+// LICENSE* files. A name that starts with a dot ships only when a "files" entry names it exactly.
+// A "*" never matches a leading dot.
 export const DEFAULT_FILES = ['src', 'lib', 'bin'];
 const ALWAYS = /^(readme|license)/i;
 
-// A second net under "files" and .gitchaignore: these never ship, whatever either says. Matched on every path
-// segment, so a directory takes everything under it.
+// A second safety net under "files" and .gitchaignore: these names never ship, whatever either says.
+// They are mostly secrets (keys, cloud logins, .env files) and big folders. The check runs on every part of
+// the path, so a denied folder blocks everything inside it.
 const DENIED_NAMES = new Set(['.git', 'node_modules', 'gitcha_modules', '.aws', '.ssh', '.gnupg', '.docker', 'gitcha-data',
   '.kube', '.azure', '.npmrc', '.netrc', '.pgpass', '.git-credentials', '.pypirc', '.ds_store', '.gitchaignore', 'db.json', 'secret.key']);
 const DENIED_PATTERNS = [/^\.env/, /^id_/, /\.(key|pem|p12|pfx|jks|tgz|tfstate)$/i, /^credentials\.json/, /^terraform\.tfstate/, /^application_default_credentials/];
 export const isDenied = (rel) => rel.split('/').some((seg) => DENIED_NAMES.has(seg.toLowerCase()) || DENIED_PATTERNS.some((re) => re.test(seg)));
 
+// The patterns in .gitchaignore, one per line. Blank lines and "#" comment lines are skipped.
 function readIgnore(dir) {
   try {
     return fs.readFileSync(path.join(dir, '.gitchaignore'), 'utf8').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
   } catch { return []; }
 }
 
-/** One path segment against one glob segment. A leading "*" or "?" skips dotfiles unless `dot`. */
+/**
+ * Match one part of a path against one part of a glob (a pattern where "*" means any characters and "?" one).
+ * A leading "*" or "?" skips names that start with a dot, unless `dot` is true.
+ */
 function segmentMatches(glob, seg, dot) {
   if (!glob.includes('*') && !glob.includes('?')) return glob === seg;
   if (!dot && seg.startsWith('.') && /^[*?]/.test(glob)) return false;
@@ -32,7 +39,10 @@ function segmentMatches(glob, seg, dot) {
   return new RegExp(`^${re}$`).test(seg);
 }
 
-/** Do the glob's segments match the first segments of the path (so a pattern naming a directory takes its contents)? "**" is any run of segments. */
+/**
+ * Do the glob's parts match the first parts of the path? That way a pattern that names a folder takes
+ * everything inside it. "**" matches any number of path parts.
+ */
 function prefixMatches(glob, segs, dot, g = 0, i = 0) {
   if (g === glob.length) return dot || segs.slice(i).every((seg) => !seg.startsWith('.')); // a dot-name below a named directory must be named too
   if (glob[g] === '**') {
@@ -45,9 +55,13 @@ function prefixMatches(glob, segs, dot, g = 0, i = 0) {
   return i < segs.length && segmentMatches(glob[g], segs[i], dot) && prefixMatches(glob, segs, dot, g + 1, i + 1);
 }
 
+// Drop a leading "./" or "/" and any trailing "/", then split the pattern into parts.
 const toGlob = (pattern) => pattern.replace(/^\.?\//, '').replace(/\/+$/, '').split('/');
 
-/** .gitchaignore: a pattern with no slash matches a name at any depth (as in .gitignore); one with a slash is anchored at the project root. */
+/**
+ * Is this path in .gitchaignore? A pattern with no slash matches a name at any depth (as in .gitignore).
+ * A pattern with a slash is matched from the project root.
+ */
 function ignored(patterns, rel) {
   const segs = rel.split('/');
   return patterns.some((pattern) => {
@@ -57,6 +71,7 @@ function ignored(patterns, rel) {
   });
 }
 
+// Read and check gitcha.json. Throws an error that lists every problem.
 export function readManifest(dir) {
   const file = path.join(dir, MANIFEST_FILE);
   if (!fs.existsSync(file)) throw new Error(`No ${MANIFEST_FILE} found in ${dir}. Create one with at least "name" and "version".`);
@@ -67,6 +82,8 @@ export function readManifest(dir) {
   return manifest;
 }
 
+// Walk the project and gather the files that ship, with their bytes.
+// Symbolic links are skipped, so a link cannot pull in a file from outside the project.
 export function collectFiles(dir) {
   const root = path.resolve(dir);
   const manifest = readManifest(root);
@@ -90,7 +107,10 @@ export function collectFiles(dir) {
   return { manifest, files: out };
 }
 
-/** `entries` is the list with sizes that a dry run shows; `files` is just the paths. */
+/**
+ * Build the tarball for a project. `entries` is the list with sizes that a dry run shows.
+ * `files` is just the paths.
+ */
 export function pack(dir) {
   const { manifest, files } = collectFiles(dir);
   return { manifest, files: files.map((f) => f.path), entries: files.map((f) => ({ path: f.path, size: f.data.length })), tarball: packFiles(files) };

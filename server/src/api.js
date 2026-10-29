@@ -1,16 +1,20 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// JSON API used by the gitcha CLI and the Claude extension (/api/v1/*).
+// The JSON API under /api/v1/ used by the gitcha command-line tool and the Claude extension. It covers
+// login, the 2FA check settings, packages and teams. Each route checks who is calling (see makeGuards),
+// reads the JSON body, calls a service (auth.js, packages.js, teams.js) and sends back JSON.
 import { json, send, readJson } from './http.js';
 import { HttpError } from './errors.js';
 
-export const API_VERSION = '1';
+export const API_VERSION = '1'; // reported by /api/v1/health
 
+/** The token from an "Authorization: Bearer <token>" header, or null. */
 function bearer(req) {
   const h = req.headers.authorization ?? '';
   return h.startsWith('Bearer ') ? h.slice(7).trim() : null;
 }
 
+/** What whoami reports: the user, this device, and the state of its 2FA checks. */
 function sessionView(auth, state) {
   return {
     user: { username: auth.user.username, role: auth.user.role },
@@ -24,14 +28,18 @@ function sessionView(auth, state) {
   };
 }
 
-/** Request guards shared by every API module. */
+/**
+ * Request guards shared by every API module. Each one throws an error if the caller may not go on.
+ * authed: has a valid token. verified: also passed the 2FA checks. reader: like verified, but anyone
+ * may read without a token when the server allows public reading (GITCHA_PUBLIC_READ).
+ */
 export function makeGuards(authSvc, config) {
   const authed = (ctx) => {
     const a = authSvc.authenticate(bearer(ctx.req), ctx.ip);
     if (!a) throw new HttpError(401, 'unauthenticated', 'Not logged in. Run `gitcha login` first.');
     return a;
   };
-  /** Logged in + intermittent 2FA satisfied (+ fresh code for sensitive actions). */
+  /** Logged in, and the intermittent 2FA check passed (plus a recent code for sensitive actions). */
   const verified = (ctx, { sensitive = false } = {}) => {
     const a = authed(ctx);
     authSvc.requireMfa(a, sensitive ? { fresh: config.policy.sensitiveWindow } : {});
@@ -41,9 +49,11 @@ export function makeGuards(authSvc, config) {
   return { authed, verified, reader, bearer };
 }
 
+/** Add the core API routes to the router. `hooks.onPublish` lets CI start a build when a package is published. */
 export function registerApi(router, { auth: authSvc, packages, teams, config, version, hooks = {} }) {
   const { authed, verified, reader } = makeGuards(authSvc, config);
 
+  // Public status: the version, whether sign-up is open, and the 2FA policy. Needs no login.
   router.get('/api/v1/health', (ctx) => json(ctx.res, 200, {
     ok: true, service: 'gitcha', version, api: API_VERSION,
     registration: config.openRegistration ? 'open' : 'closed',
@@ -56,6 +66,7 @@ export function registerApi(router, { auth: authSvc, packages, teams, config, ve
   }));
 
   // ---- authentication ------------------------------------------------------
+  // Login is two steps: the password gives a ticket, then the ticket and a 2FA code give a device token.
   router.post('/api/v1/auth/login', async (ctx) => {
     const { username, password } = await readJson(ctx.req);
     const { ticket } = await authSvc.beginLogin({ username, password, ip: ctx.ip });
@@ -73,6 +84,7 @@ export function registerApi(router, { auth: authSvc, packages, teams, config, ve
     });
   });
 
+  // Send a fresh 2FA code for this device when the server asks for one.
   router.post('/api/v1/auth/step-up', async (ctx) => {
     const a = authed(ctx);
     const { code } = await readJson(ctx.req);
@@ -97,7 +109,7 @@ export function registerApi(router, { auth: authSvc, packages, teams, config, ve
     json(ctx.res, 200, { checks: authSvc.checkSettings(a.user) });
   });
 
-  // Toggling checks needs a code sent in this request (single use), on top of the interval and new-network checks.
+  // Changing the checks needs a code sent in this request (single use), on top of the interval and new-network checks.
   router.put('/api/v1/security', async (ctx) => {
     const a = verified(ctx);
     const { checks, code } = await readJson(ctx.req);
@@ -105,6 +117,8 @@ export function registerApi(router, { auth: authSvc, packages, teams, config, ve
   });
 
   // ---- packages -------------------------------------------------------------
+  // Reading uses `reader`. Publishing, yanking, transferring and changing visibility are sensitive, so they
+  // need a recent 2FA code.
   router.get('/api/v1/packages', (ctx) => {
     const a = reader(ctx);
     const q = ctx.url.searchParams;
@@ -129,6 +143,8 @@ export function registerApi(router, { auth: authSvc, packages, teams, config, ve
 
   router.put('/api/v1/packages', async (ctx) => {
     const a = verified(ctx, { sensitive: true });
+    // The tarball arrives as base64, which is about 4/3 the size of the bytes, so the body limit is 1.4 times
+    // the package limit plus room for the other fields.
     const body = await readJson(ctx.req, Math.ceil(config.maxPackageBytes * 1.4) + 4096);
     const tarball = Buffer.from(String(body.tarball ?? ''), 'base64');
     const priv = typeof body.private === 'boolean' ? body.private : undefined;
@@ -157,6 +173,7 @@ export function registerApi(router, { auth: authSvc, packages, teams, config, ve
   });
 
   // ---- teams --------------------------------------------------------------------
+  // Changing members or deleting a team is sensitive and needs a recent 2FA code.
   router.get('/api/v1/teams', (ctx) => {
     const a = verified(ctx);
     json(ctx.res, 200, { teams: teams.forUser(a.user) });

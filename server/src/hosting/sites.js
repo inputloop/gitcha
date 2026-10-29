@@ -1,9 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Static site hosting. A site is owned by a user or a team, gets a subdomain
-// on every configured hosting domain, can add DNS-verified custom domains, and
-// serves the files of its active deploy. Deploys are immutable directories on
-// disk; activating one is an atomic pointer switch, so rollback is instant.
+// Static site hosting (sites made of plain files, served as they are).
+// A user or a team owns each site. A site gets a subdomain on every configured
+// hosting domain, can add DNS-verified custom domains (see domains.js), and
+// serves the files of its active deploy.
+// Deploys are immutable (never changed) folders on disk, under
+// DATA_DIR/sites/<site>/<deploy id>. Activating one only switches which
+// deploy the site record points at, in one step, so rollback is instant.
+// Site records live in the store under data.sites, keyed by site name.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -11,18 +15,28 @@ import { HttpError } from '../errors.js';
 import { sha256 } from '../crypto.js';
 import { unpackFiles, extractTo } from '../../../extension/lib/tar.js';
 
+// A site name is one DNS label: 1 to 63 lowercase letters, digits or "-", not starting or ending with "-".
 export const SITE_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+// Names nobody may take, because they look official or are used by Gitcha.
 const RESERVED = new Set(['www', 'api', 'admin', 'mail', 'smtp', 'imap', 'ftp', 'ns', 'ns1', 'ns2', 'gitcha', 'ring', 'ops', 'status', 'billing', 'static', 'cdn', 'login', 'auth', 'kiosk']);
+// The optional settings file a site may include in its upload.
 export const SITE_CONFIG = 'gitcha.site.json';
-// One owner may hold this many sites whatever the billing setting (each is a name a certificate can be ordered for).
+// One owner may hold this many sites, whatever the billing setting. (Each site
+// is a name a certificate can be ordered for.)
 const MAX_SITES = 25;
-// One owner's sites together may hold this much on disk (all kept deploys, unpacked), whatever the billing setting.
-// A conservative default of ten times the per-site cap (the keepers can set config.hosting.maxOwnerBytes).
+// One owner's sites together may hold this much on disk (all kept deploys,
+// unpacked), whatever the billing setting. The careful default is ten times the
+// per-site cap (the keepers can set config.hosting.maxOwnerBytes).
 const OWNER_BYTES_FACTOR = 10;
-// Public suffixes with a second level that is not itself registrable (co.uk, com.au). A short list, not the Public Suffix List.
+// Second-level names under a country code that nobody can register by
+// themselves (like co.uk or com.au). A short list, not the full Public Suffix List.
 const SECOND_LEVELS = new Set(['co', 'com', 'org', 'net', 'gov', 'edu', 'ac', 'or', 'ne', 'go']);
 
-/** The registrable part of a host, by a coarse rule: the last two labels, three under a two-letter country code with a second level. */
+/**
+ * The registrable part of a host (the part you buy, like example.com), by a
+ * rough rule: the last two labels, or the last three under a two-letter
+ * country code with a second level (like example.co.uk).
+ */
 export function registrableDomain(host) {
   const labels = String(host ?? '').toLowerCase().replace(/\.$/, '').split('.').filter(Boolean);
   if (labels.length < 2) return null;
@@ -30,6 +44,7 @@ export function registrableDomain(host) {
   return labels.slice(-n).join('.');
 }
 
+// Content-Type for each file extension. Anything else is sent as application/octet-stream.
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.json': 'application/json',
@@ -40,7 +55,12 @@ const MIME = {
   '.pdf': 'application/pdf', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg', '.glb': 'model/gltf-binary',
 };
 
-/** Parse and sanity-check the optional gitcha.site.json. */
+/**
+ * Parse and check the optional gitcha.site.json. Only known keys are kept:
+ * spa (send index.html for unknown paths), notFound (the 404 page), routes
+ * and headers. Headers that could break the HTTP reply or set cookies are
+ * dropped, and line breaks are removed from values.
+ */
 export function parseSiteConfig(buf) {
   if (!buf) return {};
   let c;
@@ -49,7 +69,8 @@ export function parseSiteConfig(buf) {
   if (c.spa !== undefined) out.spa = Boolean(c.spa);
   if (typeof c.notFound === 'string') out.notFound = c.notFound;
   if (c.routes && typeof c.routes === 'object') {
-    // "/api/*": "function-name": requests under that prefix go to a lambda function.
+    // "/api/*": "function-name" means requests under that prefix go to a lambda
+    // function (a small program that runs per request, see compute/functions.js).
     out.routes = {};
     for (const [pattern, fn] of Object.entries(c.routes)) {
       if (!/^\/[\w\-./]*\*?$/.test(pattern) || typeof fn !== 'string') throw new HttpError(400, 'bad_site_config', `Bad route "${pattern}".`);
@@ -66,13 +87,18 @@ export function parseSiteConfig(buf) {
   return out;
 }
 
+/**
+ * Creates, deploys, rolls back and deletes sites, and finds the file to send for a request.
+ */
 export class SiteService {
   constructor({ store, config, teams, clock = Date.now }) {
     Object.assign(this, { store, config, teams, clock });
     this.root = path.join(config.dataDir, 'sites');
     fs.mkdirSync(this.root, { recursive: true, mode: 0o700 });
-    // A hosting domain in the same registrable domain as the UI would make tenants' pages same-site with the UI's
-    // cookies. Refuse it at start. The rule is coarse (no Public Suffix List is bundled); see DEPLOY.md.
+    // A hosting domain in the same registrable domain as the UI would make
+    // tenants' pages "same-site" with the UI, so browsers would treat them as
+    // one site for the UI's cookies. That is unsafe, so the server refuses to
+    // start. The rule is rough (no Public Suffix List is bundled); see DEPLOY.md.
     const ui = registrableDomain(new URL(config.publicUrl).hostname);
     for (const d of config.hosting.domains) {
       if (ui && registrableDomain(d) === ui) {
@@ -82,6 +108,7 @@ export class SiteService {
   }
 
   // ---- ownership -----------------------------------------------------------
+  // The owner for a new site: the user, or a team the user maintains.
   ownerFor(user, teamName) {
     if (!teamName) return { type: 'user', name: user.username };
     const team = this.teams.get(teamName);
@@ -89,6 +116,7 @@ export class SiteService {
     return { type: 'team', name: team.name };
   }
 
+  // May change the site: the owning user, or a maintainer of the owning team.
   canManage(user, site) {
     if (!user) return false;
     if (site.owner.type === 'user') return site.owner.name === user.username;
@@ -96,6 +124,7 @@ export class SiteService {
     return Boolean(team && this.teams.has(team, user, 'maintainer'));
   }
 
+  // May see the site's settings: the owner, team members, and admins.
   canSee(user, site) {
     if (!user) return false;
     if (site.owner.type === 'user') return site.owner.name === user.username || user.role === 'admin';
@@ -103,12 +132,15 @@ export class SiteService {
     return Boolean(team && this.teams.has(team, user, 'member')) || user.role === 'admin';
   }
 
+  // Find a site by name, or throw 404.
   get(name) {
     const site = this.store.data.sites[String(name).toLowerCase()];
     if (!site) throw new HttpError(404, 'site_not_found', `No site named "${name}".`);
     return site;
   }
 
+  // Find a site the user may change. Someone who can see it but not change it
+  // gets 403; anyone else gets 404, so they cannot learn the site exists.
   manageable(user, name) {
     const site = this.get(name);
     if (!this.canManage(user, site)) {
@@ -118,12 +150,14 @@ export class SiteService {
     return site;
   }
 
+  // Every name the site answers on: its subdomains, then its verified custom domains.
   hostnames(site) {
     const sub = this.config.hosting.domains.map((d) => `${site.name}.${d}`);
     const custom = Object.values(this.store.data.domains).filter((d) => d.site === site.name && d.verified).map((d) => d.hostname);
     return [...sub, ...custom];
   }
 
+  // The API shape of a site, with its deploys newest first.
   view(site, user) {
     return {
       name: site.name, owner: site.owner, createdAt: site.createdAt, description: site.description ?? '',
@@ -135,11 +169,14 @@ export class SiteService {
     };
   }
 
+  // Every site the user may see, sorted by name.
   listFor(user) {
     return Object.values(this.store.data.sites).filter((s) => this.canSee(user, s)).sort((a, b) => a.name.localeCompare(b.name)).map((s) => this.view(s, user));
   }
 
   // ---- lifecycle -------------------------------------------------------------
+  // Make a new site record after checking the name, the owner's site limit
+  // and billing. Each site gets a random uid (see identity()).
   create(user, { name, team, description = '' }, ip) {
     name = String(name ?? '').trim().toLowerCase();
     if (!SITE_RE.test(name)) throw new HttpError(400, 'bad_site_name', 'Site names are DNS labels: lowercase letters, digits and "-", 1-63 characters.');
@@ -157,7 +194,7 @@ export class SiteService {
     return site;
   }
 
-  /** Which site this is, so a name that was deleted and made again is not mistaken for it. */
+  /** Which site this is, so a site that was deleted and made again with the same name is not mistaken for it. */
   identity(site) { return site.uid ?? String(site.createdAt); }
 
   /** Unpacked bytes held by every kept deploy of the owner's sites. */
@@ -169,7 +206,13 @@ export class SiteService {
     return n;
   }
 
-  /** Store a deploy from a gzipped tarball (files rooted at package/). */
+  /**
+   * Store a deploy from a gzipped tarball (a .tar.gz archive, files rooted at
+   * package/). Steps: check the size limits (per site and per owner), read the
+   * site config, unpack into a new deploy folder, save the record, make it
+   * active if asked, then delete old deploys. With no user (a CI job), the
+   * caller must have checked access already.
+   */
   deploy(user, name, { tarball, activate = true, source = 'upload', jobId = null }, ip) {
     const site = user ? this.manageable(user, name) : this.get(name);
     if (!Buffer.isBuffer(tarball) || !tarball.length) throw new HttpError(400, 'no_tarball', 'No site tarball was sent.');
@@ -199,7 +242,7 @@ export class SiteService {
     try {
       extractTo(files.filter((f) => f.path !== SITE_CONFIG), dir);
     } catch (err) {
-      // A deploy that fails leaves nothing behind: no directory in no record.
+      // A deploy that fails leaves nothing behind: no folder and no record.
       fs.rmSync(dir, { recursive: true, force: true });
       throw new HttpError(400, 'bad_tarball', `The site cannot be unpacked (${err.code ?? 'conflicting paths'}).`);
     }
@@ -218,6 +261,7 @@ export class SiteService {
     return record;
   }
 
+  // Make an older (or newer) kept deploy the live one. This is how rollback works.
   activate(user, name, deployId, ip) {
     const site = this.manageable(user, name);
     const dep = site.deploys.find((d) => d.id === deployId);
@@ -229,6 +273,7 @@ export class SiteService {
     return dep;
   }
 
+  // Delete old deploys from disk and from the record.
   prune(name) {
     const site = this.get(name);
     // Keep the active deploy plus the newest others, up to keepDeploys in total.
@@ -241,6 +286,7 @@ export class SiteService {
     this.store.tx((d) => { d.sites[name].deploys = d.sites[name].deploys.filter((x) => !gone.has(x.id)); });
   }
 
+  // Delete a site, its domains and claims, and all its files on disk.
   remove(user, name, ip) {
     const site = this.manageable(user, name);
     this.store.tx((d) => {
@@ -267,6 +313,7 @@ export class SiteService {
     return dom?.verified ? this.store.data.sites[dom.site] ?? null : null;
   }
 
+  // Does this Host header belong to hosting at all (even if no site answers it)?
   isHostingHost(host) {
     host = String(host ?? '').toLowerCase().replace(/:\d+$/, '').replace(/\.$/, '');
     // Registered custom domains belong to hosting even before they verify, so they never reach the UI.
@@ -281,7 +328,12 @@ export class SiteService {
     return null;
   }
 
-  /** Resolve a URL path to a file in the active deploy, or null. */
+  /**
+   * Find the file in the active deploy for a URL path, or null. It tries the
+   * path, then path.html, then path/index.html. Each candidate must stay
+   * inside the deploy folder, so "../" tricks cannot read other files.
+   * For an spa site, unknown paths get index.html.
+   */
   resolveFile(site, pathname) {
     if (!site.activeDeploy) return null;
     const base = path.join(this.root, site.name, site.activeDeploy);
@@ -302,6 +354,7 @@ export class SiteService {
     return null;
   }
 
+  // The site's own 404 page (notFound in the config, or 404.html), if it exists inside the deploy.
   notFoundFile(site) {
     if (!site.activeDeploy) return null;
     const base = path.join(this.root, site.name, site.activeDeploy);
@@ -309,6 +362,9 @@ export class SiteService {
     return f.startsWith(base + path.sep) && fs.existsSync(f) ? f : null;
   }
 
+  // Send a file with safe default headers. nosniff tells the browser to trust
+  // our Content-Type and not guess. HTML is never cached; other files are
+  // cached for 5 minutes. The site's own config headers are added last.
   sendFile(res, site, file, status = 200, method = 'GET') {
     const ext = path.extname(file).toLowerCase();
     const body = fs.readFileSync(file);
@@ -326,5 +382,5 @@ export class SiteService {
   }
 }
 
-/** Where a request for a custom-domain challenge should look. */
+/** The DNS name where the TXT proof for a custom domain must be. */
 export const challengeName = (hostname) => `_gitcha-challenge.${hostname}`;

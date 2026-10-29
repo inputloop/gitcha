@@ -9,9 +9,11 @@
 #                            control plane, billing, the social side, operations; runs as user "gitcha"
 #   inputloop-gitcha-runner  the runner: CI jobs and functions in bContain VMs; runs as user "gitcha-runner"
 #
-# Plain dpkg-deb, no root.  The server's two npm dependencies (graphql, qrcode) are fetched once at build time
-# with "npm ci --omit=dev" from the committed lockfile.  As in alphaOS, no package starts or enables a service by
-# itself: a person turns each on (README.Debian says how).  The version is X.Y.Z+git<sha7>.
+# A .deb is the package file that Debian and Ubuntu install with dpkg or apt.
+# This script uses plain dpkg-deb and needs no root.  The server's two npm dependencies (graphql, qrcode)
+# are downloaded once at build time with "npm ci --omit=dev" from the committed lockfile.
+# As in alphaOS, no package starts or enables a service by itself: a person turns each one on
+# (README.Debian says how).  The version is X.Y.Z+git<sha7> (the first 7 characters of the git commit).
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${1:?usage: build-debs.sh OUT_DIR}
@@ -20,9 +22,13 @@ MAINT="inputloop <nathanielfrankford@gmail.com>"
 REV=$(git -C "$here" rev-parse --short=7 HEAD 2>/dev/null || echo nogit)
 VER=$(node -p "require('$here/package.json').version")+git$REV
 
-# A stage directory of our own: alphaOS's other parts share $OUT/.stage, which this script must not remove.
+# A stage folder of our own, where each package's files are laid out before packing.
+# alphaOS's other parts share $OUT/.stage, which this script must not remove.
+# stage NAME: start an empty stage folder for one package.
 STAGE=$OUT/.stage-gitcha
 stage() { S=$STAGE/$1; rm -rf "$S"; mkdir -p "$S/DEBIAN" "$S/usr/share/doc/$1"; }
+# finish NAME DEPENDS DESCRIPTION [RECOMMENDS]: write the copyright file and the DEBIAN/control file
+# (the package's name, version, needs and description), then build the .deb into OUT_DIR.
 finish() {   # finish NAME DEPENDS DESCRIPTION [RECOMMENDS]
   n=$1 dep=$2 desc=$3 rec=${4:-}
   printf 'Copyright 2026 Bryant Frankford and Corwin Brust and Contributors.\nCode: GPL-3.0-or-later OR LGPL-3.0-or-later. Writing: CC-BY-SA-4.0 (TERMS v2, 2026-10-10).\nThe full texts: /usr/share/common-licenses/GPL-3 and LGPL-3.\n' > "$S/usr/share/doc/$n/copyright"
@@ -38,9 +44,12 @@ finish() {   # finish NAME DEPENDS DESCRIPTION [RECOMMENDS]
   dpkg-deb --root-owner-group --build "$S" "$OUT/${n}_${VER}_all.deb" >/dev/null
   echo "built $OUT/${n}_${VER}_all.deb"
 }
+# wrapper PATH COMMAND: write a tiny /usr/bin script that runs COMMAND with all its arguments.
 wrapper() { mkdir -p "$S/$(dirname "$1")"; printf '#!/bin/sh\nexec %s "$@"\n' "$2" > "$S/$1"; chmod 755 "$S/$1"; }
 
 # ---- inputloop-gitcha (the server) ----------------------------------------------------------------
+# Copy the server and the shared extension/lib code (tests left out), install its npm dependencies,
+# and add the command wrappers, the config file, the systemd service and the docs.
 stage inputloop-gitcha
 APP=$S/usr/share/inputloop/gitcha
 mkdir -p "$APP/extension"
@@ -54,6 +63,7 @@ wrapper usr/bin/gitcha-ssh-keys "node /usr/share/inputloop/gitcha/server/bin/git
 wrapper usr/bin/gitcha-git-shell "node /usr/share/inputloop/gitcha/server/bin/gitcha-git-shell.js"
 mkdir -p "$S/etc/inputloop/gitcha" "$S/usr/lib/systemd/system"
 cp "$here/deploy/gitcha.env" "$S/etc/inputloop/gitcha/gitcha.env"
+# conffiles tells dpkg that gitcha.env is a config file, so an upgrade keeps the admin's changes.
 printf '/etc/inputloop/gitcha/gitcha.env\n' > "$S/DEBIAN/conffiles"
 cp "$here/deploy/gitcha.service" "$S/usr/lib/systemd/system/gitcha.service"
 cp "$here/deploy/Caddyfile.example" "$here/deploy/sshd-gitcha.conf.example" "$here/DEPLOY.md" "$S/usr/share/doc/inputloop-gitcha/"
@@ -69,6 +79,7 @@ Its data (database, git repositories, sites, the keys it encrypts with) is /var/
 Back up /var/lib/gitcha/db.json and the repositories; keep secret.key apart from those backups.
 DEPLOY.md, beside this file, is the full guide.
 EOF
+# postinst runs after install: it makes the "gitcha" system user and locks down gitcha.env (mode 640).
 cat > "$S/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
 set -e
@@ -89,6 +100,7 @@ PayPal, agents and Second Reader reviews, a social crawl, and operations tickets
 Every account uses a password and an authenticator app.  Does not start by itself." "gnupg, openssh-server, caddy"
 
 # ---- inputloop-gitcha-runner ----------------------------------------------------------------------
+# The runner needs only its own code and extension/lib (for tar.js). It has no npm dependencies.
 stage inputloop-gitcha-runner
 APP=$S/usr/share/inputloop/gitcha-runner
 mkdir -p "$APP/extension"
@@ -109,6 +121,8 @@ The runner does not start by itself.  It runs every job in its own bContain VM.
 The runner needs /dev/kvm (the gitcha-runner account is added to the kvm group) or bContain falls back to
 software emulation, which is slow.  Inside an alphaOS VM that means nested virtualization on the host.
 EOF
+# postinst makes the "gitcha-runner" system user and adds it to the kvm group when there is one,
+# so bContain can use hardware virtualization.
 cat > "$S/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
 set -e

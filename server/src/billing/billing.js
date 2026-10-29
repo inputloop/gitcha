@@ -1,36 +1,46 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Plans, usage metering and quotas, with Stripe and PayPal as payment
-// providers. A billing account belongs to a user or a team (team owners
-// manage it). Payment happens on the provider's hosted pages, so card data
-// never touches Gitcha. Provider events arrive by signed webhook; a return
-// from checkout is also confirmed server-side with the provider, so nothing
-// the browser says is trusted.
+// Plans, usage metering (counting what each account uses) and quotas
+// (limits), with Stripe and PayPal as payment providers. A billing account
+// belongs to a user or a team, and the team's owners manage it. Payment
+// happens on the provider's own pages, so card data never touches Gitcha.
+// Provider events arrive by signed webhook. When the browser comes back from
+// checkout, the server also asks the provider what happened, so nothing the
+// browser says is trusted.
+//
+// Everything lives in store.data.billing: `accounts` (by "user:NAME" or
+// "team:NAME"), `usage` (counts by account and month), `events` (webhook ids
+// already handled), `pendingCancels` (subscriptions still to cancel at the
+// provider) and `closed` (the last 200 closed accounts).
 import fs from 'node:fs';
 import { HttpError } from '../errors.js';
 import { StripeProvider } from './stripe.js';
 import { PayPalProvider } from './paypal.js';
 
+// What is counted against a plan's limits, with the words used in messages.
 export const METRICS = {
   fn_invocations: 'function invocations',
   build_minutes: 'build minutes',
   sites: 'sites',
 };
 
-// Defaults; an operator replaces them with GITCHA_PLANS_FILE (same shape). A numeric price is per month in GITCHA_CURRENCY; text is shown as written.
+// The default plans. An operator can replace them with GITCHA_PLANS_FILE (same shape). A number price is
+// per month in GITCHA_CURRENCY; a text price is shown as written.
 export const DEFAULT_PLANS = {
   free: { name: 'Free', price: null, limits: { fn_invocations: 10_000, build_minutes: 300, sites: 3 }, paid: false },
   pro: { name: 'Pro', price: 5, limits: { fn_invocations: 1_000_000, build_minutes: 3000, sites: 50 }, paid: true },
   team: { name: 'Team', price: 20, limits: { fn_invocations: 5_000_000, build_minutes: 10_000, sites: 200 }, paid: true },
 };
 
+// "2026-10" for a time in October 2026: usage is counted per calendar month (UTC).
 const month = (t) => new Date(t).toISOString().slice(0, 7);
 const GRACE_MS = 7 * 86_400_000; // a failed payment keeps the paid limits this long
 const EVENT_KEEP_MS = 30 * 86_400_000; // a delivered event is remembered this long (providers retry for days); an older one is refused
 const READONLY_GRACE_MS = 14 * 86_400_000; // after the paid limits end, sites over the new limit keep taking changes this long
 const GONE = '(gone)'; // the binding of an account whose owner no longer exists
 
-// Services holding usage that is not on disk yet; a stop signal ends in process.exit, which writes them (flushOnExit).
+// Billing services holding usage counts that are not on disk yet. A stop signal ends in process.exit, and the
+// 'exit' handler below writes them then.
 const unflushed = new Set();
 let exitHooked = false;
 function hookExit() {
@@ -39,6 +49,7 @@ function hookExit() {
   process.on('exit', () => { for (const b of unflushed) { try { b.flushNow(); } catch { /* the process is ending: nothing more can be done */ } } });
 }
 
+/** Plans, limits, usage counts, checkout, cancelling and provider webhooks. */
 export class BillingService {
   constructor({ store, config, teams, clock = Date.now, fetchImpl = globalThis.fetch, log = { info: (m) => console.log(m), error: (m) => console.error(m) } }) {
     Object.assign(this, { store, config, teams, clock, log, flushMs: 2000, flushFailures: 0 });
@@ -53,7 +64,11 @@ export class BillingService {
     if (this.enabled) this.startUp();
   }
 
-  /** Say which mode each provider's keys are in, bind accounts that predate binding, retire those whose owner is gone, and keep checking while the server runs. */
+  /**
+   * Runs once when billing is on. Logs which mode (live or test) each provider's keys are in,
+   * binds old accounts to their owner, closes accounts whose owner is gone, and repeats the
+   * checks every 5 minutes while the server runs.
+   */
   startUp() {
     for (const [name, p] of Object.entries(this.providers)) {
       this.log.info(p.mode === 'unknown' ? `billing: ${name} keys are neither live nor test keys; records of the two modes cannot be told apart` : `billing: ${name} is in ${p.mode} mode`);
@@ -72,7 +87,7 @@ export class BillingService {
     if (other) this.log.info(`billing: ${other} subscription record(s) were written in the other mode and are not honoured`);
     const upkeep = () => this.reconcile().then(() => this.refresh()).catch((err) => this.log.error(`billing: ${err.message}`));
     upkeep();
-    // A team deleted since the last look has its subscription cancelled, and a subscription past its paid period is asked about, within minutes.
+    // Within minutes, a team deleted since the last look has its subscription cancelled, and a subscription past its paid period is checked with the provider.
     this.upkeepTimer = setInterval(upkeep, 5 * 60_000);
     this.upkeepTimer.unref?.();
   }
@@ -80,16 +95,17 @@ export class BillingService {
   get enabled() { return this.config.billing.enabled; }
   get data() { return this.store.data.billing; }
 
-  /** For the ring manifest: what this instance sells. */
-  /** What a plan says it costs. The charge itself is whatever the Stripe Price or PayPal Plan says; nothing here compares them. */
+  /** What a plan says it costs, for showing. The real charge is whatever the Stripe Price or PayPal Plan says; nothing here compares them. */
   priceLabel(p) { return typeof p.price === 'number' ? `${p.price} ${this.config.billing.currency ?? 'USD'} per month` : p.price ?? null; }
 
+  /** For the ring manifest: what this server sells. */
   paidFeatures() {
     if (!this.enabled) return [];
     return Object.entries(this.plans).filter(([, p]) => p.paid).map(([id, p]) => `${p.name} plan (${this.priceLabel(p) ?? 'priced on request'})`);
   }
 
   // ---- accounts and permissions ------------------------------------------------------
+  /** Reads a billing owner: "user:NAME" (or nothing, meaning the caller) or "team:NAME". */
   parseOwner(user, owner) {
     if (!owner || owner === `user:${user.username}`) return { key: `user:${user.username}`, type: 'user', name: user.username };
     const m = /^team:([a-z0-9][a-z0-9_-]{1,31})$/.exec(owner);
@@ -97,7 +113,10 @@ export class BillingService {
     return { key: owner, type: 'team', name: m[1] };
   }
 
-  /** Users see and pay for themselves; team owners for their team; team members can look. */
+  /**
+   * Users see and pay for themselves. Team owners pay for their team, and team members can look.
+   * If the stored account no longer belongs to its owner, a clean-up (reconcile) starts.
+   */
   account(user, owner, { manage = false } = {}) {
     const o = this.parseOwner(user, owner);
     if (o.type === 'team') {
@@ -109,7 +128,10 @@ export class BillingService {
   }
 
   // ---- who an account belongs to ----------------------------------------------------------
-  /** What an account is bound to: the user's id, or the team as it was created (teams carry no id; creation time and creator tell a re-registered name apart). */
+  /**
+   * What an account is bound to: the user's id, or the team as it was created. Teams may have no
+   * id, so the creation time and creator tell apart a team that took a freed name.
+   */
   ownerRef(key) {
     const [type, ...rest] = key.split(':');
     const name = rest.join(':');
@@ -118,7 +140,7 @@ export class BillingService {
     return t ? t.id ?? `${t.createdAt}:${t.createdBy}` : null;
   }
 
-  /** The account, if it still belongs to the owner it was opened for (a team name reused by someone else gets nothing). */
+  /** The account, if it still belongs to the owner it was opened for. A team name reused by someone else gets nothing. */
   accountOf(key) {
     const a = this.data.accounts[key];
     if (!a) return null;
@@ -126,14 +148,14 @@ export class BillingService {
     return a;
   }
 
-  /** The account for a write: a new one, or the existing one if it is this owner's (an old one of the same name is retired first). */
+  /** The account to write to: the existing one if it is this owner's, else a new one. An old account under the same name is closed first. */
   ensureAccount(d, key) {
     let a = d.billing.accounts[key];
     if (a && a.ownerRef !== undefined && a.ownerRef !== this.ownerRef(key)) { this.retireInto(d, key, 'owner_changed'); a = undefined; }
     return (d.billing.accounts[key] ??= { ownerRef: this.ownerRef(key) });
   }
 
-  /** Close an account: its record goes, its provider subscriptions are queued for cancellation, and the closing is logged. */
+  /** Closes an account inside a write: its record goes, its live provider subscriptions are queued to be cancelled, and the closing is logged. */
   retireInto(d, key, reason, who = {}) {
     const a = d.billing.accounts[key];
     if (!a) return;
@@ -146,7 +168,7 @@ export class BillingService {
     this.store.audit({ userId: who.userId, event: 'billing.account_closed', owner: key, reason, provider: s?.provider, by: who.by });
   }
 
-  /** For the team-deletion path: close the team's billing account and cancel its subscription at the provider. Never rejects. */
+  /** Used when a team is deleted: closes its billing account and cancels its subscription at the provider. Never throws. */
   async closeAccount(key, who = {}) {
     try {
       this.store.tx((d) => this.retireInto(d, key, who.reason ?? 'team_deleted', who));
@@ -154,7 +176,7 @@ export class BillingService {
     await this.drainCancels();
   }
 
-  /** Retire every account whose owner is gone or was replaced, then cancel what they left at the providers. */
+  /** Closes every account whose owner is gone or was replaced, then cancels what they left at the providers. */
   async reconcile() {
     const stale = Object.keys(this.data.accounts).filter((k) => !this.accountOf(k));
     if (stale.length) {
@@ -163,7 +185,7 @@ export class BillingService {
     await this.drainCancels();
   }
 
-  /** Cancel, at the provider, the subscriptions of closed accounts. A cancel that fails stays queued for the next pass. */
+  /** Cancels, at the provider, the subscriptions of closed accounts. A cancel that fails stays queued for the next pass. Only one pass runs at a time. */
   drainCancels() {
     if (this.draining) return this.draining;
     this.draining = (async () => {
@@ -180,13 +202,13 @@ export class BillingService {
     return this.draining;
   }
 
-  /** A record written with test keys is not a paid plan once the keys are live, and the reverse. */
+  /** A record written with test keys is not a paid plan once the keys are live, and the other way round. Unknown modes are let through. */
   modeOk(s) {
     const pm = this.providers[s.provider]?.mode;
     return !s.mode || !pm || pm === 'unknown' || s.mode === 'unknown' || s.mode === pm;
   }
 
-  /** Ask the provider about subscriptions whose paid period has run out: a renewal PayPal never announces, or an event that never came. */
+  /** Asks the provider about subscriptions whose paid period has run out: a renewal PayPal never announces, or an event that never came. */
   async refresh() {
     const now = this.clock();
     for (const key of Object.keys(this.data.accounts)) {
@@ -201,14 +223,19 @@ export class BillingService {
     }
   }
 
+  /** The account's subscription, if the account is still its owner's and the record is in the current mode. */
   subscription(key) {
     const s = this.accountOf(key)?.subscription;
     return s && this.modeOk(s) ? s : null;
   }
 
   /**
-   * How a subscription stands: 'paid' (also one its owner cancelled, until the period they paid for ends), 'grace' (a failed payment, or a paid period that ran out with no word from the provider;
-   * paid limits stay for seven days from when that began) or 'none'. A record with no period end never runs out by itself.
+   * How a subscription stands:
+   *   'paid'  paid up. This includes one its owner cancelled, until the period they paid for ends.
+   *   'grace' a failed payment, or a paid period that ran out with no word from the provider. The
+   *           paid limits stay for seven days from when that began.
+   *   'none'  anything else.
+   * A record with no period end never runs out by itself.
    */
   standing(s) {
     const now = this.clock();
@@ -222,29 +249,31 @@ export class BillingService {
     return now - since < GRACE_MS ? 'grace' : 'none';
   }
 
-  /** The plan whose limits apply now. */
+  /** The plan whose limits apply now: the subscribed plan while it is paid or in grace, otherwise 'free'. */
   planFor(key) {
     const s = this.subscription(key);
     if (s && Object.hasOwn(this.plans, s.plan) && this.standing(s) !== 'none') return s.plan;
     return 'free';
   }
 
+  /** This month's counts for an account (a copy). */
   usage(key, t = this.clock()) {
     return { ...(this.data.usage[key]?.[month(t)] ?? {}) };
   }
 
-  /** Add `n` (may be negative, never below zero) to this month's count, or to the month `at` falls in. */
+  /** Adds `n` to this month's count, or to the month `at` falls in. `n` may be negative, but a count never goes below zero. */
   record(key, metric, n = 1, at = this.clock()) {
     if (!METRICS[metric]) return;
     const m = month(at);
     const u = (this.data.usage[key] ??= {});
     (u[m] ??= {})[metric] = Math.max(0, (u[m][metric] ?? 0) + n);
-    // Usage is flushed soon after, not with every count; a stop signal writes it too (see flushOnExit).
+    // Usage is written to disk soon after, not with every count. A stop signal writes it too (see hookExit).
     unflushed.add(this);
     hookExit();
     this.scheduleFlush();
   }
 
+  /** Writes the store after `delay` ms, unless a write is already waiting. A failed write is tried again later, waiting longer each time (at most a minute). */
   scheduleFlush(delay = this.flushMs) {
     if (this.flushTimer) return;
     this.flushTimer = setTimeout(() => {
@@ -258,7 +287,7 @@ export class BillingService {
     this.flushTimer.unref?.();
   }
 
-  /** Write the store now (usage counts included). */
+  /** Writes the store to disk now (usage counts included). */
   flushNow() {
     clearTimeout(this.flushTimer);
     this.flushTimer = null;
@@ -266,7 +295,7 @@ export class BillingService {
     unflushed.delete(this);
   }
 
-  /** The sites an account owns. */
+  /** The sites an account owns (from store.data.sites). */
   sitesOf(key) {
     const [type, ...rest] = key.split(':');
     const name = rest.join(':');
@@ -279,8 +308,9 @@ export class BillingService {
   }
 
   /**
-   * The accounts that share one Free allowance: a person's own and those of the teams they created, so making teams does not
-   * multiply it. A paid account stands alone, and so does one whose team has no creator on record.
+   * The accounts that share one Free allowance: a person's own account and those of the teams they
+   * created, so making more teams does not give more free use. A paid account stands alone, and so
+   * does a team with no creator on record.
    */
   poolOf(key) {
     if (this.plans[this.planFor(key)]?.paid) return [key];
@@ -293,8 +323,9 @@ export class BillingService {
   }
 
   /**
-   * Throw 402 when taking `n` more would pass the owner's plan limit. `current` overrides the monthly count (e.g. number of sites).
-   * On Free the count is shared across the person's own account and the teams they created (see poolOf).
+   * Throws 402 (payment required) when taking `n` more would pass the owner's plan limit. `current`
+   * replaces this account's count (e.g. its number of sites). On Free the count is shared by the
+   * person's own account and the teams they created (see poolOf). Does nothing when billing is off.
    */
   check(key, metric, current, n = 1) {
     if (!this.enabled) return;
@@ -310,8 +341,9 @@ export class BillingService {
   }
 
   /**
-   * Take `n` of a metered resource before the work starts: refuse (402) if that passes the limit, and count it now, so work
-   * admitted together counts together. Returns plain data to keep with the job; give it to settle() when the work ends.
+   * Takes `n` of a metered resource before the work starts. It refuses (402) if that passes the
+   * limit, and counts it now, so jobs let in at the same time all count. Returns plain data to keep
+   * with the job; give it to settle() when the work ends.
    */
   reserve(key, metric, n = 1) {
     this.check(key, metric, undefined, n);
@@ -319,7 +351,7 @@ export class BillingService {
     return { key, metric, n, at: this.clock() };
   }
 
-  /** The work ended having used `actual` (0 if it never ran): correct the count made at reserve(). Once per reservation; a second call does nothing. */
+  /** The work ended having used `actual` (0 if it never ran): fixes the count made at reserve(). Works once per reservation; a second call does nothing. */
   settle(reservation, actual) {
     if (!reservation || reservation.settled) return;
     reservation.settled = true;
@@ -327,13 +359,14 @@ export class BillingService {
     if (diff) this.record(reservation.key, reservation.metric, diff, reservation.at);
   }
 
-  /** The work never ran (a platform failure, a job that never started). */
+  /** The work never ran (a platform failure, or a job that never started): gives the whole count back. */
   release(reservation) { this.settle(reservation, 0); }
 
   /**
-   * Sites beyond what the plan now allows (the newest ones; deleting an older site frees a place), and from when they stop taking
-   * changes: the end of the paid period or its grace, plus fourteen days. Null while that is not in view: an account that never paid
-   * keeps what it has (it cannot add more). Nothing is deleted and the sites stay served.
+   * The sites beyond what the plan now allows (the newest ones; deleting an older site frees a
+   * place), and from when they stop taking changes: the end of the paid period or its grace,
+   * plus fourteen days. `readOnlyFrom` is null while no such date is known: an account that never
+   * paid keeps what it has (it just cannot add more). Nothing is deleted, and the sites stay online.
    */
   overQuota(key) {
     const none = { over: [], limit: null, plan: null, readOnlyFrom: null };
@@ -348,13 +381,14 @@ export class BillingService {
     return { over, limit, plan: plan.name, readOnlyFrom: over.length && ended != null ? ended + READONLY_GRACE_MS : null };
   }
 
-  /** For a deploy or an activation: throw 402 if this site is over its owner's plan and the grace after the paid period has run out. */
+  /** For a deploy or an activation: throws 402 if this site is over its owner's plan and the grace after the paid period has run out. */
   requireWritableSite(key, site) {
     const q = this.overQuota(key);
     if (!q.over.includes(site) || q.readOnlyFrom === null || this.clock() < q.readOnlyFrom) return;
     throw new HttpError(402, 'site_read_only', `${site} is over the ${q.plan} plan's ${q.limit} sites and takes no more changes (it is still served). Remove ${q.over.length} site(s) or upgrade at ${this.config.publicUrl}/billing.`, { metric: 'sites', limit: q.limit, over: q.over, since: q.readOnlyFrom });
   }
 
+  /** The billing page's data: plan, limits, usage, subscription, plans for sale and (for managers) the history. */
   view(user, owner) {
     const o = this.account(user, owner);
     const plan = this.planFor(o.key);
@@ -380,14 +414,16 @@ export class BillingService {
     return out;
   }
 
+  /** A person manages their own account; for a team, only its owners do. */
   mayManage(user, o) {
     return o.type === 'user' || this.teams.has(this.teams.get(o.name), user, 'owner');
   }
 
   // ---- writes ---------------------------------------------------------------------------------
   /**
-   * Run `change(d)` and, if `seen` is given, mark that event seen in the same write. If the write fails, memory is put back
-   * (the account, the close queues and the marker) so nothing half-done is kept and the provider's retry starts clean.
+   * Runs `change(d)` in one write and, if `seen` is given, marks that event as seen in the same
+   * write. If the write fails, the memory copy is put back (the account, the close queues and the
+   * marker), so nothing half-done is kept and the provider's retry starts clean.
    */
   atomically(key, change, seen = null) {
     const bd = this.data;
@@ -400,7 +436,7 @@ export class BillingService {
         return out;
       });
     } catch (err) {
-      // A failed write already put the store's memory back to the file (the audit rows with it); a throw before the write did not. Either way the billing state is put back as it was.
+      // A failed write already put the store's memory back to match the file (audit rows too); a throw before the write did not. Either way, put the billing state back as it was.
       const now = this.data;
       if (key) put(now.accounts, key, was.account);
       put(now, 'closed', was.closed);
@@ -410,14 +446,17 @@ export class BillingService {
     }
   }
 
-  /** Remember an event id for EVENT_KEEP_MS. By age, not by count: a flood of other events must not make an old one replayable. Only verified events get here. */
+  /**
+   * Remembers an event id for EVENT_KEEP_MS (30 days). Old ids are dropped by age, not by count, so a
+   * flood of other events cannot make an old one usable again (a "replay"). Only verified events get here.
+   */
   markSeen(d, seen) {
     const now = this.clock();
     d.billing.events[seen] = now;
     for (const [k, at] of Object.entries(d.billing.events)) if (!(now - at <= EVENT_KEEP_MS)) delete d.billing.events[k];
   }
 
-  /** Who should find a money row in their trail: the people who manage the account, and whoever acted. */
+  /** Who should see a money row in their audit trail: the people who manage the account, and whoever acted. */
   audience(key, actor = {}) {
     const [type, ...rest] = key.split(':');
     const name = rest.join(':');
@@ -429,9 +468,9 @@ export class BillingService {
     return [...ids];
   }
 
-  /** The history row and the audit rows for one change: what changed, by whom or what, and (for a webhook) which event. */
+  /** Writes the history row (the last 50 are kept) and the audit rows for one change: what changed, who or what did it, and (for a webhook) which event. */
   trail(d, key, a, event, actor = {}, { status, plan, provider } = {}) {
-    // `via` is what made the change (the member, the return page, a webhook, the refresh); `by` is the member's name, as the audit log reads it.
+    // `via` is what made the change (the member, the return page, a webhook, the refresh). `by` is the member's name, as the audit log reads it.
     const row = { status, plan, provider, via: actor.by, ...(actor.username ? { by: actor.username } : {}), ...(actor.eventId ? { eventId: actor.eventId } : {}), ...(a.subscription?.subscriptionId ? { subscriptionId: a.subscription.subscriptionId } : {}) };
     a.history = [...(a.history ?? []).slice(-49), { at: this.clock(), event, ...row }];
     const entry = { event: `billing.${event}`, owner: key, ...row };
@@ -440,13 +479,13 @@ export class BillingService {
     for (const userId of who) this.store.audit({ userId, ...entry, ...(userId === actor.userId && actor.ip ? { ip: actor.ip } : {}) });
   }
 
-  /** Change the account's subscription record inside a write; `replace` starts a fresh one instead of merging over the old. */
+  /** Changes the account's subscription record inside a write. `replace` starts a fresh record instead of merging into the old one. */
   putSubscription(d, key, patch, event, { replace = false, clearCheckout = false, actor } = {}) {
     const a = this.ensureAccount(d, key);
     const prior = a.subscription;
     const before = replace ? {} : prior ?? {};
     a.subscription = { ...before, ...patch, updatedAt: this.clock() };
-    // The grace is counted from the first moment of a past-due spell; a write that changes nothing cannot move it.
+    // The grace is counted from the first moment of a past-due spell. A later write that keeps it past due cannot move that moment.
     if (a.subscription.status !== 'past_due') delete a.subscription.pastDueSince;
     else a.subscription.pastDueSince = before.status === 'past_due' ? before.pastDueSince ?? before.updatedAt : this.clock();
     this.markPaidSpell(a, before, prior);
@@ -454,7 +493,7 @@ export class BillingService {
     this.trail(d, key, a, event, actor, a.subscription);
   }
 
-  /** A checkout for a new plan on an account that already pays waits in its own slot (null empties it); the paid record is not touched. */
+  /** A checkout for a new plan on an account that already pays waits in its own slot (null empties it). The paid record is not touched. */
   putCheckout(d, key, slot, event, actor) {
     const a = this.ensureAccount(d, key);
     if (slot) a.checkout = slot; else delete a.checkout;
@@ -462,8 +501,9 @@ export class BillingService {
   }
 
   /**
-   * Remember when a paid spell began and ended, so a downgrade can be dated (see overQuota). `kept` is the record the new one grew
-   * from (so activatedAt carries over); `prior` is the record it replaced, whose end counts if the new one is not paid.
+   * Remembers when a paid spell began and ended, so a downgrade can be dated (see overQuota).
+   * `kept` is the record the new one grew from (so activatedAt carries over). `prior` is the record
+   * it replaced, whose end counts if the new one is not paid.
    */
   markPaidSpell(a, kept, prior) {
     const s = a.subscription;
@@ -476,7 +516,7 @@ export class BillingService {
     if (ended != null) a.paidEnded = ended;
   }
 
-  /** When a subscription's paid limits stopped, or null if it never carried them. (For a live one this is a time ahead; callers check they are not paid.) */
+  /** When a subscription's paid limits stopped (grace included), or null if it never had them. For a live one this is a future time; callers check that it is not paid. */
   endOf(s) {
     if (!s || !this.plans[s.plan]?.paid) return null;
     if (s.status === 'active') return s.currentPeriodEnd == null ? null : s.currentPeriodEnd + GRACE_MS;
@@ -493,19 +533,25 @@ export class BillingService {
     return a.paidEnded ?? this.endOf(a.subscription);
   }
 
+  // The same two changes, each as one write of its own.
   setSubscription(key, patch, event, opts) { this.atomically(key, (d) => this.putSubscription(d, key, patch, event, opts)); }
   setCheckout(key, slot, event, actor) { this.atomically(key, (d) => this.putCheckout(d, key, slot, event, actor)); }
 
   // ---- checkout ---------------------------------------------------------------------------
-  /** A configured provider by the name a client sent; names like "constructor" are not providers. */
+  /** A configured provider by the name a client sent. Names like "constructor" are not providers. */
   providerNamed(name) { return typeof name === 'string' && Object.hasOwn(this.providers, name) ? this.providers[name] : undefined; }
 
+  /** Like providerNamed, but throws 400 when billing is off or the provider is not set up. */
   provider(name) {
     const p = this.providerNamed(name);
     if (!this.enabled || !p) throw new HttpError(400, 'provider_unavailable', `Payments with ${name} are not set up on this instance.`);
     return p;
   }
 
+  /**
+   * Starts paying for a plan and returns the provider's checkout page. Only an account's managers
+   * may do this. Buying the plan the account already pays for is refused (409).
+   */
   async checkout(user, { owner, plan, provider }, ip) {
     const o = this.account(user, owner, { manage: true });
     if (!this.plans[plan]?.paid) throw new HttpError(400, 'bad_plan', `"${plan}" is not a paid plan.`);
@@ -521,14 +567,17 @@ export class BillingService {
       successUrl: `${base}/billing/return?provider=${provider}&owner=${encodeURIComponent(o.key)}`,
       cancelUrl: `${base}/billing?owner=${encodeURIComponent(o.key)}&msg=cancelled`,
     });
-    // On an account that pays, the new plan waits in its own slot and the paid subscription stays until the new one is confirmed.
+    // On an account that already pays, the new plan waits in its own slot. The paid subscription stays until the new one is confirmed.
     const actor = { by: 'user', userId: user.id, username: user.username, ip };
     if (paying) this.setCheckout(o.key, { provider, plan, mode: p.mode, ...out.ids, startedAt: this.clock() }, 'checkout_started', actor);
     else this.setSubscription(o.key, { provider, plan, mode: p.mode, status: 'pending', ...out.ids }, 'checkout_started', { replace: true, clearCheckout: true, actor });
     return { url: out.url };
   }
 
-  /** The browser came back from the provider: ask the provider what really happened. */
+  /**
+   * The browser came back from the provider: ask the provider what really happened. The found
+   * subscription must name this account and be one the account is waiting on or already holds.
+   */
   async confirmReturn(user, { owner, provider, sessionId, subscriptionId }, ip) {
     const o = this.account(user, owner);
     const p = this.provider(provider);
@@ -536,25 +585,26 @@ export class BillingService {
     const slot = this.accountOf(o.key)?.checkout;
     const found = await p.lookup({ sessionId, subscriptionId: subscriptionId ?? sub?.subscriptionId ?? slot?.subscriptionId });
     if (!found || found.owner !== o.key) throw new HttpError(400, 'not_confirmed', 'The payment provider has no matching subscription for this account yet.');
-    // The subscription must be one this account is waiting on or already holds: its owner field alone proves nothing.
+    // The subscription must be one this account is waiting on or already holds. Its owner field alone proves nothing, since anyone can type it.
     const target = this.targetOf(o.key, provider, { subscriptionId: found.subscriptionId, checkoutSessionId: sessionId });
     if (!target) throw new HttpError(400, 'not_confirmed', 'That subscription is not the one this account is waiting on.');
     await this.adopt(o.key, target, { ...found, provider }, 'confirmed', { authoritative: true, actor: { by: 'confirm', userId: user.id, username: user.username, ip } });
     return this.view(user, o.key);
   }
 
+  /** A manager cancels the account's subscription, at the provider and here. */
   async cancel(user, { owner }, ip) {
     const o = this.account(user, owner, { manage: true });
     const sub = this.subscription(o.key);
     if (!sub || !['active', 'past_due', 'pending'].includes(sub.status)) throw new HttpError(409, 'no_subscription', 'There is no subscription to cancel.');
-    // A paid-up subscription stops renewing and keeps its plan to the end of the period already paid for; one with no paid period left ends now.
+    // A paid-up subscription stops renewing and keeps its plan to the end of the period already paid for. One with no paid period left ends now.
     const keepUntil = sub.status === 'active' && sub.currentPeriodEnd != null && sub.currentPeriodEnd > this.clock() ? sub.currentPeriodEnd : null;
     await this.provider(sub.provider).cancel(sub, { atPeriodEnd: keepUntil != null });
     this.setSubscription(o.key, { status: 'canceled', ...(keepUntil != null ? { keepUntil } : {}) }, 'canceled_by_user', { actor: { by: 'user', userId: user.id, username: user.username, ip } });
     return this.view(user, o.key);
   }
 
-  /** Stripe's customer portal (update card, invoices). */
+  /** A link to Stripe's customer portal (change the card, see invoices). Only for Stripe subscriptions. */
   async portal(user, { owner }) {
     const o = this.account(user, owner, { manage: true });
     const sub = this.subscription(o.key);
@@ -563,7 +613,7 @@ export class BillingService {
   }
 
   // ---- webhooks -------------------------------------------------------------------------------
-  /** Which of this account's records (the paid one or the waiting checkout) does the provider's subscription or session belong to? */
+  /** Which of this account's records does the provider's subscription or session belong to: 'current' (the paid one), 'checkout' (the waiting one) or null? */
   targetOf(key, provider, { subscriptionId, checkoutSessionId }) {
     const hit = (r) => r?.provider === provider && ((subscriptionId && r.subscriptionId === subscriptionId) || (checkoutSessionId && r.checkoutSessionId === checkoutSessionId));
     if (hit(this.subscription(key))) return 'current';
@@ -571,7 +621,7 @@ export class BillingService {
     return null;
   }
 
-  /** The account an event is about is found by the ids we recorded, never by the owner the event claims. */
+  /** Finds the account an event is about by the ids we saved, never by the owner the event claims. */
   accountFor(provider, ids) {
     for (const key of Object.keys(this.data.accounts)) {
       const target = this.targetOf(key, provider, ids);
@@ -580,24 +630,29 @@ export class BillingService {
     return null;
   }
 
-  /** Why an event for this account must not be applied, if it must not: it is older than one already applied, or the subscription has ended. */
+  /** Why an event for this account must not be applied, if it must not: it is older than one already applied, or the subscription has ended. Otherwise null. */
   supersededBy(hit, ev) {
     if (hit.target !== 'current') return null;
     const s = this.subscription(hit.key);
-    // Cancelled is final for a subscription (a new purchase is a new subscription), whatever order events arrive in.
+    // Cancelled is final for a subscription (buying again makes a new subscription), whatever order the events arrive in.
     if (s.status === 'canceled' && s.subscriptionId === ev.subscriptionId && ev.status && ev.status !== 'canceled') return 'subscription_ended';
-    // Events carry the provider's own time; one older than the last applied is a late delivery. Ids are no order (random), so the same second applies.
+    // Events carry the provider's own time. One older than the last applied is a late delivery. Ids are random and give no order, so an event from the same second still applies.
     if (ev.at != null && s.lastEventAt != null && ev.at < s.lastEventAt) return 'older_than_applied';
     return null;
   }
 
-  /** Take what the provider says about a subscription into the account. A replacement plan cancels the old subscription first. `seen` marks the event in the same write. */
+  /**
+   * Takes what the provider says about a subscription into the account. When a waiting checkout
+   * becomes active, the old paid subscription is cancelled first. `seen` marks the event in the same
+   * write. Returns 'applied', 'dropped', 'waiting' or 'duplicate'.
+   */
   async adopt(key, target, next, event, { authoritative = false, seen = null, actor } = {}) {
     const patch = {};
     for (const k of ['status', 'plan', 'subscriptionId', 'customerId', 'currentPeriodEnd']) if (next[k] !== undefined && (next[k] !== null || (authoritative && k === 'currentPeriodEnd'))) patch[k] = next[k];
+    // mark: note the event as seen without changing the account.
     const mark = (outcome) => { if (seen) this.atomically(null, () => {}, seen); return outcome; };
     if (target === 'current') {
-      // A subscription its owner cancelled keeps running at Stripe to the period end; that is not a revival.
+      // A subscription its owner cancelled keeps running at Stripe until the period ends. That is not it coming back to life.
       const cur = this.subscription(key);
       if (cur.status === 'canceled' && cur.keepUntil != null && cur.subscriptionId === next.subscriptionId && patch.status && patch.status !== 'canceled') delete patch.status;
       if (next.at != null) patch.lastEventAt = Math.max(next.at, this.subscription(key).lastEventAt ?? 0);
@@ -610,25 +665,29 @@ export class BillingService {
     if (next.status !== 'active') return mark('waiting');
     const old = this.subscription(key);
     if (old && ['active', 'past_due'].includes(old.status) && old.subscriptionId !== next.subscriptionId) await this.provider(old.provider).cancel(old);
-    // The cancel took a while; if another delivery or a confirm got here first, there is nothing left to do.
+    // The cancel took a while. If another delivery or a confirm got here first, there is nothing left to do.
     if ((seen && this.data.events[seen]) || this.accountOf(key)?.checkout !== slot) return 'duplicate';
     const fresh = { provider: next.provider, ...patch, plan: patch.plan ?? slot.plan, mode: slot.mode, checkoutSessionId: slot.checkoutSessionId, ...(next.at != null ? { lastEventAt: next.at } : {}) };
     return this.atomically(key, (d) => { this.putSubscription(d, key, fresh, event, { replace: true, clearCheckout: true, actor }); return 'applied'; }, seen);
   }
 
-  /** Record an event we will not apply: seen (so a retry is a duplicate), and an audit row when it names a Gitcha owner. */
+  /** Records an event we will not apply: marks it seen (so a retry is a duplicate), and writes an audit row when it names a Gitcha owner. */
   ignore(provider, ev, seen, key, reason, audit) {
     this.atomically(key ?? null, () => { if (audit) this.store.audit({ event: 'billing.event_ignored', owner: key, provider, eventType: ev.type, eventId: ev.id, reason }); }, seen);
     return { ignored: true, reason };
   }
 
-  /** Apply a verified provider event. Each event id is applied once, and marked seen only together with its effect. */
+  /**
+   * Applies a verified provider event. Each event id is applied once, and it is marked seen only
+   * together with its effect. The checks, in order: already seen, too old, no matching account,
+   * owner mismatch, out of date, and live/test mode mismatch.
+   */
   async applyEvent(provider, ev) {
     if (!ev) return { ignored: true };
     const seen = `${provider}:${ev.id}`;
     if (this.data.events[seen]) return { duplicate: true };
     const named = typeof ev.owner === 'string' && /^(user|team):/.test(ev.owner);
-    // Once an id has aged out of the table it could be replayed; the provider's own time on the event closes that (Stripe's signature also carries a 5 minute tolerance).
+    // Once an id has aged out of the table it could be sent again. The provider's own time on the event stops that (Stripe's signature also has a 5 minute limit).
     if (ev.at != null && this.clock() - ev.at > EVENT_KEEP_MS) return this.ignore(provider, ev, seen, named ? ev.owner : null, 'too_old', named);
     const hit = this.accountFor(provider, ev);
     if (!hit) return this.ignore(provider, ev, seen, named ? ev.owner : null, 'unknown_subscription', named);
@@ -643,6 +702,7 @@ export class BillingService {
     return { applied: true, owner: hit.key, status: ev.status };
   }
 
+  /** Handles a webhook: the provider checks the signature, then the event is applied. Unknown providers, or billing turned off, get a 404. */
   async webhook(provider, rawBody, headers) {
     const p = this.providerNamed(provider);
     if (!this.enabled || !p) throw new HttpError(404, 'not_found', 'Not found.');

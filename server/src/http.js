@@ -1,11 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Small HTTP helpers: routing, bodies, cookies, security headers.
+// Small HTTP helpers used by every part of the server: a router that matches URLs to handlers,
+// readers for request bodies, cookie helpers, reply helpers that add security headers, and code
+// that works out the real client address (IPv4 and IPv6, with or without a proxy in front).
 import net from 'node:net';
 import { HttpError } from './errors.js';
 
+/**
+ * Matches a request's method and path to a handler. A pattern like '/api/v1/packages/:name' turns
+ * ':name' into a parameter. Routes are tried in the order they were added; the first match wins.
+ */
 export class Router {
   constructor() { this.routes = []; }
+  /** Add a route. Each ':key' matches one path part (no '/'). A trailing '/' is allowed. */
   add(method, pattern, handler) {
     const keys = [];
     const re = new RegExp('^' + pattern.replace(/:(\w+)/g, (_, k) => { keys.push(k); return '([^/]+)'; }) + '/?$');
@@ -16,6 +23,10 @@ export class Router {
   post(p, h) { return this.add('POST', p, h); }
   put(p, h) { return this.add('PUT', p, h); }
   delete(p, h) { return this.add('DELETE', p, h); }
+  /**
+   * Find the route for a request. Returns { handler, params } or null. A HEAD request also matches a
+   * GET route. A bad % escape in a parameter is a 400 error, not a crash.
+   */
   match(method, pathname) {
     for (const r of this.routes) {
       const m = r.re.exec(pathname);
@@ -33,6 +44,7 @@ export class Router {
   }
 }
 
+/** Read the whole request body as bytes. Stops with a 413 error as soon as it grows past `limit` bytes. */
 export async function readBody(req, limit) {
   const chunks = [];
   let size = 0;
@@ -44,6 +56,7 @@ export async function readBody(req, limit) {
   return Buffer.concat(chunks);
 }
 
+/** Read the body as JSON (up to 1 MB by default). An empty body is {}. Bad JSON is a 400 error. */
 export async function readJson(req, limit = 1024 * 1024) {
   const buf = await readBody(req, limit);
   try {
@@ -53,13 +66,15 @@ export async function readJson(req, limit = 1024 * 1024) {
   }
 }
 
+/** Read a web form body (name=value&...) into an object, up to 64 KB by default. */
 export async function readForm(req, limit = 64 * 1024) {
   return Object.fromEntries(new URLSearchParams((await readBody(req, limit)).toString('utf8')));
 }
 
 /**
- * A cookie we cannot decode keeps its raw text rather than failing the request: another app on a sibling
- * subdomain can plant `a=%`, and that must not turn every page for the browser into an error.
+ * Read the Cookie header into { name: value }. A cookie we cannot decode keeps its raw text instead of
+ * failing the request. Another app on a sibling subdomain can plant `a=%`, and that must not turn every
+ * page into an error for that browser.
  */
 export function parseCookies(header = '') {
   const out = {};
@@ -74,7 +89,10 @@ export function parseCookies(header = '') {
   return out;
 }
 
-/** The request target as a URL on a fixed base. `//x/y` stays a path; anything that is not a path is a 400. */
+/**
+ * The request target as a URL on a fixed base (http://localhost). `//x/y` stays a path and is never read
+ * as another host. Anything that is not a path is a 400 error.
+ */
 export function requestUrl(req) {
   const target = req.url ?? '';
   if (!target.startsWith('/')) throw new HttpError(400, 'bad_request', 'The request target must be a path.');
@@ -86,9 +104,9 @@ export function requestUrl(req) {
 }
 
 /**
- * Last resort for anything that escapes a handler: log it and keep serving. The request handler catches its own
- * errors; this is for what no handler owns (a socket error with no listener, a rejection nobody awaited), so one
- * stranger's request can never become an outage for everyone.
+ * The last safety net for any error that escapes a handler: log it and keep serving. The request handler
+ * catches its own errors. This is for errors no handler owns, such as a socket error with no listener or a
+ * promise rejection nobody waited for. So one stranger's request can never take the site down for everyone.
  */
 export function installLastResort(proc = process, log = console.error) {
   const keep = (kind) => (err) => log(`gitcha: ${kind} (kept serving): ${err?.stack ?? err}`);
@@ -96,6 +114,11 @@ export function installLastResort(proc = process, log = console.error) {
   proc.on('uncaughtException', keep('uncaught exception'));
 }
 
+/**
+ * Build a Set-Cookie value. Every cookie is for the whole site (Path=/) and SameSite=Lax, so other sites
+ * cannot send it along with most cross-site requests. HttpOnly (on by default) hides it from page scripts.
+ * `secure` sends it over HTTPS only. `maxAge` is in milliseconds.
+ */
 export function cookie(name, value, { maxAge, secure, httpOnly = true } = {}) {
   let c = `${name}=${encodeURIComponent(value)}; Path=/; SameSite=Lax`;
   if (httpOnly) c += '; HttpOnly';
@@ -104,6 +127,13 @@ export function cookie(name, value, { maxAge, secure, httpOnly = true } = {}) {
   return c;
 }
 
+/**
+ * Headers sent with every reply. The Content-Security-Policy lets pages load scripts, styles and images
+ * only from this site (images may also be inline data: URLs), and forms may post only to this site. No
+ * other site may show our pages in a frame (this blocks clickjacking, where a site hides our page under
+ * its own buttons). The rest stop content-type guessing, hide the referring
+ * address, and turn off the camera, microphone and location.
+ */
 export const SECURITY_HEADERS = {
   'Content-Security-Policy': "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'",
   'X-Content-Type-Options': 'nosniff',
@@ -113,19 +143,23 @@ export const SECURITY_HEADERS = {
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
 };
 
+/** Send a reply with the security headers. Replies are not cached unless `headers` says otherwise. */
 export function send(res, status, body, headers = {}) {
   res.writeHead(status, { ...SECURITY_HEADERS, 'Cache-Control': 'no-store', ...headers });
   res.end(body);
 }
 
+/** Send an object as a JSON reply. */
 export function json(res, status, obj, headers) {
   send(res, status, JSON.stringify(obj), { 'Content-Type': 'application/json; charset=utf-8', ...headers });
 }
 
+/** Send an HTML page. */
 export function html(res, status, body, headers) {
   send(res, status, body, { 'Content-Type': 'text/html; charset=utf-8', ...headers });
 }
 
+/** Send the browser to another address with a 303 (the browser follows it with a GET). */
 export function redirect(res, location, headers = {}) {
   send(res, 303, '', { Location: location, ...headers });
 }
@@ -133,8 +167,10 @@ export function redirect(res, location, headers = {}) {
 // ---- addresses --------------------------------------------------------------------
 
 /**
- * Parse an IPv4 or IPv6 address (optionally `[v6]:port`, `v4:port` or with a `%zone`) to 16 bytes, v4 as its
- * IPv4-mapped form. Returns { bytes, v4, text } or null when it is not an address.
+ * Read an IPv4 or IPv6 address into 16 bytes. It may have a port (`[v6]:port`, `v4:port`) or a `%zone`,
+ * which are dropped. An IPv4 address is stored in its IPv4-mapped form (::ffff:a.b.c.d), so both kinds
+ * can be compared the same way. Returns { bytes, v4, text } (text is one standard spelling), or null
+ * when the input is not an address.
  */
 export function parseIp(input) {
   let t = String(input ?? '').trim();
@@ -175,7 +211,7 @@ function v6Groups(t) {
   return [...left, ...new Array(8 - left.length - right.length).fill(0), ...right];
 }
 
-/** RFC 5952 text: lowercase, no leading zeros, the longest run of zero groups (two or more) as "::". */
+/** IPv6 text in the RFC 5952 standard form: lowercase, no leading zeros, the longest run of two or more zero groups as "::". */
 function v6Text(all) {
   const hex = (g) => g.toString(16);
   let best = { at: -1, len: 0 };
@@ -190,7 +226,10 @@ function v6Text(all) {
   return `${all.slice(0, best.at).map(hex).join(':')}::${all.slice(best.at + best.len).map(hex).join(':')}`;
 }
 
-/** Does `ip` (a parsed address) fall inside `net` ({ bytes, bits } over the 128-bit space)? */
+/**
+ * Does `ip` (a parsed address) fall inside `net`? `net` is { bytes, bits }: the first `bits` bits of the
+ * 128-bit address must match. Each byte is compared under a mask that keeps only the bits that count.
+ */
 function inNet(ip, { bytes, bits }) {
   for (let i = 0; i < 16 && bits > 0; i++, bits -= 8) {
     const mask = bits >= 8 ? 0xff : (0xff << (8 - bits)) & 0xff;
@@ -200,8 +239,9 @@ function inNet(ip, { bytes, bits }) {
 }
 
 /**
- * Read GITCHA_TRUSTED_PROXIES: unset means one proxy in front (a hop count of 1); a whole number is a hop count;
- * anything else is a comma list of addresses or CIDR ranges, which are the proxies we trust.
+ * Read GITCHA_TRUSTED_PROXIES. Unset means one proxy in front (a hop count of 1). A whole number from 1 to 10 is
+ * a hop count. Anything else is a comma list of addresses or CIDR ranges (like 10.0.0.0/8, meaning every address
+ * that starts with the same first 8 bits), which are the proxies we trust. A bad entry throws an error.
  */
 export function parseTrustedProxies(value) {
   const v = String(value ?? '').trim();
@@ -218,16 +258,18 @@ export function parseTrustedProxies(value) {
     const max = ip.v4 ? 32 : 128;
     const n = len === undefined ? max : Number(len);
     if (n > max) throw new Error(`GITCHA_TRUSTED_PROXIES: "${entry}" has a prefix longer than ${max} bits`);
-    return { bytes: ip.bytes, bits: ip.v4 ? n + 96 : n };
+    return { bytes: ip.bytes, bits: ip.v4 ? n + 96 : n }; // a v4 range sits after the 96-bit ::ffff: prefix
   });
   return { nets };
 }
 
 /**
- * The client's address. Without a proxy it is the socket's peer. With `trustProxy` on, the chain is the
- * X-Forwarded-For entries followed by the peer; a hop count takes the entry that many hops from the right (so
- * one proxy: the entry it appended), and a list walks from the right past trusted proxies. Anything a client
- * typed to the left of that point is never used, and an entry that is not an address falls back to the peer.
+ * The client's address, used for rate limits, audit rows and network checks. Without a proxy it is the
+ * socket's peer (the machine directly connected). With `trustProxy` on, the chain is the X-Forwarded-For
+ * entries followed by the peer. A hop count takes the entry that many hops from the right (so with one
+ * proxy: the entry it added). A list walks from the right past trusted proxies. Anything a client typed to
+ * the left of that point is never used, because a client can write any text there. An entry that is not an
+ * address falls back to the peer. Only the last 20 entries are read.
  */
 export function clientIp(req, trustProxy, trusted = { hops: 1 }) {
   const peer = req.socket.remoteAddress ?? 'unknown';

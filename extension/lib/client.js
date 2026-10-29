@@ -1,8 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// HTTP client for the Gitcha registry API.
+// The HTTP client the CLI, the MCP server and the hook use to talk to a Gitcha server.
+// Each method sends one request to the registry API (or GraphQL) and returns the JSON answer.
 import crypto from 'node:crypto';
 
+// An error from the server or the network. `status` is the HTTP status (0 when no answer came back),
+// and `code` is the short error name the server sent, such as "mfa_required".
 export class GitchaError extends Error {
   constructor(status, code, message, extra = {}) {
     super(message);
@@ -12,8 +15,9 @@ export class GitchaError extends Error {
   get unauthenticated() { return this.code === 'unauthenticated'; }
 }
 
+// One client per server. It sends the saved device token, if any, as a Bearer token.
 export class GitchaClient {
-  // timeoutMs bounds the whole exchange, body included, so a registry that stalls cannot hang a command or a hook.
+  // timeoutMs limits the whole exchange, body included. That way a server that stalls cannot hang a command or a hook.
   constructor({ server, token = null, userAgent = 'gitcha-cli', timeoutMs = 60_000 }) {
     Object.assign(this, { server, token, userAgent, timeoutMs });
   }
@@ -22,6 +26,9 @@ export class GitchaClient {
     return new GitchaError(0, 'timeout', `The Gitcha server at ${this.server} did not answer within ${Math.round(this.timeoutMs / 1000)} seconds.`);
   }
 
+  // Send one request. It sends JSON and expects JSON back, unless `raw` asks for the bare response.
+  // It refuses redirects, so the token is never sent on to another address.
+  // Any non-2xx answer becomes a GitchaError that carries the server's error code and message.
   async request(method, path, { body, raw = false } = {}) {
     let res;
     const signal = AbortSignal.timeout(this.timeoutMs);
@@ -65,7 +72,7 @@ export class GitchaClient {
   whoami() { return this.request('GET', '/api/v1/auth/whoami'); }
   logout() { return this.request('POST', '/api/v1/auth/logout'); }
   getSecurity() { return this.request('GET', '/api/v1/security'); }
-  // The code is spent by the change itself (AUTH-4); a step-up beforehand is not enough.
+  // The change itself uses up the code (AUTH-4). A step-up done earlier is not enough.
   setSecurity(checks, code) { return this.request('PUT', '/api/v1/security', { body: { checks, code } }); }
   search(q = '', { team } = {}) {
     return this.request('GET', `/api/v1/packages?q=${encodeURIComponent(q)}${team ? `&team=${encodeURIComponent(team)}` : ''}`);
@@ -75,6 +82,7 @@ export class GitchaClient {
     return this.request('POST', `/api/v1/packages/${encodeURIComponent(name)}/${encodeURIComponent(version)}/yank`, { body: { yanked } });
   }
 
+  // Upload a package tarball as base64, with its sha256 hash so the server can check it arrived whole.
   publish(tarball, { team, private: priv } = {}) {
     const integrity = `sha256-${crypto.createHash('sha256').update(tarball).digest('hex')}`;
     return this.request('PUT', '/api/v1/packages', { body: { tarball: tarball.toString('base64'), integrity, team, private: priv } });
@@ -95,7 +103,10 @@ export class GitchaClient {
   }
   deleteTeam(team) { return this.request('DELETE', `/api/v1/teams/${encodeURIComponent(team)}`); }
 
-  /** GraphQL: the API for agents, projects, tasks, reviews, posts and keys. Errors become GitchaErrors. */
+  /**
+   * Send a GraphQL query (one endpoint that takes a query text). Gitcha uses it for agents, projects,
+   * tasks, reviews, posts and keys. The first GraphQL error becomes a GitchaError.
+   */
   async graphql(query, variables) {
     const body = await this.request('POST', '/api/graphql', { body: { query, variables } });
     if (body.errors?.length) {
@@ -106,8 +117,9 @@ export class GitchaClient {
   }
 
   /**
-   * Download a tarball. The reply must carry the integrity and version headers, and when a version was asked
-   * for it must be that version: a registry that answers another one is refused, not believed.
+   * Download a tarball. The reply must carry the integrity (hash) and version headers.
+   * When we ask for a set version, the answer must be that version. If the registry answers with another one,
+   * we refuse it instead of believing it.
    */
   async download(name, version = 'latest') {
     const res = await this.request('GET', `/api/v1/packages/${encodeURIComponent(name)}/${encodeURIComponent(version)}/tarball`, { raw: true });

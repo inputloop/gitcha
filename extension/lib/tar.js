@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Minimal, dependency-free ustar + gzip packer/unpacker for Gitcha packages.
-// Archives contain regular files only, rooted at "package/". Extraction refuses
-// absolute paths, "..", symlinks and anything outside the target directory.
+// Packs and unpacks Gitcha package tarballs with no outside libraries. A tarball is a tar archive
+// (the "ustar" format: 512-byte blocks, each file has a header block and then its data) squeezed with gzip.
+// Archives hold regular files only, all under "package/". Unpacking refuses absolute paths, "..",
+// symlinks and anything that would land outside the target folder. The CLI uses it for packages,
+// and the server also uses unpackFiles for CI artifacts.
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -10,6 +12,8 @@ import zlib from 'node:zlib';
 const BLOCK = 512;
 const MAX_FILES = 10_000;
 
+// Build one 512-byte tar header for a regular file (mode 644, owner 0). A name longer than 100 bytes is
+// split at a "/" into the 155-byte prefix field and the 100-byte name field.
 function header(name, size, mtime) {
   const h = Buffer.alloc(BLOCK);
   let prefix = '';
@@ -45,17 +49,21 @@ export function packFiles(files, { mtime = 0 } = {}) {
     const pad = (BLOCK - (data.length % BLOCK)) % BLOCK;
     if (pad) parts.push(Buffer.alloc(pad));
   }
+  // Two zero blocks mark the end of the archive.
   parts.push(Buffer.alloc(BLOCK * 2));
-  // Fixed mtime + sorted entries => reproducible tarballs.
+  // A fixed mtime (file time) and sorted entries give reproducible tarballs: the same files give the same bytes.
   return zlib.gzipSync(Buffer.concat(parts), { level: 9 });
 }
 
+// Read a text field from a header. The text ends at the first zero byte.
 function str(buf, start, len) {
   const s = buf.subarray(start, start + len);
   const nul = s.indexOf(0);
   return s.subarray(0, nul === -1 ? s.length : nul).toString('utf8');
 }
 
+// Clean up a path and return it, or null when it is not safe: absolute, starting with "..",
+// holding a zero byte, or starting with a Windows drive letter such as "C:".
 export function safeRelative(p) {
   const norm = path.posix.normalize(p.replace(/\\/g, '/'));
   if (!norm || norm.startsWith('/') || norm.startsWith('../') || norm === '..' || norm.includes('\0') || /^[a-zA-Z]:/.test(norm)) {
@@ -65,9 +73,9 @@ export function safeRelative(p) {
 }
 
 /**
- * A tar number: octal digits (blank or NUL padded) or GNU base-256, never
- * negative. Anything else is an error; an unreadable header must never read as
- * "the archive ends here", because other tar readers will go on past it.
+ * Read a number field from a tar header. It is octal digits (padded with blanks or zero bytes) or
+ * GNU base-256 (raw bytes), and never negative. Anything else is an error. An unreadable header must
+ * never read as "the archive ends here", because other tar readers would keep going past it.
  */
 function numeric(h, start, len, what, { base256 = true } = {}) {
   const f = h.subarray(start, start + len);
@@ -83,7 +91,10 @@ function numeric(h, start, len, what, { base256 = true } = {}) {
   return parseInt(s, 8);
 }
 
-/** The header checksum is the sum of its bytes with the checksum field read as blanks (some old tars summed signed bytes). */
+/**
+ * Check the header checksum. It is the sum of the header's bytes, with the checksum field counted as blanks.
+ * We accept both the unsigned and the signed sum, because some old tar programs summed signed bytes.
+ */
 function checkChecksum(h) {
   const want = numeric(h, 148, 8, 'checksum', { base256: false });
   let unsigned = 0, signed = 0;
@@ -95,7 +106,10 @@ function checkChecksum(h) {
   if (want !== unsigned && want !== signed) throw new Error('tar header: checksum does not match');
 }
 
-/** pax extended header records ("<len> <key>=<value>\n"); a record that does not add up is an error. */
+/**
+ * Read pax records. Pax is a tar add-on that stores extra fields as "<len> <key>=<value>\n" lines.
+ * A record whose length does not add up is an error.
+ */
 function paxRecords(data) {
   const out = new Map();
   let i = 0;
@@ -113,19 +127,20 @@ function paxRecords(data) {
   return out;
 }
 
-/** Names that a package may not carry: a nested .git runs commands for whoever runs git inside it. */
+/** Names that a package may not carry. A nested .git folder can run commands for whoever runs git inside it. */
 export const PACKAGE_FORBIDDEN = ['.git', 'node_modules'];
 
 /**
- * Unpack a gzipped tarball into `[{ path, data }]`.
- * By default entries must sit under package/ (Gitcha's own format). With
- * { root: '' } any safe relative path is accepted, as written by ordinary tar
- * (./ prefixes, GNU long names, pax headers); used for CI artifacts.
- * `maxBytes` caps what the archive may expand to (the gunzip output, which
- * holds every header, file and padding byte). `strict` (packages) also refuses names that differ only in
- * case and the segments in PACKAGE_FORBIDDEN.
- * Anything this reader cannot read exactly is an error, so that what it accepts
- * is what GNU tar and other readers see too.
+ * Unpack a gzipped tarball into `[{ path, data }]` in memory.
+ * By default every entry must sit under package/ (Gitcha's own format). With { root: '' } any safe
+ * relative path is accepted, as ordinary tar writes it (./ prefixes, GNU long names, pax headers).
+ * CI artifacts use that mode.
+ * `maxBytes` caps what the archive may expand to (the gunzip output, which holds every header, file and
+ * padding byte). This stops a "zip bomb" (a tiny file that expands to a huge one).
+ * `strict` (for packages) also refuses names that differ only in upper or lower case, and the names in
+ * PACKAGE_FORBIDDEN.
+ * Anything this reader cannot read exactly is an error. That way, what it accepts is what GNU tar and
+ * other readers see too.
  */
 export function unpackFiles(tgz, { maxBytes = 200 * 1024 * 1024, root = 'package/', strict = false } = {}) {
   let tar;
@@ -157,17 +172,19 @@ export function unpackFiles(tgz, { maxBytes = 200 * 1024 * 1024, root = 'package
     if (size > tar.length - off) throw new Error('tar header: entry is longer than the archive');
     const data = tar.subarray(off, off + size);
     off += Math.ceil(size / BLOCK) * BLOCK;
+    // Type "L" (GNU long name) and "x" (pax) headers give the real name of the next entry.
     if (type === 'L' || type === 'x') {
       if (pending !== null) throw new Error('tar header: two long names for one entry');
       if (type === 'L') pending = data.toString('utf8').replace(/\0+$/, '');
       else {
         const rec = paxRecords(data);
-        // GNU tar lets these override the next header; this reader does not, so it refuses them.
+        // GNU tar lets these change the next header. This reader does not, so it refuses them.
         if (rec.has('size') || rec.has('linkpath')) throw new Error('unsupported pax record (size or linkpath)');
         pending = rec.get('path') ?? null;
       }
       continue;
     }
+    // Type "g" is a global pax header. It may not set a path, size or link.
     if (type === 'g') {
       const rec = paxRecords(data);
       if (rec.has('path') || rec.has('size') || rec.has('linkpath')) throw new Error('unsupported global pax record');
@@ -177,6 +194,7 @@ export function unpackFiles(tgz, { maxBytes = 200 * 1024 * 1024, root = 'package
     const prefix = posix ? str(h, 345, 155) : '';
     let full = pending ?? (prefix ? `${prefix}/${name}` : name);
     pending = null;
+    // Only regular files ("0" or a zero byte) and folders ("5") are allowed. Links could point outside the target.
     if (type !== '0' && type !== '\0' && type !== '5') {
       throw new Error(`unsupported tar entry type "${type}" for ${full} (links are not allowed)`);
     }
@@ -187,13 +205,14 @@ export function unpackFiles(tgz, { maxBytes = 200 * 1024 * 1024, root = 'package
       full = full.replace(/^(\.\/)+/, '');
     }
     if (type === '5') {
-      // GNU tar skips no data after a directory, so a size here would hide entries from this reader.
+      // GNU tar skips no data after a folder entry. So a size here would hide entries from this reader.
       if (size) throw new Error(`directory entry with data: ${full}`);
       if (full && full !== '.' && !safeRelative(full)) throw new Error(`unsafe path in tarball: ${full}`);
       continue;
     }
-    // A name ending in "/" is a directory to other readers whatever its type says.
-    // A name must already be in its plain form ("a//b", "a/./b", "a/../b" and backslashes are read differently elsewhere).
+    // Other readers treat a name ending in "/" as a folder, whatever its type says.
+    // A name must already be in its plain form, because other readers handle "a//b", "a/./b", "a/../b"
+    // and backslashes differently.
     const rel = full.endsWith('/') || full.includes('\\') ? null : safeRelative(full);
     if (!rel || rel === '.' || rel !== full) throw new Error(`unsafe path in tarball: ${full}`);
     const segments = rel.split('/').map((s) => s.toLowerCase());
@@ -205,7 +224,7 @@ export function unpackFiles(tgz, { maxBytes = 200 * 1024 * 1024, root = 'package
     if (files.length > MAX_FILES) throw new Error('too many files in tarball');
   }
   if (pending !== null) throw new Error('tar header: a long name with no entry after it');
-  // A file cannot also be a directory (a/b next to a): it would not extract, and other readers disagree on the order.
+  // A file cannot also be a folder (a/b next to a). It would not extract, and other readers disagree on the order.
   for (const key of seen) {
     for (let i = key.indexOf('/'); i !== -1; i = key.indexOf('/', i + 1)) {
       if (seen.has(key.slice(0, i))) throw new Error(`entry ${key.slice(0, i)} is both a file and a directory`);
@@ -214,7 +233,7 @@ export function unpackFiles(tgz, { maxBytes = 200 * 1024 * 1024, root = 'package
   return files;
 }
 
-/** Write unpacked files beneath `dest`, refusing anything that escapes it. */
+/** Write unpacked files inside `dest`. It refuses any path that would land outside it. */
 export function extractTo(files, dest) {
   const root = path.resolve(dest);
   fs.mkdirSync(root, { recursive: true });

@@ -1,33 +1,41 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Registered agents. Each agent belongs to one person, has a persona name and
-// the model it runs on, and signs in the house form:
+// Registered agents. Each agent belongs to one person. It has a persona name
+// and the model it runs on, and it signs its work in the house form, called
+// its "byline":
 //
 //     NAME (for HUMAN, MODEL)        e.g. Alfred (for Bryant, claude-opus-5-5)
 //
-// Registering an agent is free, as is adding one to someone else's project
-// (the project's maintainers decide) and offering it for peer review.
+// Registering an agent is free. So is adding one to someone else's project
+// (the project's maintainers decide) and offering it for peer review (the
+// Second Reader, see tasks.js). Agents live in store.data.agents, by handle.
 import { HttpError } from '../errors.js';
 
+// A handle is 3 to 32 characters: lowercase letters, digits, "-" and "_", not starting with "-" or "_".
+// A persona name starts with a letter and has at most 40 characters. A model id is lowercase, at most 60.
 export const HANDLE_RE = /^[a-z0-9][a-z0-9_-]{2,31}$/;
 const PERSONA_RE = /^[A-Za-z][A-Za-z0-9 .'-]{0,39}$/;
 const MODEL_RE = /^[a-z0-9][a-z0-9.-]{0,59}$/;
-// The one form, as inputloop's commit checker reads it: last line "NAME (for PERSON, model)".
+// The one byline form, as inputloop's commit checker reads it: a last line "NAME (for PERSON, model)".
+// Here the model part may be left out, and "," or ";" may come before it.
 export const BYLINE_RE = /^([A-Za-z][A-Za-z0-9 .'-]{0,39}) \(for ([A-Za-z][A-Za-z0-9 .'-]{0,39})(?:[,;] ([a-z0-9][a-z0-9.-]{0,59}))?\)$/;
 
+/** Builds an agent's byline, e.g. "Alfred (for Bryant, claude-opus-5-5)". */
 export function byline(agent, ownerName) {
   return `${agent.name} (for ${ownerName}, ${agent.model})`;
 }
 
-/** The byline on the last non-empty line of a commit message, if any. */
+/** Reads the byline on the last non-empty line of a commit message. Returns null if there is none. */
 export function parseByline(message) {
   const last = String(message ?? '').trim().split('\n').map((l) => l.trim()).filter(Boolean).at(-1) ?? '';
   const m = BYLINE_RE.exec(last);
   return m ? { name: m[1], forName: m[2], model: m[3] ?? null } : null;
 }
 
+// Cleans a list from a form: trims and lowercases each item, drops any that fail `re`, removes repeats, keeps at most `n`.
 const cleanList = (v, re, n = 50) => [...new Set((Array.isArray(v) ? v : []).map((x) => String(x).trim().toLowerCase()).filter((x) => re.test(x)))].slice(0, n);
 
+/** Registers, finds and describes agents, and decides which agents may review which work. */
 export class AgentService {
   constructor({ store, clock = Date.now }) {
     Object.assign(this, { store, clock });
@@ -36,8 +44,14 @@ export class AgentService {
 
   get data() { return this.store.data.agents; }
 
+  /** The name a byline uses for a person: their display name, else their username. */
   displayName(user) { return user?.profile?.displayName || user?.username || 'someone'; }
 
+  /**
+   * Registers a new agent for `user`. Checks the handle, persona name and model, and makes
+   * sure the handle is not already a user, team or agent. Review starts turned off.
+   * Writes an audit row (a line in the security log).
+   */
   register(user, { handle, name, model, description = '' }, ip) {
     handle = String(handle ?? '').trim().toLowerCase();
     if (!HANDLE_RE.test(handle)) throw new HttpError(400, 'bad_handle', 'Agent handles are 3-32 lowercase letters, digits, "-" or "_".');
@@ -56,31 +70,34 @@ export class AgentService {
     return this.view(agent, { owner: true });
   }
 
+  /** The agent with this handle. Throws a 404 if there is none. */
   get(handle) {
     const a = this.find(handle);
     if (!a) throw new HttpError(404, 'agent_not_found', `No agent "${handle}".`);
     return a;
   }
 
-  /** The agent with this handle, or null. */
+  /** The agent with this handle, or null. `Object.hasOwn` makes sure a name like "constructor" finds nothing. */
   find(handle) {
     const key = String(handle ?? '').toLowerCase();
     return Object.hasOwn(this.data, key) ? this.data[key] : null;
   }
 
-  /** One of this user's own agents. */
+  /** One of this user's own agents. Throws a 403 for someone else's agent. */
   mine(user, handle) {
     const a = this.get(handle);
     if (a.owner !== user.id) throw new HttpError(403, 'not_your_agent', `${a.handle} belongs to someone else.`);
     return a;
   }
 
+  /** The user who owns the agent. */
   ownerOf(agent) { return this.store.userById(agent.owner); }
 
   /**
-   * The agent as a reader sees it. The owner gets the preferences and the totals; anyone else gets
-   * the two review flags (a project name typed there may be a private one) and counters without
-   * private work. Callers say `{ owner: true }`; the default is the stranger's view.
+   * The agent as a reader sees it. The owner gets the full review preferences and totals.
+   * Anyone else gets only the two review flags (a project name typed in the lists may be a
+   * private one) and counts that leave out private work. Callers pass `{ owner: true }` for
+   * the owner; without it you get the stranger's view.
    */
   view(a, { owner: isOwner = false } = {}) {
     const owner = this.ownerOf(a);
@@ -94,9 +111,10 @@ export class AgentService {
   }
 
   /**
-   * The totals less the work done in projects that are not public: reviews and accepted findings from
-   * tasks, commits from the pushes the project kept (its last 200, so a very old private push may not
-   * be taken off; that errs towards a number that is too high, never towards a name).
+   * The totals minus the work done in projects that are not public. Reviews and accepted
+   * findings are counted from tasks. Commits are counted from the pushes each project kept
+   * (its last 200), so a very old private push may not be taken off. That mistake can make
+   * a number too high, but it never gives away a private project's name.
    */
   publicStats(a) {
     const projects = this.store.data.projects ?? {};
@@ -114,8 +132,13 @@ export class AgentService {
     return { reviews: Math.max(0, s.reviews - hidden.reviews), findingsAccepted: Math.max(0, s.findingsAccepted - hidden.findingsAccepted), commits: Math.max(0, s.commits - hidden.commits) };
   }
 
+  /** All agents this user owns. */
   forOwner(userId) { return Object.values(this.data).filter((a) => a.owner === userId); }
 
+  /**
+   * Saves which work an agent offers to review. Review is on unless `enabled` is false.
+   * Each list is cleaned: entries in the wrong form are dropped. Writes an audit row.
+   */
   setReviewPrefs(user, handle, prefs, ip) {
     const a = this.mine(user, handle);
     const next = {
@@ -133,9 +156,10 @@ export class AgentService {
   }
 
   /**
-   * Find a registered agent named in a byline (persona name + owner display name or username).
-   * A username always wins over a display name, and a display name that two people share names
-   * nobody, so nobody can make a stranger's byline point at their own agent (SOC-1).
+   * Finds the registered agent a byline names (persona name plus the owner's display name or
+   * username). A username match always wins over a display name. A display name that two
+   * people share matches nobody. So nobody can make a stranger's byline point at their own
+   * agent (SOC-1).
    */
   fromByline(b) {
     if (!b) return null;
@@ -148,8 +172,10 @@ export class AgentService {
   }
 
   /**
-   * May this agent second-read work done by `involved` agents on `project`?
-   * Independence: not one of them, and not owned by any of their owners.
+   * May this agent second-read (review) work done by the `involved` agents on `project`?
+   * Its review must be turned on, and it must be independent: not one of them, and not owned
+   * by any of their owners. Then it must want this work: "anything", or a project, team,
+   * person or tag on its lists.
    */
   eligible(agent, { involved, project, tags = [] }) {
     const p = agent.reviewPrefs;

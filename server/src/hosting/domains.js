@@ -1,19 +1,26 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Custom domains for hosted sites. Ownership is proven with a DNS TXT record
-// at _gitcha-challenge.<hostname>; until it verifies, nothing is served for it
-// and no TLS certificate may be requested for it. A claim is only a claim: it is
-// held pending (one per site, so nobody's claim blocks the real owner's), expires,
-// and becomes the domain's record only when its TXT proof is seen. A verified
-// domain is checked again on a schedule and is dropped when the proof is gone.
+// Custom domains for hosted sites (for example, serving a site at www.example.com).
+// You prove you own a domain with a DNS TXT record (a short text note you can
+// publish in your domain's settings) at _gitcha-challenge.<hostname>.
+// Until it verifies, nothing is served for the name, and no TLS certificate
+// (what makes https work) may be requested for it.
+// A claim is only a claim. It is held pending, one per site, so nobody's claim
+// blocks the real owner's. It expires, and it becomes the domain's record only
+// when the server sees its TXT proof. The server checks a verified domain again
+// on a schedule and drops it when the proof is gone.
+// Store: data.domains holds verified records by hostname. data.domainClaims
+// holds pending claims by hostname, then by site name.
 import crypto from 'node:crypto';
 import dns from 'node:dns';
 import { HttpError } from '../errors.js';
 import { challengeName } from './sites.js';
 
+// A valid DNS name: 4 to 253 characters, labels of up to 63, at least one dot.
 const HOST_RE = /^(?=.{4,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9]$/;
-// Conservative defaults the keepers can change (config.hosting.*): a pending claim lives a day, an account holds
-// a few pending and a modest number in all, a verified domain is dropped after three failed re-checks in a row.
+// Careful defaults the keepers can change (config.hosting.*). A pending claim
+// lives one day. An account may hold 10 pending and 25 in all. A verified domain
+// is dropped after 3 failed re-checks in a row. Re-checks run every 6 hours.
 const PENDING_TTL = 24 * 3600_000;
 const MAX_PENDING = 10;
 const MAX_DOMAINS = 25;
@@ -22,12 +29,16 @@ const CERT_BUDGET = 10; // new site-subdomain certificates one owner may have or
 export const RECHECK_EVERY = 6 * 3600_000;
 const GONE = new Set(['ENOTFOUND', 'ENODATA']); // DNS said the record is not there (a timeout or SERVFAIL says nothing)
 
+/**
+ * Adds, verifies, re-checks and removes custom domains, and answers the TLS
+ * proxy's "may I get a certificate?" question.
+ */
 export class DomainService {
   constructor({ store, config, sites, clock = Date.now, resolver = dns.promises }) {
     Object.assign(this, { store, config, sites, clock, resolver });
     store.data.domainClaims ??= {};
     this.certOrders = new Map();
-    // Records from before claims existed: an unverified record is a pending claim.
+    // Old data from before claims existed: turn each unverified record into a pending claim.
     for (const [h, dom] of Object.entries(store.data.domains)) {
       if (dom.verified) continue;
       (store.data.domainClaims[h] ??= {})[dom.site] = { token: dom.token, addedAt: dom.addedAt, addedBy: dom.addedBy, owner: this.ownerOf(dom.site), expiresAt: dom.addedAt + PENDING_TTL };
@@ -35,11 +46,15 @@ export class DomainService {
     }
   }
 
+  // "user:name" or "team:name" for the account that owns a site, or null.
   ownerOf(siteName) {
     const s = this.store.data.sites[siteName];
     return s ? `${s.owner.type}:${s.owner.name}` : null;
   }
 
+  // Clean up a hostname (lowercase, no trailing dot) and refuse names that are
+  // not valid, or that belong to this instance or its hosting domains. Those
+  // names are not anyone's to claim.
   normalize(hostname) {
     const h = String(hostname ?? '').trim().toLowerCase().replace(/\.$/, '');
     if (!HOST_RE.test(h)) throw new HttpError(400, 'bad_hostname', `"${hostname}" is not a valid domain name.`);
@@ -51,6 +66,7 @@ export class DomainService {
     return h;
   }
 
+  // The DNS records the owner must add: the TXT proof, and a CNAME (a DNS alias) to point the name here.
   instructions(dom, siteName = dom.site) {
     const target = this.config.hosting.cnameTarget ?? (this.config.hosting.domains[0] ? `${siteName}.${this.config.hosting.domains[0]}` : null);
     return {
@@ -60,6 +76,7 @@ export class DomainService {
     };
   }
 
+  // The API shape of a domain record or claim.
   view(dom, siteName = dom.site) {
     return {
       hostname: dom.hostname, site: siteName, verified: Boolean(dom.verified), verifiedAt: dom.verifiedAt ?? null, addedAt: dom.addedAt,
@@ -67,7 +84,7 @@ export class DomainService {
     };
   }
 
-  /** Pending claims for a name, expired ones dropped on the way. */
+  /** Pending claims for a name. It deletes expired claims, and claims for deleted sites, as it goes. */
   claimsFor(h) {
     const all = this.store.data.domainClaims[h];
     if (!all) return {};
@@ -79,6 +96,7 @@ export class DomainService {
     return this.store.data.domainClaims[h] ?? {};
   }
 
+  // Every domain and claim for one site.
   forSite(site) {
     const out = Object.values(this.store.data.domains).filter((d) => d.site === site.name).map((d) => this.view(d));
     for (const h of Object.keys(this.store.data.domainClaims)) {
@@ -88,7 +106,7 @@ export class DomainService {
     return out;
   }
 
-  /** How many names (verified or pending) an account holds, and how many are still only claims. */
+  /** Count the names (verified or pending) an account holds, and how many are still only claims. */
   holdings(owner) {
     let all = 0;
     let pending = 0;
@@ -99,6 +117,8 @@ export class DomainService {
     return { all, pending };
   }
 
+  // Start a claim for a hostname: make a random token for the TXT record and
+  // save a pending claim. Adding the same name twice returns the one already there.
   add(user, siteName, hostname, ip) {
     const site = this.sites.manageable(user, siteName);
     const h = this.normalize(hostname);
@@ -106,7 +126,8 @@ export class DomainService {
     if (held?.site === site.name) return this.view(held);
     const mine = this.claimsFor(h)[site.name];
     if (mine) return this.view({ hostname: h, site: site.name, ...mine });
-    // A verified record keeps its name until a newer proof (DNS control) replaces it; a pending claim never blocks anyone.
+    // A verified record keeps its name until a newer proof (control of DNS)
+    // replaces it. A pending claim never blocks anyone.
     const owner = `${site.owner.type}:${site.owner.name}`;
     const have = this.holdings(owner);
     if (have.pending >= (this.config.hosting.maxPendingDomains ?? MAX_PENDING)) throw new HttpError(429, 'too_many_pending', 'Too many domains are waiting for verification; verify or remove some first.');
@@ -119,11 +140,15 @@ export class DomainService {
     return this.view({ hostname: h, site: site.name, ...claim });
   }
 
+  // Look up the TXT records at the challenge name and check for the token.
+  // A long TXT record can come in parts, so the parts are joined first.
   async txtHas(h, token) {
     const records = (await this.resolver.resolveTxt(challengeName(h))).map((parts) => parts.join(''));
     return records.includes(token);
   }
 
+  // Check the DNS proof for a claim. If the token is there, the claim becomes
+  // the domain's verified record.
   async verify(user, siteName, hostname, ip) {
     const site = this.sites.manageable(user, siteName);
     const h = this.normalize(hostname);
@@ -138,8 +163,9 @@ export class DomainService {
       throw new HttpError(409, 'dns_not_ready', `No TXT record found at ${challengeName(h)} yet (${err.code ?? err.message}). DNS changes can take a while.`);
     }
     if (!seen) throw new HttpError(409, 'dns_mismatch', `The TXT record at ${challengeName(h)} does not contain ${claim.token}.`);
-    // The first to prove control of the name holds it; a proof that arrives later, while the name is still bound to
-    // someone else, means the name changed hands.
+    // The first to prove control of the name holds it. A proof that arrives
+    // later, while the name still points at someone else's site, means the name
+    // changed hands. The new proof wins and the takeover is written to the audit log.
     this.store.tx((d) => {
       const prior = d.domains[h];
       d.domains[h] = { hostname: h, site: site.name, token: claim.token, verified: true, verifiedAt: this.clock(), addedAt: claim.addedAt, addedBy: claim.addedBy, checkedAt: this.clock(), failures: 0 };
@@ -150,6 +176,7 @@ export class DomainService {
     return this.view(this.store.data.domains[h]);
   }
 
+  // Remove a site's verified record and/or pending claim for a name.
   remove(user, siteName, hostname, ip) {
     const site = this.sites.manageable(user, siteName);
     const h = this.normalize(hostname);
@@ -165,8 +192,10 @@ export class DomainService {
   }
 
   /**
-   * Look at every verified domain again. A name whose proof is gone for several checks in a row stops being served and
-   * loses its certificate permission; a DNS error that does not say "not there" counts for nothing either way.
+   * Look at every verified domain again. When a name's proof is gone for
+   * several checks in a row, the server stops serving it and it may no longer
+   * get a certificate. A DNS error that does not say "not there" (like a
+   * timeout) counts for nothing either way.
    */
   async recheck() {
     const limit = this.config.hosting.recheckFailures ?? RECHECK_FAILURES;
@@ -187,7 +216,7 @@ export class DomainService {
     }
   }
 
-  /** Run recheck() on a schedule (once); stop() ends it. The timer never keeps the process alive. */
+  /** Run recheck() on a schedule. Calling it twice starts only one timer. stop() ends it. The timer never keeps the process alive. */
   startRecheck(every = this.config.hosting.recheckEvery ?? RECHECK_EVERY) {
     if (this.timer) return;
     this.timer = setInterval(() => { this.recheck().catch((err) => console.error('domain recheck failed', err.message)); }, every);
@@ -197,10 +226,13 @@ export class DomainService {
   stop() { clearInterval(this.timer); this.timer = null; }
 
   /**
-   * For a TLS proxy's on-demand "ask" hook: may a certificate be issued for this name? This instance's own names and
-   * custom domains whose proof is still good always. A site's subdomain, which anyone can make, only while its owner is
-   * inside a weekly budget of new names (a public CA limits how many a registered domain may order); the real answer to
-   * that limit is one wildcard certificate per hosting domain (DEPLOY.md), after which Caddy never asks for these.
+   * For a TLS proxy's on-demand "ask" hook: may a certificate be issued for
+   * this name? Always yes for this instance's own names and for custom domains
+   * whose proof is still good. For a site's subdomain, which anyone can make,
+   * yes only while its owner is inside a weekly budget of new names. That is
+   * because a public CA (the company that issues certificates) limits how many
+   * one registered domain may order. The real answer to that limit is one
+   * wildcard certificate per hosting domain (DEPLOY.md); then Caddy never asks for these.
    */
   tlsAllowed(hostname) {
     const h = String(hostname ?? '').toLowerCase().replace(/\.$/, '');
@@ -212,7 +244,9 @@ export class DomainService {
     return site ? this.withinCertBudget(site, h) : false;
   }
 
-  // In memory on purpose: nobody who can order certificates can restart the server to clear it.
+  // Allow at most certBudget (default 10) new subdomain certificates per owner per week.
+  // The count lives in memory on purpose: nobody who can order certificates can
+  // restart the server to clear it.
   withinCertBudget(site, h) {
     const week = 7 * 24 * 3600_000;
     const limit = this.config.hosting.certBudget ?? CERT_BUDGET;

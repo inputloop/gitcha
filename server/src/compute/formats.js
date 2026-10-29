@@ -1,28 +1,39 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Definition formats for CI pipelines and lambda functions. Several authoring
-// formats compile to one canonical shape, which is what runners execute:
+// The file formats for CI pipelines and lambda functions (small programs that
+// run per request). People can write them in several formats. Each one is
+// turned into one canonical (standard) shape, and that is what runners run:
 //
 //   pipeline: { image, timeoutMs, env, steps: [{ name, run }], artifacts, deploy }
 //   function: { runtime, entry, source? , chain? , timeoutMs, memoryMb, public }
 //
 // Authoring formats:
 //   gitcha-ci.json        the canonical pipeline, written by hand
-//   gitcha-ci.org         org-mode: each "#+NAME: step-..." sh block is a step, in file order
+//   gitcha-ci.org         org-mode (a plain-text outline format from Emacs): each
+//                         "#+NAME: step-..." sh block is a step, in file order
 //   gitcha-ci.topoforge.json  a TopoForge drawing: nodes with data.run are steps,
-//                         arrows give their order (a topological sort)
+//                         arrows give their order (a topological sort, which
+//                         puts each step after every step that points to it)
 //   gitcha.fn.json        a function's settings; the code is in its own files
 //   *.org#block           a function whose code is one named src block of an org file
 //   *.topoforge.json      a function that chains other functions, drawn in TopoForge
 import { HttpError } from '../errors.js';
 
-// An image reference starts with a letter or digit, so it can never be read as an option by the launcher (FMT-2).
+// A container image name must start with a letter or digit. Then the launcher
+// can never read it as an option like "--privileged" (FMT-2).
 const IMAGE_RE = /^[A-Za-z0-9][\w./:@-]{0,199}$/;
+// The kinds of function code a runner can run.
 export const RUNTIMES = ['node', 'sh', 'python', 'chain', 'orgvm'];
+// Org block languages, mapped to the runtime that runs them.
 const ORG_LANG = { sh: 'sh', bash: 'sh', shell: 'sh', js: 'node', javascript: 'node', node: 'node', python: 'python', python3: 'python' };
 const MAX_STEPS = 50;
+// Step and function names: lowercase letters, digits and "-", up to 63 characters.
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
+/**
+ * Turn a duration like "30s", "10m", "2h" or "500ms" into milliseconds. A bare
+ * number means seconds. Empty gives `fallback`; the result is never above `max`.
+ */
 export function parseDuration(v, fallback, max) {
   if (v === undefined || v === null || v === '') return fallback;
   const m = /^(\d+)\s*(ms|s|m|h)?$/.exec(String(v).trim());
@@ -35,7 +46,11 @@ const bad = (msg) => new HttpError(400, 'bad_spec', msg);
 
 // ---- org-mode -----------------------------------------------------------------
 
-/** Extract named src blocks: [{ name, lang, body, line }] in file order. */
+/**
+ * Pull the src blocks (code blocks) out of an org file: [{ name, lang, body, line }]
+ * in file order. A block's name comes from a "#+NAME:" line right above it.
+ * Two leading spaces are removed from each code line.
+ */
 export function orgBlocks(text) {
   const lines = String(text).replace(/\r/g, '').split('\n');
   const out = [];
@@ -69,6 +84,8 @@ export function orgKeywords(text) {
   return kw;
 }
 
+// Build a raw pipeline from an org file. Blocks named "step-..." become steps
+// and must be sh blocks. #+GITCHA_* keyword lines give the settings.
 export function pipelineFromOrg(text) {
   const kw = orgKeywords(text);
   const steps = orgBlocks(text)
@@ -86,7 +103,7 @@ export function pipelineFromOrg(text) {
 
 // ---- TopoForge --------------------------------------------------------------------
 
-/** Pages, nodes and links of a TopoForge document (format "topoforge", version 1). */
+/** Get the pages, nodes and links of a TopoForge document (format "topoforge", version 1). It accepts a few layouts. */
 function topoPages(doc) {
   if (!doc || typeof doc !== 'object') throw bad('The drawing is not a JSON object.');
   if (Array.isArray(doc.pages)) return doc.pages;
@@ -95,7 +112,10 @@ function topoPages(doc) {
   throw bad('No pages found in the TopoForge drawing.');
 }
 
-/** Order nodes by their arrows (a -> b means a runs before b). Ties keep drawing order. */
+/**
+ * Order nodes by their arrows (a -> b means a runs before b). When two nodes
+ * could go next, the one drawn first goes first. A loop of arrows is an error.
+ */
 export function topoOrder(nodes, links) {
   const ids = new Set(nodes.map((n) => n.id));
   const after = new Map(nodes.map((n) => [n.id, []]));
@@ -125,7 +145,11 @@ export function topoOrder(nodes, links) {
   return out.map((id) => byId.get(id));
 }
 
-/** Nodes carrying data.run (shell) become pipeline steps; the drawing's settings are on the page node with data.gitcha_image etc. */
+/**
+ * Build a raw pipeline from a TopoForge drawing. Nodes with data.run (a shell
+ * command) become steps. The settings (data.gitcha_image and so on) can sit on
+ * any node; they are merged together. Only the first page is read.
+ */
 export function pipelineFromTopoForge(doc) {
   const page = topoPages(doc)[0] ?? { nodes: [], links: [] };
   const all = page.nodes ?? [];
@@ -138,7 +162,10 @@ export function pipelineFromTopoForge(doc) {
   };
 }
 
-/** A drawn chain of functions: nodes with data.function, called in arrow order, each fed the last one's response. */
+/**
+ * Read a drawn chain of functions: the nodes with data.function, in arrow
+ * order. Each function is fed the response of the one before it.
+ */
 export function chainFromTopoForge(doc) {
   const page = topoPages(doc)[0] ?? { nodes: [], links: [] };
   const fnNodes = (page.nodes ?? []).filter((n) => typeof n.data?.function === 'string');
@@ -151,6 +178,13 @@ export function chainFromTopoForge(doc) {
 
 // ---- canonical forms --------------------------------------------------------------------
 
+/**
+ * Check a raw pipeline and return the canonical shape. Limits: 1 to 50 steps,
+ * 20,000 characters per command, env names in CAPITALS, values up to 4096
+ * characters. The time limit defaults to 10 minutes, capped at maxTimeoutMs
+ * (1 hour unless told otherwise). "artifacts" must be a relative folder with
+ * no "..", and "deploy" needs it.
+ */
 export function normalizePipeline(p, { maxTimeoutMs = 3_600_000, defaultImage } = {}) {
   if (!p || typeof p !== 'object') throw bad('The pipeline is not an object.');
   const steps = (p.steps ?? []).map((s, i) => {
@@ -175,6 +209,12 @@ export function normalizePipeline(p, { maxTimeoutMs = 3_600_000, defaultImage } 
   return { image, timeoutMs: parseDuration(p.timeout, 10 * 60_000, maxTimeoutMs), env, steps, artifacts, deploy, on };
 }
 
+/**
+ * Check a function's gitcha.fn.json and return the canonical shape. `files`
+ * maps upload paths to their contents. An org entry may add a generated file
+ * to it. The time limit defaults to 10 seconds (at most 5 minutes). Memory is
+ * kept between 64 and 4096 MB (default 256).
+ */
 export function normalizeFunction(f, files = new Map()) {
   if (!f || typeof f !== 'object') throw bad('gitcha.fn.json is not an object.');
   const name = String(f.name ?? '').toLowerCase();
@@ -182,6 +222,7 @@ export function normalizeFunction(f, files = new Map()) {
   let { runtime, entry } = f;
   let chain = null;
   // "entry": "handler.org#respond" pulls one named block out of an org file.
+  // For most runtimes the block is saved as its own file under .gitcha/.
   if (typeof entry === 'string' && /\.org#[\w-]+$/.test(entry)) {
     const [file, block] = entry.split('#');
     const text = files.get(file);
@@ -197,6 +238,7 @@ export function normalizeFunction(f, files = new Map()) {
       files.set(entry, Buffer.from(b.body));
     }
   }
+  // An entry that is a TopoForge drawing makes this a chain of functions.
   if (typeof entry === 'string' && /\.topoforge\.json$/.test(entry)) {
     const text = files.get(entry);
     if (!text) throw bad(`The drawing ${entry} is not in the upload.`);

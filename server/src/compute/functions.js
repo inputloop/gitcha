@@ -1,34 +1,49 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Lambda functions. A function is a small program owned by a user or team,
-// deployed from a tarball holding gitcha.fn.json and its code. It runs on a
-// runner, never on the Gitcha server, when a hosted site routes a request to
-// it or when it is invoked through the API. A "chain" function (drawn in
-// TopoForge) calls other functions of the same owner in order.
+// Lambda functions. A function is a small program owned by a user or team.
+// It is deployed from a tarball (a packed archive) that holds gitcha.fn.json
+// and its code. It runs on a runner, never on the Gitcha server. It runs when
+// a hosted site routes a request to it, or when someone invokes it through the
+// API. A "chain" function (drawn in TopoForge) calls other functions of the
+// same owner, in order.
+// Store: data.functions, keyed "owner/name". Each record keeps up to 20
+// versions; the code of each version is a blob named by its sha256 hash.
 import { HttpError } from '../errors.js';
 import { sha256 } from '../crypto.js';
 import { unpackFiles, packFiles } from '../../../extension/lib/tar.js';
 import { normalizeFunction } from './formats.js';
 import { ownerKey } from './jobs.js';
 
+// A request sent to a function through a site may be at most 1 MB.
 const MAX_BODY = 1024 * 1024;
+// Hop-by-hop headers: they describe one connection, not the request itself,
+// so they are never passed through in either direction.
 const HOP = new Set(['connection', 'keep-alive', 'transfer-encoding', 'upgrade', 'proxy-authorization', 'proxy-connection', 'te', 'trailer', 'host', 'content-length']);
+// A chain runs at most this many functions.
 const MAX_CHAIN = 10;
 
+// Turn "name" or "@team" into { type, name }. Team names are lowercased.
 export function parseOwner(s) {
   s = String(s ?? '');
   return s.startsWith('@') ? { type: 'team', name: s.slice(1).toLowerCase() } : { type: 'user', name: s };
 }
+// The reverse of parseOwner.
 export const ownerLabel = (o) => (o.type === 'team' ? `@${o.name}` : o.name);
 
+/**
+ * Deploys, lists, removes and runs functions. Running one means queueing a
+ * job of kind "fn" and waiting for a runner to answer.
+ */
 export class FunctionService {
   constructor({ store, config, teams, jobs, billing, clock = Date.now }) {
     Object.assign(this, { store, config, teams, jobs, billing, clock });
     store.data.functions ??= {};
   }
 
+  // The store key for a function.
   key(owner, name) { return `${ownerKey(owner)}/${name}`; }
 
+  // May deploy or delete: the owning user, or a maintainer of the owning team.
   canManage(user, owner) {
     if (!user) return false;
     if (owner.type === 'user') return owner.name === user.username;
@@ -36,6 +51,7 @@ export class FunctionService {
     return Boolean(t && this.teams.has(t, user, 'maintainer'));
   }
 
+  // May see: the owner, team members, and admins.
   canSee(user, owner) {
     if (!user) return false;
     if (owner.type === 'user') return owner.name === user.username || user.role === 'admin';
@@ -43,10 +59,13 @@ export class FunctionService {
     return user.role === 'admin' || Boolean(t && this.teams.has(t, user, 'member'));
   }
 
+  // Look up a function with no access check.
   find(owner, name) {
     return this.store.data.functions[this.key(owner, name)] ?? null;
   }
 
+  // Look up a function the user may see (or manage). Anything else is 404, so
+  // nobody learns that a private function exists.
   get(user, owner, name, { manage = false } = {}) {
     const fn = this.find(owner, name);
     const ok = fn && (manage ? this.canManage(user, owner) : this.canSee(user, owner));
@@ -54,6 +73,8 @@ export class FunctionService {
     return fn;
   }
 
+  // The API shape of a function: the active version's settings and the version
+  // list (newest first), without the source hashes.
   view(fn) {
     const v = fn.versions.find((x) => x.version === fn.active);
     return {
@@ -63,12 +84,16 @@ export class FunctionService {
     };
   }
 
+  // Every function the user may see, optionally for one owner.
   list(user, owner) {
     return Object.values(this.store.data.functions)
       .filter((f) => this.canSee(user, f.owner) && (!owner || ownerKey(f.owner) === ownerKey(owner)))
       .map((f) => this.view(f));
   }
 
+  // Deploy a new version. Steps: unpack the tarball, read and check
+  // gitcha.fn.json, choose the owner, store the code as a blob, then add the
+  // version and make it active. A chain may not call itself.
   deploy(user, { tarball, team }, ip) {
     if (!Buffer.isBuffer(tarball) || !tarball.length) throw new HttpError(400, 'no_tarball', 'No function tarball was sent.');
     if (tarball.length > this.config.maxPackageBytes) throw new HttpError(413, 'too_large', 'Function is too large.');
@@ -89,7 +114,8 @@ export class FunctionService {
     if (spec.chain) {
       for (const n of spec.chain) if (n === spec.name) throw new HttpError(400, 'bad_spec', 'A chain cannot call itself.');
     }
-    // Re-pack: org blocks pulled out into files become part of what the runner gets.
+    // Re-pack the files, so that org blocks pulled out into their own files
+    // become part of what the runner gets.
     const packed = packFiles([...files].map(([path, data]) => ({ path, data })));
     const sourceSha = sha256(packed);
     this.store.writeBlob(sourceSha, packed);
@@ -108,6 +134,7 @@ export class FunctionService {
     return this.view(this.store.data.functions[k]);
   }
 
+  // Delete a function and all its versions. Only someone who may manage it may do this.
   remove(user, owner, name, ip) {
     const fn = this.get(user, owner, name, { manage: true });
     this.store.tx((d) => {
@@ -117,7 +144,12 @@ export class FunctionService {
     return { deleted: `${ownerLabel(owner)}/${fn.name}` };
   }
 
-  /** Run one invocation. request = { method, path, query, headers, body (Buffer) }. */
+  /**
+   * Run one invocation. request = { method, path, query, headers, body (Buffer) }.
+   * It queues a job and waits up to the function's time limit plus the queue
+   * wait. It returns { status, headers, body, ms, log }. 503 means no runner
+   * picked it up, 504 means it timed out, 502 means it failed.
+   */
   async invoke(fn, request, { depth = 0 } = {}) {
     const v = fn.versions.find((x) => x.version === fn.active);
     if (v.runtime === 'chain') return this.invokeChain(fn, v, request, depth);
@@ -131,7 +163,8 @@ export class FunctionService {
       },
     });
     const done = await this.jobs.awaitResult(job, v.timeoutMs + this.config.compute.queueWaitMs);
-    // Only a call a runner picked up is counted; one nobody served costs the owner nothing (FN-1b).
+    // Only a call that a runner picked up is counted. A call nobody served costs
+    // the owner nothing (FN-1b).
     if (done.startedAt) {
       this.billing?.record(ownerKey(fn.owner), 'fn_invocations', 1);
       this.store.data.functions[this.key(fn.owner, fn.name)].invocations = (fn.invocations ?? 0) + 1;
@@ -144,6 +177,9 @@ export class FunctionService {
     return { status: 502, headers: { 'content-type': 'text/plain; charset=utf-8' }, body: Buffer.from(`The function failed${done.error ? `: ${done.error}` : '.'}\n`), ms: this.clock() - started, log: done.log ?? '' };
   }
 
+  // Run a chain: call each named function in turn, feeding each one the last
+  // one's response as a POST body. It stops at the first error (status 400 or
+  // more). A chain may not call another chain (508).
   async invokeChain(fn, v, request, depth) {
     if (depth >= 1) return { status: 508, headers: { 'content-type': 'text/plain' }, body: Buffer.from('Chains cannot call chains.\n') };
     let req = request;
@@ -158,7 +194,12 @@ export class FunctionService {
     return res;
   }
 
-  /** A hosted site routed this request to one of its owner's functions. */
+  /**
+   * A hosted site routed this request to one of its owner's functions. Pass the
+   * request on (without hop-by-hop headers), then send back the function's
+   * answer. Response header names are checked and line breaks are removed from
+   * values, so a function cannot break the HTTP reply.
+   */
   async invokeHttp(ctx, { site, name }) {
     const { req, res, url } = ctx;
     const fn = this.find(site.owner, name);
@@ -187,6 +228,7 @@ export class FunctionService {
   }
 }
 
+// Clean up a runner's answer: a valid status (else 200), lowercase header names, and a Buffer body.
 function normalizeResponse(r) {
   const status = Number.isInteger(r.status) && r.status >= 100 && r.status <= 599 ? r.status : 200;
   const headers = {};
@@ -194,6 +236,7 @@ function normalizeResponse(r) {
   return { status, headers, body: Buffer.from(String(r.body ?? ''), r.bodyEncoding === 'base64' ? 'base64' : 'utf8') };
 }
 
+// Read a whole request body, or return null as soon as it passes `limit` bytes.
 async function readCapped(req, limit) {
   const chunks = [];
   let n = 0;

@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Regenerates docs/screenshots/*.png from a real, freshly started Gitcha
-// server: browser pages via Playwright, plus real CLI output and real MCP tool
-// calls rendered as terminal/transcript images.
+// Makes docs/screenshots/*.png again from a real, freshly started Gitcha server in a temp folder.
+// It takes browser pages with Playwright (a tool that drives a real browser), and it draws real CLI
+// output and real MCP tool calls as terminal and chat-transcript images. It also makes extension/icon.png.
 //
 //   node scripts/screenshots.mjs        (needs Playwright + Chromium installed)
 //
-// It waits for new TOTP time steps between codes (codes are single-use), so a
-// full run takes about two minutes.
+// TOTP codes (the 6-digit codes an authenticator app shows) can be used only once, and a new one comes
+// every 30 seconds. So the script waits for a new time step between codes, and a full run takes about
+// two minutes.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -36,7 +37,7 @@ fs.mkdirSync(OUT, { recursive: true });
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gitcha-shots-'));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let lastStep = -1;
-/** A code from a time step that has not been used yet. */
+/** A code from a time step that has not been used yet (waits until the next step if needed). */
 async function freshCode(secret) {
   while (timeStep() <= lastStep) await sleep(500);
   lastStep = timeStep();
@@ -44,7 +45,8 @@ async function freshCode(secret) {
 }
 
 // ---- server -----------------------------------------------------------------
-// Billing is switched on with placeholder keys so its page renders; no provider is ever called.
+// Start the server on port 4873 with demo settings. Billing is switched on with placeholder keys so its
+// page renders. No payment provider is ever called (their addresses end in .invalid).
 const config = loadConfig({ GITCHA_PORT: String(PORT), GITCHA_HOSTING_DOMAINS: 'pages.example.net', GITCHA_SSH_HOST: 'gitcha.example.org', GITCHA_SSH_USER: 'gitcha' }, {
   dataDir: path.join(tmp, 'data'), publicUrl: URL_,
   billing: { enabled: true, currency: 'USD', plansFile: null, stripe: { secretKey: 'sk_test_placeholder', webhookSecret: null, api: 'https://stripe.invalid' }, paypal: { clientId: 'placeholder', clientSecret: 'placeholder', webhookId: null, api: 'https://paypal.invalid' }, priceIds: { stripe: { pro: 'price_demo', team: 'price_demo_team' }, paypal: { pro: 'P-DEMO', team: null } } },
@@ -57,12 +59,14 @@ console.log(`server on ${URL_}`);
 const browser = await chromium.launch();
 const ctx = await browser.newContext({ viewport: { width: 1200, height: 760 }, deviceScaleFactor: 2, colorScheme: 'light' });
 const page = await ctx.newPage();
+// Save a screenshot of the current page as docs/screenshots/NAME.png.
 const shot = async (name, opts = {}) => {
   await page.screenshot({ path: path.join(OUT, `${name}.png`), ...opts });
   console.log(`  ✓ ${name}.png`);
 };
 
 // ---- browser: sign-up with mandatory 2FA -----------------------------------------
+// Sign up as alice, read the 2FA secret off the setup page, and use it to make codes from then on.
 await page.goto(URL_);
 await shot('01-landing');
 
@@ -97,12 +101,15 @@ await page.click('main form button.btn');
 await page.waitForURL('**/packages');
 
 // ---- CLI: first-run login, publish, install --------------------------------------
+// The CLI gets its own config folder in the temp folder, and colors are forced on for the pictures.
 const cliEnv = { ...process.env, GITCHA_CONFIG_DIR: path.join(tmp, 'cli'), GITCHA_SERVER: URL_, FORCE_COLOR: '1' };
 delete cliEnv.NO_COLOR;
 const project = path.join(tmp, 'my-app');
 fs.mkdirSync(project);
 fs.writeFileSync(path.join(project, 'gitcha.json'), JSON.stringify({ name: 'my-app', version: '0.1.0', license: 'MIT' }, null, 2));
 
+// Run the gitcha CLI with `input` on stdin and return its command line and output text.
+// `show` puts the typed answers back after each prompt, since piped input is not echoed.
 // Async on purpose: a synchronous spawn would block this process, which is also the server.
 async function cli(args, { input = '', cwd = project, show = [] } = {}) {
   const r = await new Promise((resolve) => {
@@ -134,7 +141,8 @@ const statusRun = await cli(['status']);
 const publishRuns = [];
 for (const p of ['hello-world', 'tiny-logger', 'color-utils']) publishRuns.push(await cli(['publish', path.join(root, 'examples', p)], { cwd: root }));
 publishRuns.forEach((r) => { r.cmd = r.cmd.replace(root + path.sep, ''); });
-// Teams: a second and third user, a shared team, and a team-only package.
+// Teams: a second and a third user, a shared team, and a team-only package.
+// bob and carol are made directly through app.auth, not through the browser.
 for (const [name, pw] of [['bob', 'blue whale passphrase'], ['carol', 'green field passphrase']]) {
   const r = app.auth.register({ username: name, password: pw, ip: '127.0.0.1' });
   app.auth.confirmEnrollment({ enrollToken: r.enrollToken, code: totp(r.secret), ip: '127.0.0.1' });
@@ -167,6 +175,9 @@ await page.goto(`${URL_}/verify?reason=interval&next=/packages`);
 await shot('10-step-up');
 
 // ---- the forge and the community: agents, a Second Reader review, the crawl -------------
+// Fill in demo data by calling the app's objects directly: profiles, three agents, a project,
+// two git pushes by two different agents (which makes a Second Reader task), a review, posts,
+// a support ticket and fake ring peers. Then take pictures of those pages.
 {
   const { execFile } = await import('node:child_process');
   const run = (args, cwd) => new Promise((res, rej) => execFile('git', args, { cwd, env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' } }, (e, out, err) => (e ? rej(new Error(err || e.message)) : res(out))));
@@ -238,6 +249,8 @@ await shot('10-step-up');
 }
 
 // ---- Claude extension: real MCP tool calls --------------------------------------------
+// Start the MCP server as a child process and talk JSON-RPC to it over stdin and stdout.
+// Replies are matched to requests by their id.
 const mcp = spawn(process.execPath, [MCP], { env: { ...cliEnv, FORCE_COLOR: '' }, cwd: project });
 let buf = '';
 const waiters = new Map();
@@ -254,6 +267,7 @@ let rid = 0;
 const rpc = (method, params) => new Promise((resolve) => { const id = ++rid; waiters.set(id, resolve); mcp.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n'); });
 await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'screenshot', version: '1' } });
 const transcript = [];
+// Call one tool and add the call and its answer to the transcript. say() adds a chat message.
 const call = async (name, args) => {
   const r = await rpc('tools/call', { name, arguments: args });
   transcript.push({ type: 'tool', name, args, text: r.result.content[0].text, isError: Boolean(r.result.isError) });
@@ -263,7 +277,7 @@ const say = (who, text) => transcript.push({ type: who, text });
 say('user', 'Find me a logging library on our Gitcha registry.');
 await call('gitcha_search', { query: 'log' });
 say('assistant', 'tiny-logger 2.1.0 looks like a fit: zero dependencies, GPL-3.0-or-later. Installing it into this project.');
-// Pretend the device's last 2FA was 13 hours ago so the periodic check fires.
+// Pretend the device's last 2FA was 13 hours ago, so the periodic check fires on the next call.
 const cliToken = JSON.parse(fs.readFileSync(path.join(cliEnv.GITCHA_CONFIG_DIR, 'credentials.json'), 'utf8')).servers[URL_].token;
 app.store.tx((d) => { d.sessions[sha256(cliToken)].mfaAt = Date.now() - 13 * 3600_000; });
 await call('gitcha_install', { name: 'tiny-logger', directory: project });
@@ -276,6 +290,7 @@ say('assistant', 'Done: tiny-logger@2.1.0 is in gitcha_modules/ and pinned in gi
 mcp.kill();
 
 // ---- render terminal + transcript images -------------------------------------------
+// esc makes text safe to put in HTML. ansiToHtml turns terminal color codes into <span> tags.
 const esc = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 function ansiToHtml(s) {
   const COLORS = { 1: 'b', 2: 'dim', 31: 'red', 32: 'green', 33: 'yellow', 35: 'magenta', 36: 'cyan' };
@@ -295,6 +310,7 @@ const TERM_CSS = `body{margin:0;padding:28px;background:#e9ebf3;font-family:syst
 pre{margin:0;padding:18px 20px;color:#dfe3f2;font:13.5px/1.6 "JetBrains Mono","DejaVu Sans Mono",ui-monospace,monospace;white-space:pre-wrap}
 .p{color:#18c5a8}.b{font-weight:700}.dim{color:#7d849f}.red{color:#ff6b88}.green{color:#5fe0a2}.yellow{color:#f5c95b}.magenta{color:#b79bff}.cyan{color:#6fd3ff}`;
 
+// Draw a fake terminal window holding several CLI runs, and save it as NAME.png.
 async function renderTerminal(name, title, runs) {
   const body = runs.map((r) => `<span class="p">~/my-app $</span> <span class="b">${esc(r.cmd)}</span>\n${ansiToHtml(r.text.replace(/\n+$/, ''))}`).join('\n\n');
   const htmlDoc = `<!doctype html><meta charset="utf-8"><style>${TERM_CSS}</style><div class="win"><div class="bar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span><span class="title">${esc(title)}</span></div><pre>${body}</pre></div>`;
@@ -320,6 +336,7 @@ const TX_CSS = `body{margin:0;padding:28px;background:#e9ebf3;font-family:Inter,
 .tool .name{padding:7px 12px;background:#f6f7fb;font-family:ui-monospace,monospace;color:#3b4bc8;border-bottom:1px solid #e3e6f0}
 .tool.err .name{color:#b4233f;background:#fdecef}.tool pre{margin:0;padding:10px 12px;white-space:pre-wrap;font:12.5px/1.5 ui-monospace,"DejaVu Sans Mono",monospace;color:#2a3050}`;
 
+// Draw the MCP transcript as a chat panel. The tool calls and answers are real; the chat lines are made up.
 {
   const items = transcript.map((t) => t.type === 'tool'
     ? `<div class="tool ${t.isError ? 'err' : ''}"><div class="name">⚙ ${esc(t.name)}(${esc(JSON.stringify(t.args).replace(project, '~/my-app'))})${t.isError ? ' → needs user action' : ''}</div><pre>${esc(t.text.replaceAll(project, '~/my-app').replaceAll(CLI, '…/gitcha.js'))}</pre></div>`

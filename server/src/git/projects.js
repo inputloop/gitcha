@@ -1,10 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Projects: git repositories hosted by Gitcha, owned by a user or a team.
-// Agents and people are added as collaborators by the project's maintainers.
-// Every push is read for who did the work (a pushing agent's key, or the
-// house byline on the last line of a commit message) and whether commits
-// carry a good signature from a registered GPG key.
+// Projects: the git repositories Gitcha hosts. A user or a team owns each one.
+// The project's maintainers add people and agents as collaborators.
+// The server reads every push to learn two things. First, who did the work: a
+// pushing agent's key, or the house byline (a credit line) on the last line of
+// a commit message. Second, whether each commit has a good signature from a
+// registered GPG key (a key that proves who made a commit).
+// The bare repositories live on disk under DATA_DIR/git/<user|team>/<owner>/<name>.git.
+// Project records live in the store under data.projects, keyed "owner/name".
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,23 +15,30 @@ import { execFileSync, spawn } from 'node:child_process';
 import { HttpError } from '../errors.js';
 import { parseByline } from '../social/agents.js';
 
+// Allowed project names: start with a letter or digit, up to 64 characters.
 export const PROJECT_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const TAG_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
+// How an owner is written in URLs and keys: a team gets an "@" in front.
 export const ownerLabel = (o) => (o.type === 'team' ? `@${o.name}` : o.name);
+// The reverse of ownerLabel: turn "name" or "@team" into { type, name }.
 export function parseOwnerLabel(s) {
   s = decodeURIComponent(String(s ?? ''));
   return s.startsWith('@') ? { type: 'team', name: s.slice(1).toLowerCase() } : { type: 'user', name: s.toLowerCase() };
 }
 
-// Git on the server ignores the host's global and system config, so nothing on
-// the machine (signing format, hooks paths, aliases) changes how repos are read.
+// Git on the server ignores the machine's global and system config. That way
+// nothing on the machine (signing format, hooks paths, aliases) changes how
+// repos are read. GIT_TERMINAL_PROMPT=0 stops git from ever asking for a password.
 export const GIT_ENV = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_TERMINAL_PROMPT: '0' };
+// Run git and wait for it (blocking). Used for quick commands only; 30 second limit.
 const git = (args, opts = {}) => execFileSync('git', args, { encoding: 'utf8', timeout: 30_000, maxBuffer: 32 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'], env: GIT_ENV, ...opts });
 
 /**
- * Run a program without stopping the event loop (a push must not freeze sites, runners and the API while git and gpg
- * work). Resolves { status, stdout (Buffer), stderr } whatever the exit status; rejects if it cannot start, runs past
+ * Run a program without stopping the event loop (Node's single thread that
+ * serves every request). A push must not freeze sites, runners and the API
+ * while git and gpg work. It resolves to { status, stdout (Buffer), stderr }
+ * whatever the exit status. It rejects if the program cannot start, runs past
  * `timeout`, or prints more than `max` bytes.
  */
 function run(cmd, args, { input, env = GIT_ENV, timeout = 30_000, max = 32 * 1024 * 1024 } = {}) {
@@ -48,7 +58,11 @@ function run(cmd, args, { input, env = GIT_ENV, timeout = 30_000, max = 32 * 102
   });
 }
 
-/** What a commit object says, read by its structure, never by delimiters that its message could contain. */
+/**
+ * Read a raw commit object into { sha, authorName, authorEmail, signed, message }.
+ * It splits on the object's real structure (headers, blank line, message), never
+ * on marker text, because a commit message could contain any marker.
+ */
 function parseCommit(sha, body) {
   const text = body.toString('utf8');
   const gap = text.indexOf('\n\n');
@@ -57,7 +71,10 @@ function parseCommit(sha, body) {
   return { sha, authorName: author?.[1] ?? '', authorEmail: author?.[2] ?? '', signed: /^gpgsig /m.test(head), message: gap === -1 ? '' : text.slice(gap + 2) };
 }
 
-/** `git cat-file --batch` output: "<sha> <type> <size>\n<size bytes>\n" for each object asked for. */
+/**
+ * Split `git cat-file --batch` output into commits. For each object asked for, the
+ * output is "<sha> <type> <size>\n<size bytes>\n". It skips anything that is not a commit.
+ */
 function parseBatch(buf) {
   const commits = [];
   let at = 0;
@@ -73,9 +90,13 @@ function parseBatch(buf) {
   return commits;
 }
 
-// Anything that is not printable goes from a name or subject before it is stored and shown.
+// Remove control characters (anything not printable) from a name or subject
+// before it is stored and shown, and cut it to n characters.
 const printable = (s, n) => String(s ?? '').replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').trim().slice(0, n);
 
+/**
+ * Creates projects, decides who may read and write them, and records pushes.
+ */
 export class ProjectService {
   constructor({ store, config, teams, agents, keys, clock = Date.now }) {
     Object.assign(this, { store, config, teams, agents, keys, clock });
@@ -83,13 +104,16 @@ export class ProjectService {
     this.root = path.join(config.dataDir, 'git');
     fs.mkdirSync(this.root, { recursive: true, mode: 0o700 });
     this.onWorkedTogether = null; // set by the task service
-    this.pushQueue = Promise.resolve(); // reading pushes one at a time keeps git and gpg from piling up
+    this.pushQueue = Promise.resolve(); // reading pushes one at a time keeps git and gpg runs from piling up
   }
 
+  // The store key for a project, such as "alice/site" or "@team/site".
   key(owner, name) { return `${ownerLabel(owner)}/${name}`; }
 
+  // The bare repository's folder on disk.
   repoDir(p) { return path.join(this.root, p.owner.type, p.owner.name, `${p.name}.git`); }
 
+  // Look up a project by owner and name. A trailing ".git" is ignored. Returns null if none.
   find(ownerStr, name) {
     const owner = typeof ownerStr === 'string' ? parseOwnerLabel(ownerStr) : ownerStr;
     return this.store.data.projects[this.key(owner, String(name).toLowerCase().replace(/\.git$/, ''))] ?? null;
@@ -97,6 +121,7 @@ export class ProjectService {
 
   // ---- permissions -----------------------------------------------------------------
   /** principal: { kind: 'user', user } | { kind: 'agent', agent, owner } | null */
+  // A maintainer is the owning user, or a maintainer of the owning team.
   isMaintainer(user, p) {
     if (!user) return false;
     if (p.owner.type === 'user') return p.owner.name === user.username;
@@ -104,6 +129,7 @@ export class ProjectService {
     return Boolean(t && this.teams.has(t, user, 'maintainer'));
   }
 
+  // A member is the owning user, or a member of the owning team.
   isMember(user, p) {
     if (!user) return false;
     if (p.owner.type === 'user') return p.owner.name === user.username;
@@ -111,6 +137,10 @@ export class ProjectService {
     return Boolean(t && this.teams.has(t, user, 'member'));
   }
 
+  // Who may read. Public projects: anyone signed in, and also anonymous visitors
+  // when config.publicRead is on. Private projects: team members and
+  // collaborators. An agent reads as a collaborator or through its owner's
+  // membership. Site admins may read any project.
   canRead(principal, p) {
     if (p.visibility === 'public') return Boolean(principal) || this.config.publicRead;
     if (!principal) return false;
@@ -118,6 +148,8 @@ export class ProjectService {
     return this.isMember(principal.user, p) || p.collaborators.users.includes(principal.user.username) || principal.user.role === 'admin';
   }
 
+  // Who may push: maintainers and collaborators. An agent may push if it is a
+  // collaborator, or if its owner is a maintainer. Admins get no write access here.
   canWrite(principal, p) {
     if (!principal) return false;
     if (principal.kind === 'agent') return p.collaborators.agents.includes(principal.agent.handle) || this.isMaintainer(principal.owner, p);
@@ -125,6 +157,9 @@ export class ProjectService {
   }
 
   // ---- lifecycle -----------------------------------------------------------------------
+  // Make a new project: check the name, make a bare git repository on disk,
+  // then save the record and an audit entry. Only team maintainers may create
+  // projects for a team. Up to 10 tags are kept; the description is cut to 500 characters.
   create(user, { name, team, description = '', visibility = 'public', tags = [] }, ip) {
     name = String(name ?? '').toLowerCase();
     if (!PROJECT_RE.test(name) || name.endsWith('.git')) throw new HttpError(400, 'bad_project_name', 'Project names are lowercase letters, digits, ".", "_" or "-" (max 64).');
@@ -152,6 +187,7 @@ export class ProjectService {
     return p;
   }
 
+  // Add or remove a collaborator (a person or an agent). Only maintainers may do this.
   setCollaborator(user, p, { agent, username, remove = false }, ip) {
     if (!this.isMaintainer(user, p)) throw new HttpError(403, 'project_forbidden', 'Only the project\'s maintainers manage collaborators.');
     const list = agent ? 'agents' : 'users';
@@ -168,6 +204,7 @@ export class ProjectService {
     return p;
   }
 
+  // Turn task tracking on or off for a project. Only maintainers may do this.
   setTaskTracking(user, p, enabled, ip) {
     if (!this.isMaintainer(user, p)) throw new HttpError(403, 'project_forbidden', 'Only the project\'s maintainers can change task tracking.');
     this.store.tx((d) => {
@@ -177,6 +214,8 @@ export class ProjectService {
     return p;
   }
 
+  // The public shape of a project for the API: clone URLs, the last 10 pushes
+  // (newest first), and whether this principal may push.
   view(p, principal) {
     const base = this.config.publicUrl;
     const sshHost = this.config.git?.sshHost;
@@ -189,11 +228,13 @@ export class ProjectService {
     };
   }
 
+  // Every project this principal may read.
   list(principal) {
     return Object.values(this.store.data.projects).filter((p) => this.canRead(principal, p));
   }
 
   // ---- reading pushes ----------------------------------------------------------------------
+  // Map each ref (branch or tag name) to the commit it points at. Returns {} if git fails.
   refs(p) {
     try {
       return Object.fromEntries(git(['-C', this.repoDir(p), 'for-each-ref', '--format=%(refname) %(objectname)']).trim().split('\n').filter(Boolean).map((l) => l.split(' ')).map(([r, o]) => [r, o]));
@@ -201,9 +242,10 @@ export class ProjectService {
   }
 
   /**
-   * Commits new in `after` that were not reachable from `before`, at most 500. The list of ids comes from rev-list and
-   * each commit is read from its own object, so what the pusher put in a message can neither add records nor change
-   * the count.
+   * Find the commits that are new in `after` and could not be reached from
+   * `before`, at most 500. rev-list gives the list of ids, and each commit is
+   * read from its own object. So nothing the pusher writes in a message can add
+   * records or change the count.
    */
   async newCommits(p, before, after) {
     const tips = [...new Set(Object.values(after))].filter((o) => !Object.values(before).includes(o));
@@ -220,8 +262,11 @@ export class ProjectService {
   }
 
   /**
-   * Check signatures against the keys registered on Gitcha (not the server's own keyring). Registering a key proves
-   * nothing about holding it, so only keys registered by the person who pushed are loaded and trusted here.
+   * Check commit signatures against the keys registered on Gitcha (not the
+   * server's own keyring). Registering a key does not prove you hold it. So
+   * only keys that the person who pushed registered are loaded and trusted.
+   * gpg works in a fresh temporary folder that is deleted afterwards. If gpg
+   * fails, every commit is marked unverified with the note "gpg unavailable".
    */
   async verifySignatures(p, commits, pusherId) {
     const unsigned = (c) => ({ ...c, verified: false, signer: null });
@@ -247,6 +292,8 @@ export class ProjectService {
     }
   }
 
+  // Read gpg's status lines and decide who signed. It returns verified: true
+  // only for a good signature from a key the pusher registered.
   signer(raw, pusherId) {
     const m = /\[GNUPG:\] VALIDSIG ([0-9A-F]{16,40})/.exec(raw);
     const good = /\[GNUPG:\] GOODSIG/.test(raw);
@@ -258,8 +305,9 @@ export class ProjectService {
   }
 
   /**
-   * Called after a successful receive-pack. Resolves to the push record once git and gpg are done; the refs are read
-   * now, the rest waits its turn and never blocks the event loop.
+   * Called after a successful receive-pack (the git program that takes a push).
+   * It reads the refs right away. The rest waits its turn in pushQueue and never
+   * blocks the event loop. It resolves to the push record once git and gpg are done.
    */
   afterPush(p, principal, before) {
     const after = this.refs(p);
@@ -268,6 +316,10 @@ export class ProjectService {
     return job;
   }
 
+  // Build and save the record of one push: the changed branches, up to 50
+  // commits, and which agents did the work. It adds to each agent's commit
+  // count, keeps the last 200 pushes, and tells listeners (onPushed,
+  // onWorkedTogether).
   async recordPush(p, principal, before, after) {
     const pushedBy = principal?.kind === 'agent' ? principal.agent : null;
     // A byline only counts for an agent of the person pushing, so nobody can
@@ -292,7 +344,8 @@ export class ProjectService {
       branches, commits: commits.slice(0, 50).map(({ sha, agent, verified, signer, authorName, message }) => ({ sha, agent, verified, signer, authorName: printable(authorName, 120), subject: printable(message.split('\n')[0], 120) })),
       agents: [...agents.keys()],
     };
-    // Who else worked on these branches lately? Two different agents' work meeting is "working together".
+    // Who else worked on these branches in the last 7 days? When two different
+    // agents' work meets on a branch, that counts as "working together".
     const recent = p.pushes.filter((x) => this.clock() - x.at < 7 * 86_400_000 && x.branches.some((b) => branches.includes(b))).flatMap((x) => x.agents);
     const together = [...new Set([...push.agents, ...recent])];
     this.store.tx((d) => {

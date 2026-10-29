@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Terminal prompts, including hidden input for passwords (raw mode, no echo).
+// Asks the user questions in the terminal for the CLI, such as "Password:" or a 6-digit code.
+// Passwords are read in raw mode (the program gets each key press itself) with no echo, so they never show.
 import readline from 'node:readline';
 
-// When stdin is piped (scripts, tests) share one line reader across prompts,
-// otherwise each readline interface would swallow the remaining buffered lines.
+// When stdin is piped (scripts, tests), all prompts share one line reader.
+// Otherwise each new readline reader would swallow the lines still waiting in the buffer.
 let piped = null;
 function nextPipedLine(input) {
   if (!piped) {
@@ -19,9 +20,9 @@ function nextPipedLine(input) {
 }
 
 /**
- * Read a secret from a terminal in raw mode: nothing is echoed, and nothing is redrawn, so Backspace cannot make
- * readline print what was typed. Backspace and Ctrl-U edit the buffer, arrow keys and other escape sequences are
- * ignored, Ctrl-C cancels, Enter ends.
+ * Read a secret from a terminal in raw mode. Nothing is echoed and nothing is redrawn, so Backspace cannot make
+ * readline print what was typed. Backspace and Ctrl-U edit what was typed. Arrow keys and other escape sequences
+ * (the multi-character codes a terminal sends for special keys) are ignored. Ctrl-C cancels, Enter ends.
  */
 function readHidden(question, input, output) {
   return new Promise((resolve, reject) => {
@@ -59,6 +60,10 @@ function readHidden(question, input, output) {
   });
 }
 
+/**
+ * Ask a question and return the trimmed answer. With `hidden`, typed keys are not shown (for passwords).
+ * Questions go to stderr by default, so stdout stays clean for output that scripts read.
+ */
 export async function ask(question, { hidden = false, input = process.stdin, output = process.stderr } = {}) {
   if (!input.isTTY) {
     output.write(question);

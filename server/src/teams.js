@@ -1,20 +1,24 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Teams: groups of users that own packages together.
+// Teams: groups of users that own packages together. Teams live in the store's `teams` collection,
+// keyed by their lowercase name, and each lists its members and their roles. Roles, highest first:
 //   owner      manage members and roles, delete the team, plus everything below
 //   maintainer publish, yank and transfer packages owned by the team
 //   member     read the team's private packages
 import { HttpError } from './errors.js';
 
-export const ROLES = ['member', 'maintainer', 'owner'];
+export const ROLES = ['member', 'maintainer', 'owner']; // lowest to highest
+// 2 to 32 characters: lowercase letters, digits, "-" or "_", starting with a letter or digit.
 const TEAM_RE = /^[a-z0-9][a-z0-9_-]{1,31}$/;
-const rank = (role) => ROLES.indexOf(role);
+const rank = (role) => ROLES.indexOf(role); // a bigger number is a higher role
 
+/** Team rules: who holds which role, and changes to members. */
 export class TeamService {
   constructor({ store, clock = Date.now }) {
     Object.assign(this, { store, clock });
   }
 
+  /** Find a team by name (not case sensitive), or throw a 404 error. */
   get(name) {
     const key = String(name).toLowerCase();
     const team = Object.hasOwn(this.store.data.teams, key) ? this.store.team(key) : null; // "constructor" is not a team
@@ -22,6 +26,7 @@ export class TeamService {
     return team;
   }
 
+  /** The user's role in the team, or null if they are not in it. */
   roleOf(team, user) {
     return user ? team.members[user.id]?.role ?? null : null;
   }
@@ -32,21 +37,24 @@ export class TeamService {
     return r !== null && rank(r) >= rank(role);
   }
 
+  /** Throw a 403 error unless `user` holds at least `role` in `team`. */
   require(team, user, role) {
     if (!this.has(team, user, role)) {
       throw new HttpError(403, 'team_forbidden', `You need to be ${role === 'owner' ? 'an owner' : `a ${role}`} of team "${team.name}" to do that.`);
     }
   }
 
-  /** The ids of a team's owners, who are told when its packages move. */
+  /** The ids of a team's owners, who get an audit row when its packages move. */
   ownerIds(team) {
     return Object.entries(team.members).filter(([, m]) => m.role === 'owner').map(([id]) => id);
   }
 
+  /** Every team the user belongs to, as summaries. */
   forUser(user) {
     return this.store.teams().filter((t) => t.members[user.id]).map((t) => this.summary(t, user));
   }
 
+  /** A short view of a team: counts of members and packages, and the user's own role. */
   summary(team, user) {
     return {
       name: team.name, description: team.description, createdAt: team.createdAt,
@@ -56,6 +64,7 @@ export class TeamService {
     };
   }
 
+  /** The full view of a team (members and package names). Only members may see it. */
   view(team, user) {
     this.require(team, user, 'member');
     const members = Object.entries(team.members).map(([id, m]) => ({
@@ -65,6 +74,10 @@ export class TeamService {
     return { ...this.summary(team, user), members, packageNames: packages };
   }
 
+  /**
+   * Create a team with `user` as its first owner. The name must be free among users, teams and agents,
+   * and must not be a name every JavaScript object already has (like "constructor").
+   */
   create(user, { name, description = '' }, ip) {
     name = String(name ?? '').trim().toLowerCase();
     if (!TEAM_RE.test(name) || name in Object.prototype) throw new HttpError(400, 'bad_team_name', 'Team names are 2-32 lowercase letters, digits, "-" or "_", and not a word every JavaScript object already has.');
@@ -82,7 +95,7 @@ export class TeamService {
     return team;
   }
 
-  /** Add a member or change their role (owners only). */
+  /** Add a member or change their role (owners only). Both the owner and the member get an audit row. */
   setMember(actor, teamName, username, role, ip) {
     const team = this.get(teamName);
     this.require(team, actor, 'owner');
@@ -117,11 +130,13 @@ export class TeamService {
     return { team: team.name, removed: target.username };
   }
 
+  /** Throw unless someone other than `leaving` is still an owner, so a team never ends up with no owner. */
   assertAnotherOwner(team, leaving) {
     const owners = Object.entries(team.members).filter(([id, m]) => m.role === 'owner' && id !== leaving.id);
     if (!owners.length) throw new HttpError(409, 'last_owner', `Team "${team.name}" must keep at least one owner. Promote someone else first.`);
   }
 
+  /** Delete a team (owners only). A team that still owns packages cannot be deleted. */
   delete(actor, teamName, ip) {
     const team = this.get(teamName);
     this.require(team, actor, 'owner');

@@ -1,13 +1,20 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Server-rendered HTML. Everything interpolated goes through esc().
+// The HTML for the browser pages in web.js, built on the server as text.
+// Everything put into a page goes through esc(), which turns characters like < and " into safe codes.
+// That stops XSS (a trick where someone's text is run as code in another person's browser).
+// esc: escape one value for use in HTML text or in a quoted attribute.
 export const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// raw marks text as already-safe HTML, so it is not escaped again. Use it only for HTML we built ourselves.
+// out turns one value into HTML: raw values as they are, arrays joined, everything else escaped.
+// h is a template tag: h`<p>${x}</p>` escapes every ${...} value unless it is raw or another h`` result.
 const raw = (s) => ({ __html: s });
 const out = (v) => (v && v.__html !== undefined ? v.__html : Array.isArray(v) ? v.map(out).join('') : esc(v));
 export const h = (strings, ...vals) => raw(strings.reduce((acc, s, i) => acc + s + (i < vals.length ? out(vals[i]) : ''), ''));
 export { raw };
 
+// A time as plain words, such as "5 minutes ago" or "in 2 hours".
 export const ago = (t) => {
   if (!t) return 'never';
   const s = Math.round((Date.now() - t) / 1000);
@@ -21,6 +28,8 @@ export const ago = (t) => {
 
 const bytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 
+// The page frame around every page: head, top bar (with a sign-out form when signed in), main, footer.
+// `body` should come from h``, because out() escapes plain strings.
 export function layout({ title, user, csrf, body, wide = false }) {
   return `<!doctype html>
 <html lang="en">
@@ -46,9 +55,11 @@ export function layout({ title, user, csrf, body, wide = false }) {
 </html>`;
 }
 
+// The hidden CSRF token field that every POST form must carry (see web.js).
 export const csrfField = (csrf) => h`<input type="hidden" name="_csrf" value="${csrf}">`;
 export const alert = (err, kind = 'error') => (err ? h`<div class="alert ${kind}" role="alert">${err}</div>` : '');
 
+// The front page for visitors who are not signed in.
 export const landing = () => h`
 <section class="hero">
   <h1>Your own package registry,<br><span class="accent">locked down by default.</span></h1>
@@ -63,6 +74,7 @@ export const landing = () => h`
   <div class="card"><h3>📦 Integrity-checked</h3><p>Every tarball is pinned by SHA-256, versions are immutable, and installs are verified before extraction.</p></div>
 </section>`;
 
+// Step 1 of sign-up: username, password and an optional email.
 export const registerPage = ({ csrf, error, username = '', email = '', emailConfirm = '' }) => h`
 <div class="auth-card">
   <ol class="steps"><li class="active">Account</li><li>Authenticator</li><li>Recovery codes</li></ol>
@@ -82,6 +94,8 @@ export const registerPage = ({ csrf, error, username = '', email = '', emailConf
   <p class="muted center">Already have an account? <a href="/login">Sign in</a></p>
 </div>`;
 
+// Step 2 of sign-up: the QR code to scan, the secret key in groups of four, and the code box.
+// qrSvg is put in as raw HTML; it comes from the QR code library, not from the user.
 export const setup2faPage = ({ csrf, error, qrSvg, secret, username, issuer }) => h`
 <div class="auth-card wide">
   <ol class="steps"><li class="done">Account</li><li class="active">Authenticator</li><li>Recovery codes</li></ol>
@@ -106,6 +120,7 @@ export const setup2faPage = ({ csrf, error, qrSvg, secret, username, issuer }) =
   </div>
 </div>`;
 
+// Step 3 of sign-up (or after making new codes): show the recovery codes once.
 export const recoveryCodesPage = ({ codes, fresh = true }) => h`
 <div class="auth-card">
   ${fresh ? h`<ol class="steps"><li class="done">Account</li><li class="done">Authenticator</li><li class="active">Recovery codes</li></ol>` : ''}
@@ -116,6 +131,7 @@ export const recoveryCodesPage = ({ codes, fresh = true }) => h`
   <a class="btn block" href="${fresh ? '/login?msg=activated' : '/account'}">I've saved them: continue</a>
 </div>`;
 
+// The sign-in form. `next` is where to go after sign-in; web.js checks it with safeNext.
 export const loginPage = ({ csrf, error, notice, username = '', next = '' }) => h`
 <div class="auth-card">
   <h1>Sign in</h1>
@@ -129,6 +145,7 @@ export const loginPage = ({ csrf, error, notice, username = '', next = '' }) => 
   <p class="muted center">New here? <a href="/register">Create an account</a></p>
 </div>`;
 
+// The form that asks for an authenticator code, used for sign-in and for step-up checks.
 export const codePage = ({ csrf, error, action, title, message, next = '', reason }) => h`
 <div class="auth-card">
   <div class="shield">🛡️</div>
@@ -144,6 +161,7 @@ export const codePage = ({ csrf, error, action, title, message, next = '', reaso
   <p class="muted center">Lost your phone? Enter one of your recovery codes instead.</p>
 </div>`;
 
+// The package list and search box.
 export const packagesPage = ({ q, results }) => h`
 <div class="page-head">
   <h1>Packages</h1>
@@ -158,7 +176,11 @@ ${results.map((p) => h`<a class="pkg card" href="/packages/${encodeURIComponent(
 </a>`)}
 </div>`;
 
-/** Tiny, safe Markdown subset for READMEs (escape first, then format). */
+/**
+ * A tiny, safe part of Markdown (a simple text format) for READMEs: headings, lists, code blocks,
+ * `code`, **bold** and [links](https://...). It escapes the text first and then adds the few tags,
+ * so README text can never add its own HTML. Links must start with http:// or https://.
+ */
 export function markdown(src) {
   const lines = String(src).replace(/\r/g, '').split('\n');
   let html = '', inCode = false, inList = false, para = [];
@@ -183,6 +205,8 @@ export function markdown(src) {
   return raw(html);
 }
 
+// One package: README, install command, owner, versions and their hashes, and the share card.
+// Note: the homepage link uses the manifest's text as is (escaped, but its URL scheme is not checked here).
 export const packagePage = ({ pkg, serverUrl, share }) => h`
 <div class="pkg-header">
   <div><h1>${pkg.name} <span class="badge big">${pkg.latest ? `v${pkg.latest}` : 'no release'}</span>${pkg.visibility === 'team' ? h`<span class="badge big lock">🔒 team only</span>` : ''}</h1><p class="lead">${pkg.description}</p></div>
@@ -215,6 +239,7 @@ export const packagePage = ({ pkg, serverUrl, share }) => h`
   </aside>
 </div>`;
 
+// Labels and help text for the three follow-up 2FA checks on the Account page.
 const CHECK_LABELS = {
   interval: ['Periodic re-verification', 'Ask for a code again on every browser and device at a regular interval.'],
   new_network: ['New network check', 'Ask for a code when a device token is used from a network it has not used before.'],
@@ -223,6 +248,8 @@ const CHECK_LABELS = {
 
 const hours = (ms) => (ms % 3600000 === 0 ? `${ms / 3600000} hours` : `${Math.round(ms / 60000)} minutes`);
 
+// The Account security page: 2FA check switches, email, recovery codes, devices and activity lists.
+// A check that an admin locked is shown disabled.
 export const accountPage = ({ csrf, user, email, checks, sessions, currentHash, activity, notice, error, recoveryLeft, mfaState }) => h`
 <div class="page-head"><h1>Account security</h1><span class="badge ok">2FA enabled</span></div>
 ${alert(notice, 'info')}${alert(error)}
@@ -282,7 +309,7 @@ ${activity.traffic.total ? activitySection('Recent package downloads', 'Installs
 
 const activityRow = (e) => h`<tr><td><code>${e.event}</code></td><td>${[e.package && (e.version ? `${e.package}@${e.version}` : e.package), e.to && `to ${e.to}`, e.team && `team ${e.team}`, e.by && `by ${e.by}`, e.name, e.method].filter(Boolean).join(' · ')}</td><td class="muted">${e.ip ?? ''}</td><td class="muted">${ago(e.at)}</td></tr>`;
 
-/** One audit list with Newer / Older links; `list.param` is the query parameter that holds its page number. */
+/** One audit list with Newer and Older links. `list.param` is the query parameter that holds its page number. */
 function activitySection(title, help, list, id) {
   const link = (page, text) => h`<a href="/account?${list.param}=${page}${id ? '#' + id : ''}">${text}</a>`;
   return h`<section class="card"${id ? raw(` id="${id}"`) : ''}>
@@ -295,6 +322,7 @@ function activitySection(title, help, list, id) {
 </section>`;
 }
 
+// A simple error page with the status number and message.
 export const errorPage = ({ status, message }) => h`<div class="auth-card"><h1>${status}</h1><p>${message}</p><a class="btn" href="/">Home</a></div>`;
 
 // ---- teams -------------------------------------------------------------------
@@ -304,6 +332,7 @@ const ROLE_HELP = {
   member: 'See and install the team’s private packages.',
 };
 
+// The list of the user's teams and the form to create one.
 export const teamsPage = ({ csrf, teams, error, notice, name = '', description = '' }) => h`
 <div class="page-head"><h1>Teams</h1></div>
 ${alert(notice, 'info')}${alert(error)}
@@ -330,6 +359,8 @@ ${alert(notice, 'info')}${alert(error)}
   </section>
 </div>`;
 
+// One team: its packages, the roles, and the members. Only owners see the forms to change members
+// or delete the team. Anyone can see a Leave button on their own row.
 export const teamPage = ({ csrf, team, me, packages, error, notice }) => {
   const isOwner = team.role === 'owner';
   return h`
@@ -383,6 +414,8 @@ ${isOwner ? h`<section class="card danger-zone">
 </section>` : ''}`;
 };
 
+// The card on a package page that moves it into a team or switches it between team-only and public.
+// web.js shows it only to people who can publish the package.
 export const shareCard = ({ csrf, pkg, teams }) => h`
 <div class="card">
   <h3>${pkg.team ? 'Team sharing' : 'Share with a team'}</h3>
@@ -398,8 +431,11 @@ export const shareCard = ({ csrf, pkg, teams }) => h`
 </div>`;
 
 // ---- billing ----------------------------------------------------------------------
+// A number with commas, or "unlimited" when there is no limit.
 const fmt = (n) => (n === null || n === undefined ? 'unlimited' : Number(n).toLocaleString('en-US'));
 
+// The billing page: the plan, this month's use against its limits, and buttons to pay or cancel.
+// Payment happens on Stripe's or PayPal's own pages.
 export const billingPage = ({ csrf, view, owners, error, notice }) => h`
 <div class="page-head">
   <h1>Billing</h1>

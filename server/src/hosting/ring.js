@@ -1,17 +1,26 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// The Gitcha ring: a webring of independent Gitcha instances. Each instance
-// publishes /.well-known/gitcha-ring.json describing itself (including any
-// paid features it offers) and lists the peers it links to. Peers come from
-// configuration or from announcements an admin has approved. Nothing a peer
-// says is trusted beyond being shown, escaped, as a link.
+// The Gitcha ring: a webring (a loop of sites that link to each other) of
+// independent Gitcha instances. Each instance publishes
+// /.well-known/gitcha-ring.json. That file describes the instance (including
+// any paid features it offers) and lists the peers it links to. Peers come from
+// configuration, or from announcements an admin has approved. Nothing a peer
+// says is trusted. It is only shown, escaped, as a link.
+// Store: data.ring.announcements (join requests by origin) and data.ring.peers
+// (what the last refresh learned about each member).
 import dns from 'node:dns';
 import net from 'node:net';
 import { HttpError } from '../errors.js';
 
 export const RING_PATH = '/.well-known/gitcha-ring.json';
+// A peer's manifest may be at most 64 KB.
 const MAX_MANIFEST = 64 * 1024;
 
+/**
+ * Turn a peer URL into its origin (scheme, host and port, like
+ * "https://example.com"). Only plain http(s) is allowed, with no username or
+ * password in the URL.
+ */
 export function normalizePeerUrl(url) {
   let u;
   try { u = new URL(String(url)); } catch { throw new HttpError(400, 'bad_url', `"${url}" is not a URL.`); }
@@ -19,7 +28,12 @@ export function normalizePeerUrl(url) {
   return u.origin;
 }
 
-/** An address nobody on the public internet can be at: loopback, private, link-local, shared, multicast, reserved. */
+/**
+ * Is this an address nobody on the public internet can be at? That covers
+ * loopback (this machine), private networks, link-local, shared, multicast and
+ * reserved ranges, for IPv4 and IPv6. Anything that is not a valid IP counts
+ * as private, to be safe. IPv4 addresses written inside IPv6 are checked as IPv4.
+ */
 export function privateAddress(ip) {
   const v4 = (a) => {
     const [x, y] = a.split('.').map(Number);
@@ -36,9 +50,10 @@ export function privateAddress(ip) {
   return low === '::' || low === '::1' || /^f[cd]/.test(low) || /^fe[89ab]/.test(low) || low.startsWith('ff');
 }
 
+// Keep a value only if it is a string, cut to n characters.
 function clean(s, n) { return typeof s === 'string' ? s.slice(0, n) : ''; }
 
-/** Keep only the fields we show, with sane types and lengths. */
+/** Keep only the fields we show, with sane types and lengths. The url is always the origin we asked, never what the peer claims. */
 export function sanitizeManifest(m, origin) {
   if (!m || typeof m !== 'object') throw new Error('manifest is not an object');
   const features = {};
@@ -50,13 +65,19 @@ export function sanitizeManifest(m, origin) {
   };
 }
 
+/**
+ * Builds this instance's manifest, keeps the member list, handles join
+ * requests, and refreshes what is known about members.
+ */
 export class RingService {
-  // `lookup` resolves a peer's name before we call it; it is off when a test supplies its own fetch.
+  // `lookup` turns a peer's name into IP addresses before we call it. It is off
+  // when a test supplies its own fetch.
   constructor({ store, config, version, features, clock = Date.now, fetchImpl = globalThis.fetch, lookup = fetchImpl === globalThis.fetch ? dns.promises.lookup : null }) {
     Object.assign(this, { store, config, version, features, clock, fetchImpl, lookup });
     this.self = new URL(config.publicUrl).origin;
   }
 
+  // The manifest this instance publishes at RING_PATH.
   manifest() {
     return {
       format: 'gitcha-ring', formatVersion: 1,
@@ -66,6 +87,7 @@ export class RingService {
     };
   }
 
+  // Configured peers plus approved announcements, without ourselves, sorted.
   memberUrls() {
     const approved = Object.values(this.store.data.ring.announcements).filter((a) => a.status === 'approved').map((a) => a.url);
     return [...new Set([...this.config.ring.peers.map((p) => { try { return normalizePeerUrl(p); } catch { return null; } }).filter(Boolean), ...approved])]
@@ -77,6 +99,7 @@ export class RingService {
     return [...new Set([this.self, ...this.memberUrls()])].sort();
   }
 
+  // The member `step` places away from us in the loop (1 is next, -1 is previous).
   neighbour(step) {
     const o = this.order();
     if (o.length < 2) return this.self;
@@ -84,15 +107,20 @@ export class RingService {
     return o[(i + step + o.length) % o.length];
   }
 
+  // A random member, or ourselves when the ring is empty.
   random(rand = Math.random) {
     const others = this.memberUrls();
     return others.length ? others[Math.floor(rand() * others.length)] : this.self;
   }
 
+  // Each member's URL with what the last refresh learned about it.
   members() {
     return this.memberUrls().map((url) => ({ url, ...(this.store.data.ring.peers[url] ?? {}), url }));
   }
 
+  // Fetch and clean a peer's manifest. It gives up after 8 seconds, refuses
+  // redirects (so a peer cannot send us somewhere else), and refuses manifests
+  // over MAX_MANIFEST.
   async fetchPeer(url) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 8000);
@@ -107,7 +135,7 @@ export class RingService {
     }
   }
 
-  /** Look at the members again on a schedule (config.ring.refresh), soon after start and then every interval. */
+  /** Look at the members again on a schedule (config.ring.refresh): once soon after start (within 10 seconds), then every interval. */
   startRefresh(every = this.config.ring.refresh) {
     if (this.timer || !(every > 0)) return;
     const go = () => this.refresh().catch((err) => console.error('ring refresh failed', err.message));
@@ -119,7 +147,12 @@ export class RingService {
 
   stop() { clearInterval(this.timer); clearTimeout(this.first); this.timer = this.first = null; }
 
-  /** A stranger asked for this address to be called: only a public one is (RING-2). */
+  /**
+   * A stranger asked us to call this address, so we only call public ones
+   * (RING-2). Otherwise someone could use the server to reach machines on its
+   * own private network. Names like "localhost" or ".local" are refused, and so
+   * is a name if any of its IP addresses is private.
+   */
   async assertPublic(origin) {
     const host = new URL(origin).hostname.replace(/^\[|\]$/g, '');
     if (net.isIP(host)) { if (privateAddress(host)) throw new Error('not public'); return; }
@@ -129,13 +162,15 @@ export class RingService {
     if (!found.length || found.some((a) => privateAddress(a.address))) throw new Error('not public');
   }
 
-  /** Refresh what we know about each member. Failures are recorded, not thrown. */
+  /** Refresh what we know about each member. Failures are recorded, not thrown. If a refresh is already running, this returns that one. */
   async refresh() {
     if (this.refreshing) return this.refreshing;
     this.refreshing = this.refreshAll().finally(() => { this.refreshing = null; });
     return this.refreshing;
   }
 
+  // Fetch every member in turn and replace data.ring.peers with the results.
+  // A failed member keeps its old details, marked ok: false with the error.
   async refreshAll() {
     const results = {};
     for (const url of this.memberUrls()) {
@@ -149,7 +184,11 @@ export class RingService {
     return results;
   }
 
-  /** Another instance asks to be listed. An admin approves it before it appears. */
+  /**
+   * Another instance asks to be listed. An admin approves it before it appears.
+   * At most 200 requests may wait at once. The server must be able to fetch
+   * the instance's manifest from a public address.
+   */
   async announce(url, ip) {
     const origin = normalizePeerUrl(url);
     if (origin === this.self) throw new HttpError(400, 'self', 'That is this instance.');
@@ -158,7 +197,8 @@ export class RingService {
     if (Object.values(this.store.data.ring.announcements).filter((a) => a.status === 'pending').length >= 200) {
       throw new HttpError(429, 'ring_busy', 'Too many pending ring requests; try later.');
     }
-    // One answer for every way this can fail, so nobody learns what is behind an address by asking.
+    // The same answer for every way this can fail, so nobody learns what is
+    // behind an address by asking.
     const refused = new HttpError(400, 'ring_unreachable', `${origin} did not answer with a Gitcha ring manifest.`);
     let info;
     try { await this.assertPublic(origin); info = await this.fetchPeer(origin); } catch { throw refused; }
@@ -168,6 +208,7 @@ export class RingService {
     return { url: origin, status: 'pending' };
   }
 
+  // An admin approves or declines a join request.
   decide(admin, url, approve, ip) {
     if (admin.role !== 'admin') throw new HttpError(403, 'admin_only', 'Only an administrator can manage the ring.');
     const origin = normalizePeerUrl(url);
@@ -179,6 +220,7 @@ export class RingService {
     return { url: origin, status: approve ? 'approved' : 'declined' };
   }
 
+  // Join requests that still wait for an admin.
   pending() {
     return Object.values(this.store.data.ring.announcements).filter((a) => a.status === 'pending');
   }

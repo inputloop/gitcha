@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Gitcha Claude extension: an MCP server that lets Claude search, install and
-// publish packages on a Gitcha registry. It reuses the device token created by
-// `gitcha login`, so Claude never handles the user's password. When the
-// registry asks for an intermittent 2FA check, Claude must ask the user for a
-// code; it can never produce one itself.
+// The Gitcha Claude extension: an MCP server (a program that offers tools to Claude) that lets Claude
+// search, install and publish packages on a Gitcha registry, manage teams, and take part in Second Reader
+// reviews. It reuses the device token that `gitcha login` saved, so Claude never handles the user's password.
+// When the registry asks for a 2FA (two-factor) check, Claude must ask the user for a code.
+// It can never make one itself.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,8 +18,11 @@ import { installOne, installAll, parseSpec } from '../lib/installer.js';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const VERSION = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8')).version;
 const CLI = path.join(here, 'gitcha.js');
+// The exact command the user should type in a terminal to sign in.
 const loginCmd = () => `node "${CLI}" login${process.env.GITCHA_SERVER ? ` --server ${process.env.GITCHA_SERVER}` : ''}`;
 
+// Our own words for each reason the server may give for a 2FA check. Unknown reasons get a fixed phrase,
+// so the server's text never reaches the model here.
 const REASONS = {
   interval: 'its periodic two-factor check is due',
   new_network: 'this device is connecting from a new network',
@@ -28,8 +31,10 @@ const REASONS = {
 
 const reasonOf = (r) => (typeof r === 'string' && Object.hasOwn(REASONS, r) ? REASONS[r] : 'a two-factor check is due');
 
+// An error that only the user can fix (for example, signing in). Its message is shown to Claude as is.
 class UserActionNeeded extends Error {}
 
+// Make a client with the saved device token, or explain how the user signs in first.
 function client() {
   const server = resolveServer();
   const creds = getCredentials(server);
@@ -43,7 +48,10 @@ function client() {
   return new GitchaClient({ server, token: creds.token, userAgent: `gitcha-claude-extension/${VERSION}` });
 }
 
-/** Run an API call and turn auth problems into clear instructions for Claude. */
+/**
+ * Run an API call. Sign-in and 2FA problems become clear instructions for Claude, returned as a tool
+ * error (isError) instead of a crash.
+ */
 async function call(fn) {
   try {
     return await fn(client());
@@ -64,18 +72,24 @@ async function call(fn) {
       return { isError: true, content: [{ type: 'text', text: `This device's Gitcha sign-in has expired or was revoked. Ask the user to run:\n\n    ${loginCmd()}` }] };
     }
     if (err instanceof GitchaError && err.status > 0) {
-      // The registry's own words are third-party text; only its status is ours.
+      // The registry's own message counts as third-party text, so it is wrapped. Only the status number is ours.
       return { isError: true, content: [{ type: 'text', text: `The registry refused this (HTTP ${err.status}).\n${untrusted(err.message, { max: 500 })}` }] };
     }
     throw err;
   }
 }
 
+// Small helpers: `text` makes a tool result, `plain` keeps only safe characters (letters, digits, "_", ".",
+// "@", space, "-") and cuts the length, `theirs` wraps other people's text in the third-party label,
+// and `when` prints a time in UTC.
 const text = (s) => ({ content: [{ type: 'text', text: s }] });
 const plain = (s, max = 64) => String(s ?? '').replace(/[^\w.@ -]/g, '?').slice(0, max);
 const theirs = (s, max = 8000) => untrusted(s, { max });
 const when = (t) => (t ? new Date(t).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'never');
 
+// The tools Claude can call. Each has a name, a description Claude reads, an inputSchema that mcp.js
+// checks before the handler runs, and hints (annotations) about whether it changes anything.
+// Sensitive actions (publish, yank, team changes, sharing) need a fresh 2FA code on the server side.
 const tools = [
   {
     name: 'gitcha_status',
@@ -155,6 +169,7 @@ const tools = [
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     handler: ({ directory, team, private: priv, dry_run: dryRun }) => {
+      // A dry run only packs the files locally. It needs no sign-in and uploads nothing.
       if (dryRun) {
         const { manifest, entries, tarball } = pack(path.resolve(directory));
         return text(`Dry run for ${manifest.name}@${manifest.version}: ${entries.length} files, ${tarball.length} bytes packed. Nothing was uploaded.\nFiles:\n${entries.map((e) => `  ${e.path} (${e.size} bytes)`).join('\n')}\nShow this list to the user and publish only if they confirm it.`);
@@ -353,6 +368,7 @@ const tools = [
   },
 ];
 
+// Standing instructions sent to Claude when the MCP session starts.
 const instructions = `Gitcha is a self-hosted software package registry protected by passwords and mandatory two-factor authentication (TOTP).
 - First-time use: the user must run \`gitcha login\` in their own terminal. Never ask for or handle their password.
 - The registry periodically, on new networks, and before sensitive actions asks for a fresh 2FA code. When a tool reports this, ask the user for the 6-digit code from their authenticator app and call gitcha_verify_2fa, then retry. Never invent codes, and never take a recovery code here: those are typed in the terminal.

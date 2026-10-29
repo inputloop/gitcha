@@ -1,24 +1,30 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Operations: tickets and changes, for the people who run this instance
-// (C4OK is meant to be their kiosk) and for everyone they serve.
+// Operations: tickets and changes. They are for the people who run this
+// instance (C4OK is meant to be their kiosk, a staff screen) and for everyone
+// they serve. A ticket is a report or request. A change is a planned change to
+// the live system.
 //
-// Tickets have a scope:
+// Tickets have a scope (who may see them):
 //   user      anyone with an account: feedback, questions, bugs. Seen by the reporter and staff.
 //   tenant    a paying account (a person, or a team as a whole): seen by its members and staff.
 //   internal  staff only.
 // Staff can add internal notes to any ticket; only staff see them.
 //
-// Changes (to the live system) are staff-only and move through
+// Changes are staff-only and move through these steps:
 //   draft -> submitted -> approved -> scheduled -> in_progress -> done | failed | rolled_back
-// with rejected and cancelled as exits. Each approval or rejection carries a 2FA code of
-// its own (a code typed earlier does not count); nobody approves their own change;
-// high-risk changes need two approvals. An approval covers the change as it read when it
-// was given (a hash of its title, summary, risk, systems, plan, rollback and window):
-// editing it, or sending it back to draft, sets the approvals aside, with an event.
+// Rejected and cancelled are the ways out. Each approval or rejection must
+// carry its own 2FA code (a code typed earlier does not count). Nobody
+// approves their own change. High-risk changes need two approvals.
+// An approval covers the change as it read when the approval was given. The
+// server keeps a hash (a fingerprint) of its title, summary, risk, systems,
+// plan, rollback and window. Editing the change, or sending it back to draft,
+// sets the approvals aside and records an event.
 //
-// Filing is limited: an account that is not staff may file TICKETS_PER_DAY tickets in 24
-// hours (a conservative default; the keepers can raise it with config.ops.ticketsPerDay).
+// Filing is limited: an account that is not staff may file TICKETS_PER_DAY
+// tickets (10) in 24 hours. That is a careful default; the keepers can raise
+// it with config.ops.ticketsPerDay.
+// Store: data.ops holds tickets, changes, and the counters for their ids (T-0001, C-0001).
 import { HttpError } from '../errors.js';
 import { sha256 } from '../crypto.js';
 
@@ -26,9 +32,12 @@ const SCOPES = ['user', 'tenant', 'internal'];
 const KINDS = ['bug', 'feedback', 'question', 'request', 'incident'];
 const STATUSES = ['new', 'triaged', 'in_progress', 'waiting', 'resolved', 'closed'];
 const PRIORITIES = ['low', 'normal', 'high', 'urgent'];
+// How many approvals each risk level needs.
 const RISKS = { low: 1, medium: 1, high: 2 };
 const TICKETS_PER_DAY = 10;
 const DAY = 86_400_000;
+// For each change status, the statuses it may move to next. A status that is
+// not listed (done, rolled_back, rejected, cancelled) is final.
 const CHANGE_FLOW = {
   draft: ['submitted', 'cancelled'],
   submitted: ['approved', 'rejected', 'draft', 'cancelled'],
@@ -38,14 +47,20 @@ const CHANGE_FLOW = {
   failed: ['rolled_back', 'in_progress'],
 };
 
+// Admins count as staff.
 export const isStaff = (user) => user && (user.role === 'admin' || user.role === 'staff');
 
-// A record by an id the caller typed: only the table's own entries, never something every object has (GQL-4).
+// Look up a record by an id the caller typed. It returns only the table's own
+// entries, never something every object has, like "constructor" (GQL-4).
 const own = (table, id) => (Object.hasOwn(table, id) ? table[id] : undefined);
 
-/** What an approval covers: everything a reader of the change relies on (OPS-1). */
+/** The hash an approval covers: everything a reader of the change relies on (OPS-1). */
 export const changeHash = (c) => sha256(JSON.stringify([c.title, c.summary, c.risk, c.systems, c.plan, c.rollback, c.window?.start ?? null, c.window?.end ?? null]));
 
+/**
+ * Files and updates tickets, runs changes through their approval flow, and
+ * builds the kiosk's summary.
+ */
 export class OpsService {
   constructor({ store, config, teams, billing, jobs, sites, ring, clock = Date.now }) {
     Object.assign(this, { store, teams, billing, jobs, sites, ring, clock });
@@ -53,13 +68,17 @@ export class OpsService {
     store.data.ops ??= { tickets: {}, changes: {}, seq: { ticket: 0, change: 0 } };
   }
 
+  // Shortcut to the ops part of the store.
   get d() { return this.store.data.ops; }
 
+  // Throw 403 unless the user is staff.
   staff(user) {
     if (!isStaff(user)) throw new HttpError(403, 'staff_only', 'Only staff can do this.');
     return user;
   }
 
+  // An admin sets a user's role (user, staff or admin). An admin cannot lower
+  // their own role, so the instance is never left without one by mistake.
   setRole(admin, username, role, ip) {
     if (admin.role !== 'admin') throw new HttpError(403, 'admin_only', 'Only an administrator assigns roles.');
     if (!['user', 'staff', 'admin'].includes(role)) throw new HttpError(400, 'bad_role', 'Role is user, staff or admin.');
@@ -84,6 +103,8 @@ export class OpsService {
     return Boolean(t && this.teams.has(t, user, 'member'));
   }
 
+  // Who may see a ticket: staff always; for tenant tickets, the tenant's
+  // members; for user tickets, the reporter. Internal tickets are staff only.
   canSee(user, t) {
     if (isStaff(user)) return true;
     if (t.scope === 'internal') return false;
@@ -91,6 +112,9 @@ export class OpsService {
     return t.reporter === `user:${user.username}`;
   }
 
+  // File a new ticket after checking its fields, the filer's right to the
+  // scope, and the daily limit. The title must be 5 to 200 characters; the
+  // body is cut to 20,000.
   file(user, { scope = 'user', kind = 'feedback', title, body, priority = 'normal', tenant, links, via }) {
     if (!SCOPES.includes(scope)) throw new HttpError(400, 'bad_scope', `Scope is ${SCOPES.join(', ')}.`);
     if (!KINDS.includes(kind)) throw new HttpError(400, 'bad_kind', `Kind is ${KINDS.join(', ')}.`);
@@ -100,13 +124,15 @@ export class OpsService {
     if (scope !== 'tenant') tenant = null;
     title = String(title ?? '').trim();
     if (title.length < 5 || title.length > 200) throw new HttpError(400, 'bad_title', 'Give the ticket a title of 5-200 characters.');
-    // OPS-3: every ticket is a rewrite of the whole store, so one account cannot file without limit.
+    // OPS-3: every ticket means the whole store is written again, so one account
+    // cannot file without limit.
     if (!isStaff(user)) {
       const since = this.clock() - DAY;
       const filed = Object.values(this.d.tickets).filter((t) => t.reporter === `user:${user.username}` && t.createdAt > since).length;
       if (filed >= this.ticketsPerDay) throw new HttpError(429, 'ticket_limit', `You have filed ${filed} tickets in the last day; the limit is ${this.ticketsPerDay}. Add to an open ticket, or try again tomorrow.`);
     }
-    // Only staff may raise urgency above normal on someone's behalf; anyone can say it is urgent for them.
+    // Only staff may raise urgency above normal on someone else's behalf;
+    // anyone can say it is urgent for them.
     const id = `T-${String(++this.d.seq.ticket).padStart(4, '0')}`;
     const now = this.clock();
     const t = {
@@ -118,16 +144,19 @@ export class OpsService {
     return t;
   }
 
+  // One ticket the user may see, or 404 (so hidden tickets look the same as missing ones).
   ticket(user, id) {
     const t = own(this.d.tickets, id);
     if (!t || !this.canSee(user, t)) throw new HttpError(404, 'ticket_not_found', 'No such ticket.');
     return t;
   }
 
+  // A ticket as this user may see it: internal comments and notes are removed for non-staff.
   view(user, t) {
     return { ...t, comments: t.comments.filter((c) => !c.internal || isStaff(user)), events: isStaff(user) ? t.events : t.events.filter((e) => e.type !== 'internal_note') };
   }
 
+  // Add a comment. Only staff may add internal ones.
   comment(user, id, { body, internal = false, via }) {
     const t = this.ticket(user, id);
     if (internal) this.staff(user);
@@ -143,6 +172,8 @@ export class OpsService {
     return this.ticket(user, t.id);
   }
 
+  // Staff change a ticket's status, priority, assignee (must be staff) or scope.
+  // Each update is recorded as an event.
   update(user, id, { status, priority, assignee, scope, via }) {
     this.staff(user);
     const t = this.ticket(user, id);
@@ -162,6 +193,8 @@ export class OpsService {
     return this.ticket(user, t.id);
   }
 
+  // List tickets the user may see, most urgent first, then most recently
+  // updated. At most 500.
   tickets(user, { scope, status, tenant, mine, limit = 100 } = {}) {
     return Object.values(this.d.tickets)
       .filter((t) => this.canSee(user, t))
@@ -172,6 +205,8 @@ export class OpsService {
   }
 
   // ---- changes ----------------------------------------------------------------------------------
+  // Staff write a new change as a draft. Linked tickets must exist. The
+  // approvals it needs come from its risk level.
   createChange(user, { title, summary, risk = 'medium', systems = [], plan = '', rollback = '', tickets = [], windowStart, windowEnd, via }) {
     this.staff(user);
     if (!RISKS[risk]) throw new HttpError(400, 'bad_risk', 'Risk is low, medium or high.');
@@ -190,6 +225,7 @@ export class OpsService {
     return c;
   }
 
+  // One change, for staff only.
   change(user, id) {
     this.staff(user);
     const c = own(this.d.changes, id);
@@ -197,13 +233,13 @@ export class OpsService {
     return c;
   }
 
-  /** Approvals that cover the change as it reads now (OPS-1). */
+  /** The approvals that cover the change as it reads now: same hash and same risk (OPS-1). */
   liveApprovals(c) {
     const hash = changeHash(c);
     return c.approvals.filter((a) => a.hash === hash && a.risk === c.risk);
   }
 
-  /** Inside a transaction: set aside the approvals that no longer cover `x` (or all of them), and say so. */
+  /** Use inside a transaction: set aside the approvals that no longer cover `x` (or all of them), and record an event. */
   voidApprovals(x, by, reason, { all = false } = {}) {
     const live = all ? [] : this.liveApprovals(x);
     const stale = x.approvals.filter((a) => !live.includes(a));
@@ -214,8 +250,10 @@ export class OpsService {
   }
 
   /**
-   * Move a change along its flow. `fresh` is true only when this very call carried a code that
-   * checked out; an approval or rejection is refused without it (OPS-2).
+   * Move a change along its flow. `fresh` is true only when this very call
+   * carried a 2FA code that checked out. An approval or rejection is refused
+   * without it (OPS-2). The author may never approve or reject their own change.
+   * Writing a plan and a rollback is required before submitting.
    */
   advance(user, id, to, { note, fresh = false, via } = {}) {
     const c = this.change(user, id);
@@ -234,7 +272,8 @@ export class OpsService {
     }
     this.store.tx((d) => {
       const x = d.ops.changes[id];
-      // Sent back to draft, nothing approved survives; otherwise only what no longer matches goes.
+      // When the change goes back to draft, no approval survives. Otherwise only
+      // the approvals that no longer match are set aside.
       this.voidApprovals(x, user.username, to === 'draft' ? 'sent_back' : 'changed', { all: to === 'draft' });
       if (to === 'approved') x.approvals.push({ by: user.username, at: this.clock(), note: note ?? null, hash: changeHash(x), risk: x.risk });
       x.events.push({ at: this.clock(), by: user.username, type: to, from: c.status, note: note ?? null, via: via ?? null });
@@ -244,6 +283,7 @@ export class OpsService {
     return this.d.changes[id];
   }
 
+  // Only the author may edit, and only while the change is a draft.
   editChange(user, id, patch) {
     const c = this.change(user, id);
     if (c.status !== 'draft') throw new HttpError(409, 'not_draft', 'Only a draft can be edited; send it back to draft first.');
@@ -259,12 +299,15 @@ export class OpsService {
     return this.d.changes[id];
   }
 
+  // All changes for staff, most recently updated first.
   changes(user, { status } = {}) {
     this.staff(user);
     return Object.values(this.d.changes).filter((c) => !status || c.status === status).sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
   // ---- the kiosk's front page -------------------------------------------------------------------
+  // Counts for the staff screen: open tickets, changes waiting for approval,
+  // runners online (seen in the last 90 seconds), jobs, sites, billing, the ring and users.
   summary(user) {
     this.staff(user);
     const tickets = Object.values(this.d.tickets);

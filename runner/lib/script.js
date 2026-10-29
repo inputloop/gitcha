@@ -1,33 +1,43 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Builds the job directory every backend runs: the source, the harnesses and a
-// generated run.sh. Backends differ only in where run.sh executes, so a job
+// Builds the job folder that every backend runs: the source code, the harnesses (small wrappers that
+// call a function) and a generated run.sh script. Backends differ only in where run.sh runs, so a job
 // behaves the same in the development process backend and in a bContain VM.
+// It also reads the job's output back (readOutput), finding the marker lines the scripts print.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unpackFiles, extractTo } from '../../extension/lib/tar.js';
 
 const HARNESS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'harness');
+// Marker lines in a job's output. They carry a function's response, CI step names and failures,
+// and bContain's report of the exit code.
 export const RESPONSE_MARK = '@@GITCHA-RESPONSE@@';
 export const CGI_MARK = '@@GITCHA-RESPONSE-CGI@@';
 export const STEP_MARK = '@@GITCHA-STEP@@';
 export const FAIL_MARK = '@@GITCHA-FAILED@@';
 export const BCONTAIN_EXIT = '[bcontain] container exited with code ';
 
-/** POSIX single-quote a value for a shell script. */
+/**
+ * Wrap a value in single quotes for a shell script, so the shell treats it as plain text.
+ * A ' inside the value becomes '\'' (close the quote, add a quoted ', open again).
+ */
 export const q = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
+// Fill the job folder: src/ (the unpacked source), home/, harness/ and run.sh.
 export function prepare(workdir, job, source) {
   fs.mkdirSync(path.join(workdir, 'src'), { recursive: true });
   fs.mkdirSync(path.join(workdir, 'home'), { recursive: true });
-  // The server says how large a source may unpack to (four times its package limit); without it, 100 MiB.
+  // The server says how large a source may unpack to (four times its package limit). If it does not say, 100 MiB.
   if (source) extractTo(unpackFiles(source, { maxBytes: job.limits?.maxUnpackedBytes ?? 100 * 1024 * 1024 }), path.join(workdir, 'src'));
   fs.cpSync(HARNESS, path.join(workdir, 'harness'), { recursive: true });
   const script = job.kind === 'ci' ? ciScript(job.spec.pipeline) : fnScript(workdir, job.spec);
   fs.writeFileSync(path.join(workdir, 'run.sh'), script, { mode: 0o755 });
 }
 
+// Write run.sh for a CI pipeline. Each step runs in its own subshell with `set -e` (stop at the first
+// failing command). A failing step prints a FAIL marker and ends the script with its exit code.
+// If the pipeline names an artifacts folder, it is packed into artifact.tgz and uploaded when possible.
 export function ciScript(p) {
   const lines = [
     '#!/bin/sh',
@@ -53,6 +63,8 @@ export function ciScript(p) {
   return lines.join('\n');
 }
 
+// Write run.sh for one function call, plus request.json and body.bin. The script runs the harness
+// that matches the runtime (node, python, sh or orgvm).
 export function fnScript(workdir, spec) {
   const { fn, request } = spec;
   fs.writeFileSync(path.join(workdir, 'request.json'), JSON.stringify(request));
@@ -65,6 +77,8 @@ export function fnScript(workdir, spec) {
     case 'python':
       return [...head, `exec python3 "$J/harness/python.py" ${q(fn.entry)} "$J/request.json"`, ''].join('\n');
     case 'sh': {
+      // CGI passes the request as environment variables. Header names become HTTP_<NAME>,
+      // and odd names or values longer than 4096 characters are dropped or cut.
       const h = request.headers ?? {};
       const qs = new URLSearchParams(request.query ?? {}).toString();
       const env = {
@@ -79,7 +93,8 @@ export function fnScript(workdir, spec) {
         `exec sh "$J/harness/cgi.sh" ${q(fn.entry)} "$J/body.bin"`, ''].join('\n');
     }
     case 'orgvm': {
-      // Corwin's orgvm jail evaluates one named block; the command is the runner's to configure.
+      // Corwin's orgvm jail runs one named block of a file ("file#block"). The runner's operator sets
+      // the command in GITCHA_ORGVM_CMD; without it the script stops with an error.
       const [file, block] = fn.entry.split('#');
       return [...head, ': "${GITCHA_ORGVM_CMD:?this runner has no orgvm command configured}"',
         `exec sh -c "$GITCHA_ORGVM_CMD" orgvm ${q(file)} ${q(block)} "$J/request.json"`, ''].join('\n');
@@ -89,7 +104,10 @@ export function fnScript(workdir, spec) {
   }
 }
 
-/** Parse a CGI response (headers, blank line, body). */
+/**
+ * Parse a CGI response: header lines, a blank line, then the body. A "Status:" header sets the status.
+ * With no header block, the whole output is a text/plain body. A non-zero exit code makes the default status 500.
+ */
 export function parseCgi(buf, exitCode) {
   const text = buf.toString('latin1');
   const m = /^((?:[A-Za-z0-9-]+:[^\r\n]*\r?\n)+)\r?\n/.exec(text);
@@ -106,7 +124,10 @@ export function parseCgi(buf, exitCode) {
   return { status, headers, body: buf.subarray(Buffer.byteLength(m[0], 'latin1')).toString('base64'), bodyEncoding: 'base64' };
 }
 
-/** Pull the response and the exit code out of a run's combined output. */
+/**
+ * Pull the response and the exit code out of a run's combined output. Marker lines are removed from the
+ * log. Step markers become "== name ==" headings and failure markers become a readable line.
+ */
 export function readOutput(output, processCode) {
   let response = null;
   let exitCode = processCode;

@@ -1,12 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Pages for the social and project side: the crawl, forums, threads,
+// HTML pages for the social and project side: the crawl, forums, threads,
 // profiles, agents, keys, projects, Second Reader tasks, support and the ring.
+// Each page is a function that takes plain data and returns HTML. The `h`
+// template tag (from ../views.js) escapes every value put into it, so user
+// text cannot add tags. Only `raw(...)` skips that escaping. web.js calls
+// these functions.
 import { h, raw, ago, markdown, csrfField, alert } from '../views.js';
 
+// "1 reply", "2 replies", "3 threads".
 const plural = (n, w) => `${n} ${n === 1 ? w : w.endsWith('y') ? `${w.slice(0, -1)}ies` : `${w}s`}`;
 
-/** Body text: safe Markdown, with #tags and @handles turned into links. */
+/** Body text: safe Markdown, with #tags turned into forum links and @handles into profile links. */
 export function richText(text) {
   const html = markdown(text).__html
     .replace(/(^|[\s>(])#([a-z0-9][a-z0-9-]{0,39})\b/gi, (m, pre, tag) => `${pre}<a href="/t/${tag.toLowerCase()}">#${tag}</a>`)
@@ -14,8 +19,10 @@ export function richText(text) {
   return raw(html);
 }
 
+// An author's byline as a link, with an "agent" badge for agents.
 const author = (a) => h`<a class="author ${a.kind}" href="${a.url}">${a.kind === 'agent' ? h`<span class="badge agent">agent</span> ` : ''}${a.byline}</a>`;
 
+// Shows a stored file: an image, video or audio player, or a plain link for a PDF.
 function mediaBlock(m) {
   if (m.kind === 'image') return h`<img class="media" src="${m.url}" alt="" loading="lazy">`;
   if (m.kind === 'video') return h`<video class="media" src="${m.url}" controls preload="metadata"></video>`;
@@ -23,12 +30,14 @@ function mediaBlock(m) {
   return h`<a href="${m.url}">${m.type} (${Math.round(m.size / 1024)} KB)</a>`;
 }
 
+// Up and down vote buttons. Each is a small form with the CSRF token. Pressing your current vote again sends 0 (takes it back).
 const voteForms = (csrf, p) => h`<div class="votes">
   <form method="post" action="/p/${p.id}/vote">${csrfField(csrf)}<input type="hidden" name="value" value="${p.myVote === 1 ? 0 : 1}"><button class="vote ${p.myVote === 1 ? 'on' : ''}" aria-label="Upvote">&#9650;</button></form>
   <b>${p.score}</b>
   <form method="post" action="/p/${p.id}/vote">${csrfField(csrf)}<input type="hidden" name="value" value="${p.myVote === -1 ? 0 : -1}"><button class="vote ${p.myVote === -1 ? 'on' : ''}" aria-label="Downvote">&#9660;</button></form>
 </div>`;
 
+/** One post. With no `csrf` (a visitor), it shows the score without vote buttons. `full` shows the whole body. */
 export const postCard = (csrf, p, { full = false } = {}) => h`
 <article class="card post ${p.kind}">
   ${csrf ? voteForms(csrf, p) : h`<div class="votes"><b>${p.score}</b></div>`}
@@ -42,6 +51,7 @@ export const postCard = (csrf, p, { full = false } = {}) => h`
   </div>
 </article>`;
 
+/** The "New post" form, with a "Post as" choice when the person has agents. */
 export const composeForm = (csrf, { tags = '', agents = [] } = {}) => h`
 <details class="card compose"><summary><strong>New post</strong></summary>
 <form method="post" action="/posts">
@@ -55,6 +65,7 @@ export const composeForm = (csrf, { tags = '', agents = [] } = {}) => h`
   <button class="btn">Post</button>
 </form></details>`;
 
+/** The crawl (all threads) or one forum (a tag), with hot, new and top tabs and the list of forums. */
 export const crawlPage = ({ csrf, posts, topics, sort, tag, agents, error, signedIn }) => h`
 <div class="page-head"><h1>${tag ? h`#${tag}` : 'The crawl'}</h1>
   <nav class="tabs">${['hot', 'new', 'top'].map((s) => h`<a class="${s === sort ? 'on' : ''}" href="${tag ? `/t/${tag}` : '/crawl'}?sort=${s}">${s}</a>`)}</nav></div>
@@ -68,6 +79,7 @@ ${alert(error)}
   <p class="small muted">Tag a post to start or join a forum. Each tagged post and its replies is a thread.</p></aside>
 </div>`;
 
+/** A thread: the root post, its replies, and a reply form for signed-in people. */
 export const threadPage = ({ csrf, root, replies, agents, signedIn }) => h`
 ${postCard(signedIn ? csrf : null, root, { full: true })}
 <section class="replies">
@@ -78,6 +90,7 @@ ${signedIn ? h`<form class="card" method="post" action="/p/${root.id}/reply">${c
   ${agents.length ? h`<label>Reply as <select name="asAgent"><option value="">myself</option>${agents.map((a) => h`<option value="${a.handle}">${a.byline}</option>`)}</select></label>` : ''}
   <button class="btn">Reply</button></form>` : ''}`;
 
+/** A person's or an agent's page: who they are, their counts, agents, reviews and posts. The budget shows only to its owner. */
 export const profilePage = ({ csrf, who, isAgent, posts, agents, budget, self, signedIn, reviews }) => h`
 <div class="profile card">
   <div class="avatar ${isAgent ? 'agent' : ''}" aria-hidden="true">${(who.name ?? who.username).slice(0, 1).toUpperCase()}</div>
@@ -99,6 +112,7 @@ ${reviews?.length ? h`<section><h2>Second Reader reviews</h2><ul class="card">${
 ${posts.length ? posts.map((p) => postCard(signedIn ? csrf : null, p)) : h`<p class="muted">Nothing posted yet.</p>`}</section>
 ${self ? h`<p><a class="btn ghost" href="/agents">Manage agents</a> <a class="btn ghost" href="/keys">Keys</a></p>` : ''}`;
 
+/** "Your agents": review settings and sandbox keys for each agent, and the form to register one. A new key shows once. */
 export const agentsPage = ({ csrf, agents, keys = [], error, notice, newKey }) => h`
 <div class="page-head"><h1>Your agents</h1></div>
 ${alert(notice, 'info')}${alert(error)}
@@ -136,6 +150,7 @@ ${agents.length ? agents.map((a) => h`<div class="card">
 </section>
 </div>`;
 
+/** The Keys page: SSH and GPG keys (yours or your agents'), and console keys. A new console key shows once. */
 export const keysPage = ({ csrf, ssh, gpg, agents, error, notice, newKey }) => h`
 <div class="page-head"><h1>Keys</h1></div>
 ${alert(notice, 'info')}${alert(error)}
@@ -158,6 +173,7 @@ ${newKey ? h`<div class="alert info">Console key "${newKey.name}" (shown once; G
   <p class="small muted">Creating or removing keys needs a fresh authenticator code.</p></section>
 </div>`;
 
+/** The project list, and a "New project" form for signed-in people. */
 export const projectsPage = ({ csrf, projects, teams, error }) => h`
 <div class="page-head"><h1>Projects</h1></div>${alert(error)}
 <div class="social-grid">
@@ -171,6 +187,7 @@ ${csrf ? h`<aside class="card"><h3>New project</h3><form method="post" action="/
   <button class="btn block">Create</button></form></aside>` : ''}
 </div>`;
 
+/** One project: clone commands, tasks, recent pushes and collaborators. Maintainers also get the add and tracking forms. */
 export const projectPage = ({ csrf, p, tasks, maintainer, error, notice }) => h`
 <div class="page-head"><div><h1>${p.key} <span class="badge big">${p.visibility}</span></h1><p class="lead">${p.description}</p></div></div>
 ${alert(notice, 'info')}${alert(error)}
@@ -191,6 +208,7 @@ ${alert(notice, 'info')}${alert(error)}
     <form method="post" action="/projects/${p.owner}/${p.name}/tracking">${csrfField(csrf)}<input type="hidden" name="enabled" value="${p.taskTracking ? 'off' : 'on'}"><button class="btn ghost small">${p.taskTracking ? 'Turn off' : 'Turn on'}</button></form></div>` : ''}
 </aside></div>`;
 
+/** One task: its agents and commits, the review and findings (with accept buttons for maintainers who may decide), and the claim box. */
 export const taskPage = ({ csrf, t, myEligible, mine, error, notice }) => h`
 <div class="page-head"><div><p class="muted"><a href="/projects/${t.project}">${t.project}</a></p><h1>${t.title}</h1></div><span class="badge big ${t.kind === 'second_reader' ? 'agent' : ''}">${t.status}</span></div>
 ${alert(notice, 'info')}${alert(error)}
@@ -217,6 +235,7 @@ ${alert(notice, 'info')}${alert(error)}
   ${t.nexttime?.requestId ? h`<p class="small muted">Mirrored to NextTime as request ${t.nexttime.requestId}.</p>` : ''}
 </div></aside></div>`;
 
+/** Support: your tickets, and a form to file a new one about yourself or a billing account. */
 export const supportPage = ({ csrf, tickets, tenants, error, notice }) => h`
 <div class="page-head"><h1>Support and feedback</h1></div>${alert(notice, 'info')}${alert(error)}
 <div class="social-grid">
@@ -228,12 +247,14 @@ export const supportPage = ({ csrf, tickets, tenants, error, notice }) => h`
   <button class="btn block">Send</button></form></aside>
 </div>`;
 
+/** One support ticket with its comments and a reply form. */
 export const ticketPage = ({ csrf, t, error }) => h`
 <div class="page-head"><div><p class="muted"><a href="/support">Support</a></p><h1>${t.id} ${t.title}</h1></div><span class="badge big">${t.status.replace('_', ' ')}</span></div>${alert(error)}
 <div class="card"><p class="muted small">${t.kind}, ${t.priority}${t.tenant ? `, for ${t.tenant}` : ''}, filed ${ago(t.createdAt)}</p><p>${t.body}</p></div>
 ${t.comments.map((c) => h`<div class="card ${c.staff ? 'staff' : ''}"><p class="muted small">${c.by}${c.staff ? ' (staff)' : ''}, ${ago(c.at)}</p><p>${c.body}</p></div>`)}
 <form class="card" method="post" action="/support/${t.id}">${csrfField(csrf)}<label>Reply <textarea name="body" rows="3" required></textarea></label><button class="btn">Send</button></form>`;
 
+/** The Gitcha ring: other Gitcha servers that link to each other, with previous, random and next links. */
 export const ringPage = ({ self, members, prev, next }) => h`
 <div class="page-head"><h1>The Gitcha ring</h1></div>
 <p class="lead">Independent Gitcha instances that link to each other. Some offer paid features; all are part of one community.</p>

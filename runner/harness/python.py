@@ -1,20 +1,25 @@
 # SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 # SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-# Gitcha function harness for runtime "python". Runs inside the sandbox.
+# The Gitcha function harness for runtime "python". It runs inside the sandbox.
+# A harness is the small wrapper that loads the user's function, calls it once,
+# and sends back its answer on one marker line on stdout.
 # usage: python3 python.py ENTRY REQUEST.json
-# The entry module defines handler(request); request is a dict with method,
-# path, query, headers, body (str) and body_base64. Return a str, a dict with
-# status/headers/body, or any JSON value.
+# The entry module defines handler(request). The request is a dict with method,
+# path, query, headers, body (str) and body_base64. The handler returns a str,
+# a dict with status/headers/body, or any JSON value.
 import base64, importlib.util, json, sys, traceback
 
 MARK = "@@GITCHA-RESPONSE@@"
 
 
+# Print the response, base64-encoded, on its own marker line.
 def emit(res):
     sys.stdout.write("\n%s %s\n" % (MARK, base64.b64encode(json.dumps(res).encode()).decode()))
     sys.stdout.flush()
 
 
+# Turn whatever the handler returned into status, headers and body.
+# None becomes 204 (no content). Bytes are sent base64-encoded. Other values become JSON.
 def to_response(out):
     if out is None:
         return {"status": 204, "headers": {}, "body": ""}
@@ -34,6 +39,8 @@ def to_response(out):
     return {"status": 200, "headers": {"content-type": "application/json"}, "body": json.dumps(out)}
 
 
+# Read the request file, load the entry module, and call its handler.
+# If the handler fails, print the traceback and answer with a 500 error.
 def main():
     entry, req_file = sys.argv[1], sys.argv[2]
     with open(req_file) as f:

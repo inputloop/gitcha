@@ -1,29 +1,35 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Project tasks, including the Second Reader review. When two different
-// agents' work meets in a project that has task tracking on, a Second Reader
-// task is opened. Only an agent that opted in to review this kind of work,
-// and that is independent of both (not one of them, not owned by either
-// owner), may claim it. Its review and findings earn budget once a maintainer
-// accepts them, and never a maintainer who owns the reviewing agent: nobody
-// decides on their own agent's work.
+// Project tasks, including the Second Reader review. When the work of two
+// different agents meets in a project that has task tracking on, Gitcha opens
+// a Second Reader task. Only an agent that opted in to review this kind of
+// work may claim it, and it must be independent of both (not one of them, and
+// not owned by either of their owners). Its review and findings earn credits
+// once a maintainer accepts them. That maintainer must not own the reviewing
+// agent: nobody decides on their own agent's work.
 //
-// Claims and changes to tasks go through the GraphQL API (or the web UI).
+// Claims and changes to tasks come through the GraphQL API (or the web pages).
+// Tasks live in store.data.tasks. Tasks of public projects may also be copied
+// to NextTime (see nexttime.js).
 import crypto from 'node:crypto';
 import { HttpError } from '../errors.js';
 import { byline } from './agents.js';
 import { principalKey } from './principal.js';
 import { ProjectAccess } from './access.js';
 
-const CLAIM_TTL = 72 * 3600_000;
+const CLAIM_TTL = 72 * 3600_000; // a claim lasts 72 hours, then the task is open again
 const SEVERITIES = ['low', 'medium', 'high'];
 const VERDICTS = ['approve', 'request_changes', 'comment'];
 
+/**
+ * Opens, claims, reviews and closes tasks. It also hooks into the project service
+ * (projects.onWorkedTogether), which calls it after a push where two agents worked together.
+ */
 export class TaskService {
   constructor({ store, config, projects, teams, agents, budgets, nexttime, clock = Date.now }) {
     Object.assign(this, { store, config, projects, agents, budgets, nexttime, clock });
     this.access = new ProjectAccess({ store, projects, teams, clock });
-    this.mirrors = new Map(); // task id -> the create call still in flight
+    this.mirrors = new Map(); // task id -> the NextTime create call that is still running
     store.data.tasks ??= {};
     projects.onWorkedTogether = (p, info) => this.secondReaderFor(p, info);
   }
@@ -32,20 +38,27 @@ export class TaskService {
 
   url(t) { return `${this.config.publicUrl}/tasks/${t.id}`; }
 
+  /** The task with this id, or a 404. `Object.hasOwn` means a name like "constructor" finds nothing. */
   get(id) {
     const t = Object.hasOwn(this.data, id) ? this.data[id] : null;
     if (!t) throw new HttpError(404, 'task_not_found', 'No such task.');
     return t;
   }
 
+  /** The project a task belongs to. */
   project(t) { return this.store.data.projects[t.project]; }
 
+  /**
+   * The task's project, if this caller may read it. If not, a 404, so a private task looks the
+   * same as a missing one. Uses access.read, which tells the owners when an administrator reads.
+   */
   readable(principal, t) {
     const p = this.project(t);
     if (!p || !this.access.read(principal, p)) throw new HttpError(404, 'task_not_found', 'No such task.');
     return p;
   }
 
+  /** A short view of an agent: handle, owner and byline. An unknown handle still shows its name. */
   agentRef(handle) {
     const a = this.store.data.agents[handle];
     if (!a) return { handle, byline: handle };
@@ -53,6 +66,7 @@ export class TaskService {
     return { handle, owner: owner?.username ?? null, byline: byline(a, this.agents.displayName(owner)) };
   }
 
+  /** The task as the API and pages show it. `canDecide` says whether the caller is one of the project's maintainers. */
   view(t, principal) {
     const p = this.project(t);
     return {
@@ -68,7 +82,7 @@ export class TaskService {
 
   newId() { return `t_${crypto.randomBytes(6).toString('hex')}`; }
 
-  /** What a reader sees of the NextTime side: the refusal texts are for the project's maintainers only (NXT-2). */
+  /** What a reader sees of the NextTime side. Only the project's maintainers see NextTime's refusal texts; others see `refused: true` (NXT-2). */
   nexttimeView(t, p, principal) {
     if (!t.nexttime) return null;
     if (principal?.kind === 'user' && p && this.projects.isMaintainer(principal.user, p)) return t.nexttime;
@@ -77,8 +91,10 @@ export class TaskService {
   }
 
   /**
-   * Copy a task to NextTime as a request. Only tasks of public projects go (NXT-1): the board
-   * is shared, so a private project's titles, bodies and bylines never leave this server.
+   * Copies a task to NextTime as a request. Only tasks of public projects go (NXT-1): the
+   * NextTime board is shared, so a private project's titles, bodies and bylines never leave
+   * this server. The call runs in the background, and its result (the request id, or the
+   * error) is saved on the task.
    */
   mirror(t) {
     if (!this.nexttime?.configured) return;
@@ -90,7 +106,11 @@ export class TaskService {
     this.mirrors.set(t.id, call);
   }
 
-  /** Tell NextTime how a closed task ended, once its request exists and only once (NXT-2). */
+  /**
+   * Tells NextTime how a closed task ended: 'closed' cancels the request, and 'done' completes
+   * it (when completing is turned on). It waits until the request exists, and does this only
+   * once (NXT-2). A refused complete is noted on the task and not tried again.
+   */
   settleNextTime(id) {
     const wait = this.mirrors.get(id);
     if (wait) { wait.then(() => this.settleNextTime(id)); return; } // closed while the create was in flight
@@ -107,6 +127,7 @@ export class TaskService {
   }
 
   // ---- creating ---------------------------------------------------------------------------
+  /** Opens a plain task. Task tracking must be on, and the caller must be able to write to the project. */
   create(principal, p, { title, body = '', tags = [] }) {
     if (!p.taskTracking.enabled) throw new HttpError(409, 'tracking_off', 'Task tracking is off for this project.');
     if (!this.projects.canWrite(principal, p)) throw new HttpError(403, 'project_forbidden', 'Only maintainers and collaborators can open tasks.');
@@ -121,13 +142,16 @@ export class TaskService {
     return t;
   }
 
-  /** Two agents worked together: open (or extend) a Second Reader task. */
+  /**
+   * Two agents worked together in a push: opens a Second Reader task for the pair, or adds the
+   * new commits to the one still open or claimed. Returns null when task tracking is off.
+   */
   secondReaderFor(p, { agents, push }) {
     const key = this.projects.key(p.owner, p.name);
     if (!p.taskTracking.enabled) return null;
     const pair = agents.map((a) => a.handle).sort();
     const open = Object.values(this.data).find((t) => t.kind === 'second_reader' && t.project === key && ['open', 'claimed'].includes(t.status) && t.agents.join() === pair.join());
-    // Every recent commit by either agent on these branches is what the second reader reads.
+    // The second reader reads every commit either agent made in the last 7 days on the branches this push touched.
     const recent = (p.pushes ?? []).filter((x) => this.clock() - x.at < 7 * 86_400_000 && x.branches.some((b) => push.branches.includes(b)));
     const commits = [...new Set([...recent, push].flatMap((x) => x.commits).filter((c) => pair.includes(c.agent)).map((c) => c.sha))];
     if (open) {
@@ -147,9 +171,9 @@ export class TaskService {
   }
 
   /**
-   * Open Second Reader tasks this agent may claim and `principal` may see. A task of a
-   * private project is listed only to people who belong to it (a site administrator opens
-   * one by its id, which tells the owner, rather than finding it in a list).
+   * Open Second Reader tasks this agent may claim and `principal` may see. A task of a private
+   * project is listed only to people who belong to it. A site administrator must open one by
+   * its id, which tells the owner, instead of finding it in a list.
    */
   pool(agent, principal) {
     return Object.values(this.data).filter((t) => {
@@ -162,7 +186,7 @@ export class TaskService {
   }
 
   // ---- claiming --------------------------------------------------------------------------------
-  /** The acting agent: an agent principal itself, or one of a person's own agents named by handle. */
+  /** The acting agent: an agent caller itself, or one of a person's own agents named by handle. An agent key acts only for its own agent. */
   actingAgent(principal, handle) {
     if (principal?.kind === 'agent') {
       if (handle && handle !== principal.agent.handle) throw new HttpError(403, 'not_your_agent', 'An agent key acts only for its own agent.');
@@ -172,6 +196,11 @@ export class TaskService {
     return null;
   }
 
+  /**
+   * Claims an open task for 72 hours. A Second Reader task must be claimed by an eligible agent
+   * (see AgentService.eligible). A plain task needs write access, or an agent that is one of the
+   * project's collaborators. Claims that ran out are opened again first.
+   */
   claim(principal, id, { agent: handle } = {}) {
     this.expireClaims();
     const t = this.get(id);
@@ -195,6 +224,7 @@ export class TaskService {
     return this.get(id);
   }
 
+  /** Is this caller the claimant? For a claim made by an agent, the agent itself or its owner counts. */
   isClaimant(principal, t) {
     if (!t.claimant || !principal) return false;
     if (t.claimant.kind === 'user') return principal.kind === 'user' && principal.user.username === t.claimant.username;
@@ -202,6 +232,7 @@ export class TaskService {
     return this.store.data.agents[t.claimant.handle]?.owner === principal.user.id;
   }
 
+  /** The claimant gives the task back, and it is open again. */
   release(principal, id) {
     const t = this.get(id);
     if (t.status !== 'claimed' || !this.isClaimant(principal, t)) throw new HttpError(403, 'not_claimant', 'Only the claimant can release this task.');
@@ -209,6 +240,7 @@ export class TaskService {
     return this.get(id);
   }
 
+  /** Opens again every task whose claim has run out. */
   expireClaims() {
     for (const t of Object.values(this.data)) {
       if (t.status === 'claimed' && t.claimExpiresAt < this.clock()) this.store.tx((d) => Object.assign(d.tasks[t.id], { status: 'open', claimant: null, claimExpiresAt: null }));
@@ -216,6 +248,11 @@ export class TaskService {
   }
 
   // ---- reviewing --------------------------------------------------------------------------------
+  /**
+   * The claimant hands in a Second Reader review: a verdict, a summary of at least 20 characters,
+   * and up to 50 findings. Nothing is paid yet; the review waits for a maintainer to decide.
+   * The agent's review count goes up now.
+   */
   submitReview(principal, id, { verdict, summary, findings = [] }) {
     const t = this.get(id);
     if (t.kind !== 'second_reader') throw new HttpError(400, 'not_a_review', 'Only Second Reader tasks take a review.');
@@ -238,7 +275,7 @@ export class TaskService {
     return this.get(id);
   }
 
-  /** A maintainer may decide on a review or finding unless they own the agent that wrote it. */
+  /** A maintainer may decide on a review or finding, unless they own the agent that wrote it. Returns that agent. */
   requireIndependent(user, t) {
     const p = this.project(t);
     if (!p || !this.projects.isMaintainer(user, p)) throw new HttpError(403, 'project_forbidden', 'Only the project\'s maintainers accept or reject reviews and findings.');
@@ -247,18 +284,19 @@ export class TaskService {
     return agent;
   }
 
-  /** Accept (the review pays) or reject a submitted review. */
+  /** Accepts (then the review pays) or rejects a submitted review. Each review is decided only once. */
   decideReview(user, id, accept) {
     const t = this.get(id);
     const agent = this.requireIndependent(user, t);
     if (!t.review) throw new HttpError(409, 'no_review', 'Nothing has been submitted to decide on.');
-    const state = t.review.status ?? 'accepted'; // a review from before reviews waited for a decision was paid when it came in
+    const state = t.review.status ?? 'accepted'; // a review from before reviews waited for a decision was already paid when it came in
     if (state !== 'proposed') throw new HttpError(409, 'decided', `That review was already ${state}.`);
     this.store.tx((d) => { Object.assign(d.tasks[id].review, { status: accept ? 'accepted' : 'rejected', decidedBy: user.username, decidedAt: this.clock() }); });
     if (accept) this.budgets.award('review', { agent: agent.handle, ownerKey: `user:${this.agents.ownerOf(agent).username}` }, `review:${id}`);
     return this.get(id);
   }
 
+  /** Accepts or rejects one finding, once. An accepted finding pays by its severity and counts in the agent's stats. */
   decideFinding(user, id, findingId, accept) {
     const t = this.get(id);
     const agent = this.requireIndependent(user, t);
@@ -275,6 +313,7 @@ export class TaskService {
     return this.get(id);
   }
 
+  /** A maintainer closes a task as 'done' or 'closed', and NextTime is told. */
   close(user, id, { status = 'done' } = {}) {
     const t = this.get(id);
     const p = this.project(t);
@@ -286,6 +325,7 @@ export class TaskService {
     return this.get(id);
   }
 
+  /** All tasks of one project, newest first. */
   forProject(key) {
     return Object.values(this.data).filter((t) => t.project === key).sort((a, b) => b.createdAt - a.createdAt);
   }

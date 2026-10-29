@@ -1,12 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// The gitcha.json package manifest, shared by the server and the client.
+// Rules for gitcha.json, the package manifest (the file that names a package and its version).
+// The server and the client share this file, so both check packages the same way.
 export const MANIFEST_FILE = 'gitcha.json';
+// A package name: 1 to 64 characters, lowercase letters, digits, ".", "_" or "-", starting with a letter or digit.
 export const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-/** NAME_RE also admits "constructor", which every object already has; it is not a package name. */
+/** NAME_RE also allows "constructor", which every JavaScript object already has. That is not a package name. */
 export const isPackageName = (name) => typeof name === 'string' && NAME_RE.test(name) && !(name in Object.prototype);
+// A semantic version (semver), such as 1.2.3 or 1.2.3-beta.1. No leading zeros.
 export const VERSION_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$/;
 
+// Check a parsed gitcha.json. Returns a list of error messages, empty when the manifest is fine.
+// "files" entries must stay inside the project, so a package cannot pack files from elsewhere.
 export function validateManifest(m) {
   const errors = [];
   if (!m || typeof m !== 'object' || Array.isArray(m)) return ['gitcha.json must be a JSON object'];
@@ -27,6 +32,8 @@ export function validateManifest(m) {
   return errors;
 }
 
+// Sort helper for versions: negative if a comes first, positive if b does.
+// A prerelease (1.0.0-beta) sorts before the plain release (1.0.0). Prerelease tags compare as text.
 export function compareVersions(a, b) {
   const pa = VERSION_RE.exec(a), pb = VERSION_RE.exec(b);
   for (let i = 1; i <= 3; i++) {
@@ -38,7 +45,7 @@ export function compareVersions(a, b) {
   return (pa[4] ?? '').localeCompare(pb[4] ?? '');
 }
 
-/** Highest non-yanked, non-prerelease version (falls back to prereleases). */
+/** The highest version that is not yanked and not a prerelease. If there is none, the highest prerelease. */
 export function latestVersion(versions) {
   const live = versions.filter((v) => !v.yanked).map((v) => v.version).sort(compareVersions);
   const stable = live.filter((v) => !v.includes('-'));

@@ -1,17 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// The bContain backend runs each job in its own throwaway VM with
-// `bcontain run IMAGE ... -- sh -c BOOTSTRAP` (inputloop/bContain).
+// The bContain backend runs each job in its own throwaway VM (virtual machine: a separate computer
+// made in software) with `bcontain run IMAGE ... -- sh -c BOOTSTRAP` (inputloop/bContain).
+// This is the default backend and the one that keeps jobs isolated.
 //
-// bContain has no volume mounts, so the job directory travels over the VM's
-// user-mode network: the runner serves it on 127.0.0.1 behind a one-time
-// token, the guest reaches the host at 10.0.2.2 (QEMU's user-mode gateway),
-// downloads it, runs run.sh, and posts any artifact back the same way.
+// bContain has no volume mounts (no way to share a folder with the VM). So the job folder travels
+// over the VM's user-mode network. The runner serves it on 127.0.0.1 behind a one-time token.
+// The guest (the VM) reaches the host at 10.0.2.2 (QEMU's user-mode gateway address), downloads it,
+// runs run.sh, and posts any artifact (a file the job produced) back the same way.
 //
-// Limits inherited from bContain today (see its README): the image needs
-// /bin/sh and wget (busybox images have both); everything runs as root inside
-// the VM; the guest has outbound network access (there is no network-off
-// switch yet); no disk quota. The VM, not the network, is the isolation.
+// Limits that come from bContain today (see its README): the image needs /bin/sh and wget
+// (busybox images have both). Everything runs as root inside the VM. The guest can reach the
+// outside network (there is no network-off switch yet). There is no disk quota.
+// The VM, not the network, is what keeps the job isolated.
 import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -24,6 +25,8 @@ export const GUEST_HOST = '10.0.2.2';
 
 export function assertAllowed() { /* always allowed: this is the isolating backend */ }
 
+// List every regular file under `dir` with its bytes. Paths use "/" on every platform.
+// Links are skipped (only real folders and files are taken).
 function walk(dir, base = dir, out = []) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, e.name);
@@ -33,9 +36,14 @@ function walk(dir, base = dir, out = []) {
   return out;
 }
 
-/** The exact argv handed to bcontain (exported for tests and `--dry-run`). */
+/**
+ * The exact argv (list of command-line words) handed to bcontain. Exported for tests and for
+ * `gitcha-runner bcontain-command`. Inside the VM, the bootstrap script downloads the bundle,
+ * unpacks it in /job and runs /job/package/run.sh.
+ */
 export function command({ bin = 'bcontain', image, cpus = 1, memoryMb = 512, port, token }) {
-  // The image comes from a job; one that starts with "-" would be read as an option by the launcher.
+  // The image name comes from a job. A name that starts with "-" would be read as an option by the
+  // launcher, so only plain image names are allowed (up to 200 characters).
   if (!/^[A-Za-z0-9][\w./:@-]{0,199}$/.test(String(image))) throw new Error(`refusing image "${String(image).slice(0, 60)}": not a plain image reference`);
   const base = `http://${GUEST_HOST}:${port}/${token}`;
   const bootstrap = `set -e; mkdir -p /job; cd /job; wget -q -O b.tgz ${base}/bundle.tgz; tar xzf b.tgz; rm b.tgz; exec sh /job/package/run.sh`;
@@ -43,7 +51,11 @@ export function command({ bin = 'bcontain', image, cpus = 1, memoryMb = 512, por
     '-e', 'GITCHA_JOB=/job/package', '-e', `GITCHA_UPLOAD=${base}/artifact`, '--', 'sh', '-c', bootstrap];
 }
 
-/** Serve the bundle and accept the artifact, on loopback, for one job. */
+/**
+ * A tiny web server for one job, on loopback (127.0.0.1, reachable only from this machine and its VMs).
+ * It serves the bundle and accepts the artifact. Both URLs start with the secret token.
+ * An artifact bigger than maxArtifact is cut off and deleted.
+ */
 function fileServer(bundle, token, artifactPath, maxArtifact) {
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
@@ -66,6 +78,8 @@ function fileServer(bundle, token, artifactPath, maxArtifact) {
   });
 }
 
+// Run one job: pack the job folder, start the file server, boot the VM, and collect its output.
+// Resolves { code, output, timedOut }.
 export async function run({ workdir, timeoutMs, onOutput, config, image, cpus, memoryMb, signal }) {
   const bundle = packFiles(walk(workdir));
   const token = crypto.randomBytes(16).toString('hex');
@@ -81,7 +95,7 @@ export async function run({ workdir, timeoutMs, onOutput, config, image, cpus, m
       child.stdout.on('data', take);
       child.stderr.on('data', take);
       child.on('error', (err) => { output += `\ngitcha-runner: could not start ${argv[0]}: ${err.message}\n`; });
-      // bContain boots a VM: allow time for boot on top of the job's own limit.
+      // bContain boots a VM, so allow extra time for the boot (60 seconds by default) on top of the job's own limit.
       const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, timeoutMs + (config.bootAllowanceMs ?? 60_000));
       const stop = () => child.kill('SIGKILL'); // the server said this job is over (cancelled)
       if (signal?.aborted) stop(); else signal?.addEventListener('abort', stop, { once: true });

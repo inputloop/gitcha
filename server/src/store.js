@@ -1,29 +1,35 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Tiny durable JSON store. Every mutation is written atomically (write temp file, fsync, rename, fsync the
-// directory) so a crash never leaves a half-written DB, and one process at a time owns the data directory (db.lock).
-// Package tarballs live in a content-addressed blob directory, written the same way and checked when read.
+// The server's database: one JSON file (db.json) in the data folder, kept in memory and written back
+// whole after every change. Each write is atomic (all or nothing): write a temporary file, fsync it
+// (force it onto the disk), rename it into place, then fsync the folder. So a crash never leaves a
+// half-written database. Only one process at a time may own the data folder (the db.lock file).
+// Package tarballs (and other stored files, such as CI artifacts and media) live in a blob folder, named by the
+// hash of their bytes ("content-addressed").
+// They are written the same way and checked when read.
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { StartupError } from './config.js';
 import { HttpError } from './errors.js';
 
+// The shape of a brand-new database. Other services add their own collections (such as agents or jobs) as needed.
 const EMPTY = () => ({
   version: 1, users: {}, sessions: {}, packages: {}, teams: {}, audit: {},
   sites: {}, domains: {}, ring: { peers: {}, announcements: {} },
 });
 
-// The audit log is kept per user, in three lists, so one user's traffic can never push another's rows out
-// (AUTH-5 / STORE-3). security: what the user did; others: what other people did to them (a team owner adding
-// them); traffic: package downloads. Per-user caps are a keepers' choice; these are the conservative defaults.
+// The audit log (a record of security events) is kept per user, in three lists, so one user's traffic can never
+// push another's rows out (AUTH-5 / STORE-3). security: what the user did. others: what other people did to them
+// (such as a team owner adding them). traffic: package downloads. Per-user caps are a keepers' choice; these
+// are the careful defaults.
 const AUDIT_CAP = { security: 1000, others: 200, traffic: 200 };
-// A ceiling on the whole log, so a database of many users stays a sane size; at the ceiling the biggest holder
-// gives up its oldest row first, never a user with little in the log.
+// A ceiling on the whole log, so a database with many users stays a sane size. At the ceiling, the user with
+// the most rows gives up their oldest row first, never a user with little in the log.
 const AUDIT_CEILING = 100_000;
-const TRAFFIC = new Set(['package.downloaded']);
+const TRAFFIC = new Set(['package.downloaded']); // events that go in the 'traffic' list
 
-/** The first versions kept one array of rows for everyone; split it per user, oldest first, under the same caps. */
+/** The first versions kept one array of rows for everyone. Split it per user, oldest first, under the same caps. */
 function splitLegacyAudit(rows, users) {
   const out = {};
   for (const row of rows) {
@@ -37,16 +43,19 @@ function splitLegacyAudit(rows, users) {
 }
 
 // ---- one process per data directory (STORE-1) ---------------------------------------------------------
-// db.json is loaded once and rewritten whole on every change, so a second process on the same directory would
-// silently erase what the first one wrote. The lock file holds "<pid> <nonce>"; it is created exclusively. A lock
-// whose process is gone (a crash, SIGKILL) is taken over; a live one stops the start with a message.
+// db.json is loaded once and rewritten whole on every change. So a second process on the same folder would
+// silently erase what the first one wrote. The lock file holds "<pid> <nonce>" (process id and a random value).
+// It is created only if it does not exist yet. A lock whose process is gone (a crash, SIGKILL) is taken over;
+// a live one stops the start with a message.
 const HELD = new Map(); // lock path -> nonce, so one 'exit' handler can release every lock this process holds
 process.on('exit', () => { for (const [file, nonce] of HELD) releaseLock(file, nonce); });
 
+/** Is process `pid` still running? Signal 0 only checks. EPERM means it exists but belongs to another user. */
 function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (err) { return err.code === 'EPERM'; }
 }
 
+/** Remove the lock file, but only if it still holds our nonce (never another process's lock). */
 function releaseLock(file, nonce) {
   try {
     if (fs.readFileSync(file, 'utf8').trim().split(' ')[1] === nonce) fs.rmSync(file, { force: true });
@@ -54,6 +63,7 @@ function releaseLock(file, nonce) {
   HELD.delete(file);
 }
 
+/** Take the data folder lock, or throw a StartupError if a live process holds it. Tries up to 3 times. */
 function acquireLock(file, dataDir) {
   const nonce = crypto.randomBytes(8).toString('hex');
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -75,6 +85,7 @@ function acquireLock(file, dataDir) {
   throw new StartupError(`could not take the lock ${file}; another start is racing for ${dataDir}.`);
 }
 
+/** Force a file or folder entry onto the disk. Errors are ignored (see below). */
 function fsyncPath(p) {
   let fd;
   try {
@@ -104,6 +115,10 @@ function writeFileDurably(file, data, mode = 0o600) {
   fsyncPath(path.dirname(file));
 }
 
+/**
+ * The database. Services read `store.data` directly and change it inside tx(), which saves to disk.
+ * It also stores blobs and keeps the per-user audit log.
+ */
 export class Store {
   constructor(dataDir, { auditCeiling = AUDIT_CEILING } = {}) {
     this.auditCeiling = auditCeiling;
@@ -127,11 +142,12 @@ export class Store {
     }
   }
 
+  /** Count every audit row in every list. */
   countAuditRows() {
     return Object.values(this.data.audit).reduce((n, s) => n + s.security.length + s.others.length + s.traffic.length, 0);
   }
 
-  /** What db.json holds ({} for a first start). A file that cannot be read is named, never overwritten. */
+  /** What db.json holds ({} on a first start). A file that cannot be read is named in the error, never overwritten. */
   readDisk() {
     if (!fs.existsSync(this.file)) return {};
     let parsed;
@@ -152,13 +168,14 @@ export class Store {
     this.lockNonce = null;
   }
 
-  /** Run `fn` against the data and persist the result. If the write fails, memory goes back to what is on disk. */
+  /** Run `fn` on the data, then save it to disk. If the write fails, memory goes back to what is on disk. */
   tx(fn) {
     const result = fn(this.data);
     this.flush();
     return result;
   }
 
+  /** Write the whole database to disk now. */
   flush() {
     try {
       writeFileDurably(this.file, JSON.stringify(this.data));
@@ -169,9 +186,9 @@ export class Store {
   }
 
   /**
-   * A write failed (disk full, I/O error): memory holds changes that disk does not, and a later write would persist
-   * them as if they had been acknowledged (STORE-5). Put memory back to the last file, in place: other services keep
-   * a reference to the top-level `data` object, so it is emptied and refilled, not replaced.
+   * A write failed (disk full, I/O error). Memory now holds changes that the disk does not, and a later write
+   * would save them as if they had been accepted (STORE-5). So put memory back to the last file, in place. Other
+   * services keep a reference to the top-level `data` object, so it is emptied and refilled, not replaced.
    */
   restore() {
     let disk;
@@ -189,13 +206,14 @@ export class Store {
     return Object.values(this.data.users).find((u) => u.username.toLowerCase() === lower) ?? null;
   }
   userCount() { return Object.keys(this.data.users).length; }
-  /** Users, teams and agents share one namespace so none can pose as another. */
+  /** Users, teams and agents share one set of names, so none can pose as another. Not case sensitive. */
   nameInUse(name) {
     const n = String(name).toLowerCase();
     return Boolean(this.userByName(n) || this.data.teams[n] || this.data.agents?.[n]);
   }
 
   // ---- sessions & device tokens -----------------------------------------
+  // Sessions are stored under the SHA-256 hash of their token, never the token itself.
   sessionByHash(hash) { return this.data.sessions[hash] ?? null; }
   sessionsForUser(userId) {
     return Object.entries(this.data.sessions)
@@ -212,9 +230,9 @@ export class Store {
   packages() { return Object.values(this.data.packages); }
 
   /**
-   * Blobs are named by the SHA-256 of their bytes. A new one is written to a temporary name and renamed, so a crash
-   * leaves no partial blob under a real name (STORE-4). One that is already there is trusted only after its bytes
-   * have been hashed once in this process; a damaged one is replaced.
+   * Save a blob. Blobs are named by the SHA-256 of their bytes. A new one is written to a temporary name and
+   * renamed, so a crash leaves no partial blob under a real name (STORE-4). One that is already there is trusted
+   * only after its bytes have been hashed once in this process. A damaged one is replaced.
    */
   writeBlob(sha, buf) {
     const file = path.join(this.blobDir, sha);
@@ -223,6 +241,7 @@ export class Store {
     this.verifiedBlobs.add(sha);
   }
 
+  /** Do the blob's bytes still hash to its name? Remembers a good answer for the rest of this process. */
   blobIsSound(sha, file) {
     if (this.verifiedBlobs.has(sha)) return true;
     const ok = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') === sha;
@@ -230,6 +249,7 @@ export class Store {
     return ok;
   }
 
+  /** Read a blob. The id must be 64 hex characters, so it can never name a path outside the blob folder. */
   readBlob(sha) {
     if (!/^[a-f0-9]{64}$/.test(sha)) throw new Error('bad blob id');
     const file = path.join(this.blobDir, sha);
@@ -245,6 +265,10 @@ export class Store {
   }
 
   // ---- audit log ----------------------------------------------------------
+  /**
+   * Add an audit row and drop old rows past the caps. It does not save by itself: callers run it inside
+   * tx(), so the row is written with the change it records.
+   */
   audit(entry) {
     const row = { at: Date.now(), ...entry };
     const user = row.userId ? this.data.users[row.userId] : null;
@@ -264,7 +288,7 @@ export class Store {
     while (this.auditRows > this.auditCeiling) this.trimBiggestHolder();
   }
 
-  /** Drop the oldest row of whoever holds the most rows. */
+  /** Drop the oldest row of whoever holds the most rows (used when the whole log is at its ceiling). */
   trimBiggestHolder() {
     let big = null;
     let bigN = -1;
@@ -278,8 +302,9 @@ export class Store {
   }
 
   /**
-   * The rows of one list, newest first: 'security' (what the user did), 'others' (what other people did to
-   * them) or 'traffic' (downloads); with no kind, all three merged by time. `skip` pages.
+   * One user's rows from one list, newest first: 'security' (what the user did), 'others' (what other people
+   * did to them) or 'traffic' (downloads). With no kind, all three are merged by time. `skip` jumps past
+   * that many rows, for paging. At most `limit` rows come back.
    */
   auditFor(userId, limit = 100, { kind, skip = 0 } = {}) {
     const slot = this.data.audit[userId];
@@ -290,6 +315,7 @@ export class Store {
     return out;
   }
 
+  /** How many audit rows a user has, in one list or in all three. */
   auditCount(userId, kind) {
     const slot = this.data.audit[userId];
     if (!slot) return 0;

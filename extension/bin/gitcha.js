@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// gitcha: command-line client for a Gitcha registry. Also used by the Claude
-// extension for first-run sign-in, so passwords never pass through the model.
+// gitcha: the command-line client for a Gitcha registry (search, install, publish, teams, 2FA settings).
+// The Claude extension also uses it for first-run sign-in, so passwords never pass through the AI model.
+// Its SessionStart hook (hooks/hooks.json) runs `gitcha status --hook` when a Claude session starts.
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -16,6 +17,7 @@ import { ask } from '../lib/prompt.js';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const VERSION = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8')).version;
 
+// Use terminal colors only on a real terminal (or with FORCE_COLOR), and never when NO_COLOR is set.
 const color = (process.stderr.isTTY || process.env.FORCE_COLOR) && !process.env.NO_COLOR;
 const c = (code) => (s) => (color ? `\x1b[${code}m${s}\x1b[0m` : String(s));
 const bold = c(1), dim = c(2), green = c(32), yellow = c(33), red = c(31), cyan = c(36), magenta = c(35);
@@ -58,6 +60,8 @@ ${bold('Claude')}
 
 Options: --server URL (or GITCHA_SERVER), --json, --help, --version`;
 
+// Split the command line into plain words (`_`) and --flags. "--flag value" and "--flag=value" both work.
+// The flags in the list below are on/off switches, so they never take the next word as a value.
 function parseArgs(argv) {
   const args = { _: [], flags: {} };
   for (let i = 0; i < argv.length; i++) {
@@ -73,6 +77,7 @@ function parseArgs(argv) {
 }
 
 const HOOK_TIMEOUT_MS = 5000;
+// Plain words for each reason the server can give when it asks for a fresh 2FA (two-factor) code.
 const REASON_TEXT = {
   interval: 'Periodic security check: please confirm it is still you.',
   new_network: 'This device is on a new network: please confirm it is you.',
@@ -81,6 +86,7 @@ const REASON_TEXT = {
 
 const reasonText = (r) => (typeof r === 'string' && Object.hasOwn(REASON_TEXT, r) ? REASON_TEXT[r] : 'Two-factor check required.');
 
+// Ask for an authenticator code. With no terminal to ask in, it tells the user to run `gitcha verify` instead.
 async function promptCode(reason) {
   if (!process.stdin.isTTY) {
     throw new Error(`${reasonText(reason)} Run \`gitcha verify <code>\` and try again.`);
@@ -89,16 +95,19 @@ async function promptCode(reason) {
   return ask(`${bold('Authenticator code')}: `);
 }
 
-/** Load the saved device token; the first run must go through `gitcha login`. */
+/** Make a client with the saved device token. With no saved token, the user must run `gitcha login` first. */
 function authedClient(flags) {
   const server = resolveServer(flags.server);
   const creds = getCredentials(server);
   if (!creds) throw new Error(`You are not signed in to ${server}.\nRun ${cyan('gitcha login' + (flags.server ? ` --server ${server}` : ''))} first: a password and an authenticator code are required.`);
-  // The SessionStart hook runs at every Claude session start; it gets a short leash.
+  // The SessionStart hook runs every time a Claude session starts, so it gets a short timeout (5 seconds).
   return new GitchaClient({ server, token: creds.token, userAgent: `gitcha-cli/${VERSION}`, ...(flags.hook ? { timeoutMs: HOOK_TIMEOUT_MS } : {}) });
 }
 
-/** Run fn; if the server asks for an intermittent 2FA check, prompt and retry once. */
+/**
+ * Run fn. If the server says a 2FA check is due ("mfa_required"), ask for a code, send it as a
+ * step-up (a fresh proof that it is still you), then try fn once more.
+ */
 async function withStepUp(client, fn) {
   try {
     return await fn();
@@ -117,7 +126,10 @@ const packageLine = (p) => {
   return `${bold(cyan(p.name))} ${green('v' + p.latest)}  ${p.description || dim('no description')}  ${dim(`${by} · ${p.downloads} install${p.downloads === 1 ? '' : 's'}`)}`;
 };
 
+// One function per command. Each gets the parsed `_` words and `flags`.
 const commands = {
+  // Sign in: password first, then the authenticator code. The server returns a device token, which we save.
+  // The password itself is never saved.
   async login({ flags }) {
     const server = resolveServer(flags.server);
     const client = new GitchaClient({ server, userAgent: `gitcha-cli/${VERSION}` });
@@ -145,7 +157,7 @@ const commands = {
       removeCredentials(client.server);
       return out(yellow('● Forgot the token on this machine only.') + ' It stays valid on the server until you revoke the device in the web page.');
     }
-    // The local copy is the only way to revoke the token from here, so it goes only after the server has answered.
+    // We need the local copy of the token to revoke it from here. So we delete it only after the server answers.
     let note = 'this device token has been revoked';
     try {
       await client.logout();
@@ -160,6 +172,7 @@ const commands = {
     out(green(`✓ Signed out; ${note}.`));
   },
 
+  // Show who you are and when the next 2FA check is due. With --hook it prints one short line for Claude.
   async status({ flags }) {
     const server = resolveServer(flags.server);
     const creds = getCredentials(server);
@@ -171,7 +184,8 @@ const commands = {
     const me = await client.whoami();
     if (flags.json) return out(JSON.stringify(me, null, 2));
     if (flags.hook) {
-      // This line goes into the model's context: only our own words and the server address, never the registry's text.
+      // This line goes into the model's context. It holds only our own words and the server address,
+      // never text from the registry, so the registry cannot slip instructions to the model.
       return out(`Gitcha: signed in to ${server}; the two-factor check is ${me?.mfa?.ok === true ? 'current' : 'due (the user can run gitcha verify in a terminal)'}.`);
     }
     out(`${green('●')} Signed in to ${bold(server)} as ${bold(me.user.username)} ${dim(`(${me.user.role})`)}`);
@@ -182,6 +196,7 @@ const commands = {
       : `  2FA status      ${yellow(`check due: ${reasonText(me.mfa.reason)}`)} Run ${cyan('gitcha verify')}.`);
   },
 
+  // Send a code now so later commands are not interrupted by a 2FA check.
   async verify({ _, flags }) {
     const client = authedClient(flags);
     const code = _[1] || (await ask(`${bold('Authenticator code')}: `));
@@ -189,6 +204,7 @@ const commands = {
     out(green('✓ Two-factor verified.') + (res.next_check_at ? dim(` Next periodic check: ${when(res.next_check_at)}`) : ''));
   },
 
+  // Show or change which follow-up 2FA checks are on. Some may be locked on by an admin.
   async security({ flags }) {
     const client = authedClient(flags);
     const map = { interval: 'interval', 'new-network': 'new_network', sensitive: 'sensitive' };
@@ -200,7 +216,7 @@ const commands = {
     }
     let res;
     if (Object.keys(changes).length) {
-      // The change spends a code of its own (AUTH-4): --code, or ask for one.
+      // The change uses up a code of its own (AUTH-4): from --code, or we ask for one.
       const code = flags.code || (await ask(`${bold('Authenticator code')}: `));
       res = await client.setSecurity(changes, code);
       out(green('✓ Two-factor check settings updated.'));
@@ -237,6 +253,7 @@ const commands = {
     for (const v of p.versions) out(`  ${v.yanked ? red(v.version + ' (yanked)') : v.version}  ${dim(v.integrity.slice(0, 30) + '…')}  ${dim(when(v.publishedAt))}`);
   },
 
+  // Install one package (name[@version]), or everything in gitcha.json when no name is given.
   async install({ _, flags }) {
     const client = authedClient(flags);
     const dir = flags.dir || process.cwd();
@@ -252,12 +269,14 @@ const commands = {
     }
   },
 
+  // Pack a folder and upload it as a new version. --dry-run only lists what would ship.
   async publish({ _, flags }) {
     const dir = path.resolve(_[1] || '.');
     const { manifest, files, entries, tarball } = pack(dir);
     if (!flags.json) out(`${magenta('◆')} Packing ${bold(`${manifest.name}@${manifest.version}`)} ${dim(`(${files.length} files, ${(tarball.length / 1024).toFixed(1)} KB)`)}`);
     if (flags['dry-run']) {
-      // Versions cannot be deleted, so look at the list first: nothing is uploaded, no sign-in or code needed.
+      // Versions cannot be deleted, so it helps to check the list first. Nothing is uploaded,
+      // and no sign-in or code is needed.
       if (flags.json) return out(JSON.stringify({ name: manifest.name, version: manifest.version, files: entries, bytes: tarball.length }, null, 2));
       for (const e of entries) out(`  ${e.path}  ${dim(`${e.size} bytes`)}`);
       return out(dim(`Dry run: ${entries.length} files, ${tarball.length} bytes packed. Nothing was uploaded.`));
@@ -283,6 +302,7 @@ const commands = {
     out(green(`✓ ${bold(res.name)} is now ${res.visibility === 'team' ? `visible only to team ${res.team}` : 'visible to every registry user'}.`));
   },
 
+  // `gitcha team <sub>`: list, create, info, add, remove or delete.
   async team({ _, flags }) {
     const client = authedClient(flags);
     const [, sub, a, b] = _;
@@ -334,6 +354,7 @@ const commands = {
     }
   },
 
+  // Mark a version as yanked (or restore it with --undo). A yanked version is kept off "latest".
   async yank({ _, flags }) {
     if (!_[1] || !_[1].includes('@')) throw new Error('Usage: gitcha yank <name@version> [--undo]');
     const client = authedClient(flags);
@@ -342,11 +363,13 @@ const commands = {
     out(green(`✓ ${res.name}@${res.version} ${res.yanked ? 'yanked' : 'restored'}.`));
   },
 
+  // Start the MCP server for Claude. Importing the file starts it.
   async mcp() {
     await import('./gitcha-mcp.js');
   },
 };
 
+// Read the command line and run the matching command. "whoami" is another name for "status".
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const cmd = args._[0];
@@ -358,7 +381,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  // The SessionStart hook must never break a Claude session.
+  // The SessionStart hook must never break a Claude session. So with --hook it prints a short note and exits 0.
   if (process.argv.includes('--hook')) {
     return out(`Gitcha: status unavailable (${err instanceof GitchaError && ['network', 'timeout'].includes(err.code) ? 'the registry could not be reached' : 'the registry did not answer as expected'}).`);
   }

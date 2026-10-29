@@ -1,16 +1,19 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Gitcha function harness for runtime "node". Runs inside the sandbox.
+// The Gitcha function harness for runtime "node". It runs inside the sandbox.
+// A harness is the small wrapper that loads the user's function, calls it once, and sends back its answer.
 // usage: node node.mjs ENTRY REQUEST.json
-// The handler is the module's default export (or `handler`). It receives a
-// request and returns a string, an object { status, headers, body }, or any
-// JSON value. The response leaves on one marker line on stdout.
+// The handler is the module's default export (or its `handler` export). It gets a request and
+// returns a string, an object { status, headers, body }, or any JSON value.
+// The response leaves on stdout as one marker line, base64-encoded, so the function's own
+// printed output cannot be mistaken for it.
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const MARK = '@@GITCHA-RESPONSE@@';
 const [entry, reqFile] = process.argv.slice(2);
+// The request body arrives base64-encoded in the request file.
 const raw = JSON.parse(fs.readFileSync(reqFile, 'utf8'));
 const body = Buffer.from(raw.body ?? '', 'base64');
 const request = {
@@ -19,10 +22,13 @@ const request = {
   json() { return body.length ? JSON.parse(body.toString('utf8')) : null; },
 };
 
+// Print the response on its own marker line.
 function emit(res) {
   process.stdout.write(`\n${MARK} ${Buffer.from(JSON.stringify(res)).toString('base64')}\n`);
 }
 
+// Turn whatever the handler returned into { status, headers, body }.
+// Nothing becomes 204 (no content). Bytes are sent base64-encoded. Other values become JSON.
 function toResponse(out) {
   if (out === undefined || out === null) return { status: 204, headers: {}, body: '' };
   if (typeof out === 'string') return { status: 200, headers: { 'content-type': 'text/plain; charset=utf-8' }, body: out };
@@ -36,6 +42,7 @@ function toResponse(out) {
   return { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify(out) };
 }
 
+// Load the function and run it. If it throws, the caller gets a 500 answer and the error goes to stderr.
 try {
   const mod = await import(pathToFileURL(path.resolve(entry)).href);
   const handler = mod.default ?? mod.handler;

@@ -1,7 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Browser-facing pages: registration, 2FA enrollment, sign-in, step-up,
-// package browsing and the account security page.
+// The web pages people use in a browser: sign-up, 2FA setup, sign-in, step-up checks,
+// package and team pages, billing, and the account security page.
+// 2FA (two-factor authentication) means a password plus a 6-digit code from an authenticator app.
+// registerWeb adds these routes to the router. The HTML itself comes from views.js.
 import crypto from 'node:crypto';
 import QRCode from 'qrcode';
 import { html, redirect, readForm, cookie } from './http.js';
@@ -9,11 +11,15 @@ import { HttpError } from './errors.js';
 import { safeEqual, deriveKey, hmac } from './crypto.js';
 import * as V from './views.js';
 
+// Cookie names: the session, the half-done 2FA setup, the sign-in ticket (password done, code not yet),
+// and the CSRF token.
 const SID = 'gitcha_sid';
 const ENROLL = 'gitcha_enroll';
 const TICKET = 'gitcha_ticket';
 const CSRF = 'gitcha_csrf';
 
+// Messages a page shows after a redirect, chosen by ?msg=. Only these fixed texts can appear,
+// so a link cannot make the page show words of its own.
 const NOTICES = {
   activated: 'Your account is active. Sign in with your password and authenticator code.',
   signed_out: 'You have been signed out.',
@@ -32,6 +38,7 @@ const NOTICES = {
   subscribed: 'Thank you: your subscription is active.',
   sub_cancelled: 'Your subscription has been cancelled.',
 };
+// Why the server is asking for a fresh code, in plain words.
 const REASONS = {
   interval: 'It has been a while since you last confirmed it was you.',
   new_network: 'You are connecting from a new network.',
@@ -39,9 +46,11 @@ const REASONS = {
 };
 
 /**
- * Only allow same-site relative redirects. The address is resolved the way a browser resolves a Location header,
- * against a fixed origin, and must come back to that origin: the URL standard strips tab and newline before it
- * parses, so a check on the raw text is not enough. Control characters and backslashes are refused up front.
+ * Only allow redirects to a path on this same site (no open redirect, where a link of ours sends people
+ * to another site). We resolve the address the way a browser resolves a Location header, against a fixed
+ * origin, and it must come back to that origin. A check on the raw text is not enough, because the URL
+ * standard strips tabs and newlines before it parses. Control characters and backslashes are refused first.
+ * Anything else falls back to /packages.
  */
 export function safeNext(n) {
   const fallback = '/packages';
@@ -54,16 +63,24 @@ export function safeNext(n) {
   }
 }
 
+/**
+ * Add every browser route to `router`. Returns helpers (page, form, csrfToken, requireWeb, and so on)
+ * that other route files reuse.
+ */
 export function registerWeb(router, { auth, packages, teams, config, billing }) {
-  // Cookies are Secure when the public URL is https, or when a proxy we trust says this request came in over https
-  // (AUTH-16): a registry reachable on both schemes marks the cookies it sets over https as Secure.
+  // Cookies get the Secure flag (sent only over https) when the public URL is https, or when a proxy we
+  // trust says this request came in over https (AUTH-16). So a registry reachable on both http and https
+  // marks the cookies it sets over https as Secure.
   const secureOf = (ctx) => config.secureCookies
     || (config.trustProxy && String(ctx.req.headers['x-forwarded-proto'] ?? '').split(',').pop().trim().toLowerCase() === 'https');
 
-  // CSRF token = nonce.HMAC(server key, session cookie | nonce) (AUTH-10). It is bound to the session that was in
-  // the browser when it was issued, so a value planted from a sibling subdomain, or lifted from another session,
-  // fails; a new sign-in changes the session, so the old token stops working at once. Before sign-in the session
-  // part is empty, which binds nothing: the Origin check below is what covers that gap.
+  // CSRF is a trick where another site makes your browser send a request to us. Every form carries a token
+  // to stop it. The token is nonce.HMAC(server key, session cookie | nonce) (AUTH-10). A nonce is a random
+  // one-time value, and an HMAC is a signature only the server can make.
+  // The token is tied to the session that was in the browser when it was made. So a value planted from a
+  // sibling subdomain, or copied from another session, fails. A new sign-in changes the session, so the old
+  // token stops working at once. Before sign-in the session part is empty, which ties it to nothing:
+  // the Origin check below covers that gap.
   const csrfKey = deriveKey(config.secretKey, 'csrf v1');
   const csrfMac = (sid, nonce) => hmac(csrfKey, `${sid}\n${nonce}`);
   const mintCsrf = (sid) => {
@@ -77,6 +94,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
   };
   const csrfCookie = (ctx, token) => cookie(CSRF, token, { secure: secureOf(ctx), maxAge: 86400_000 });
 
+  // The CSRF token for this page: reuse the browser's token if it is still valid, else make and set a new one.
   const csrfToken = (ctx) => {
     const have = ctx.cookies[CSRF];
     if (csrfValid(ctx, have)) return have;
@@ -88,10 +106,10 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
 
   const publicHost = new URL(config.publicUrl).host;
   /**
-   * A browser says where a write came from. Sec-Fetch-Site is set by the browser and cannot be forged by a page;
-   * when it is absent (older browsers, scripts) the Origin header must name this site. Origin "null" is what our
-   * own Referrer-Policy (no-referrer) makes browsers send on a same-site form post, so it is let through only
-   * when Sec-Fetch-Site is absent, and the token still has to match.
+   * A browser says where a form post came from. The browser sets Sec-Fetch-Site, and a page cannot fake it.
+   * When it is missing (older browsers, scripts), the Origin header must name this site.
+   * Origin "null" is what our own Referrer-Policy (no-referrer) makes browsers send on a same-site form post.
+   * So "null" is let through only when Sec-Fetch-Site is missing, and the token still has to match.
    */
   const checkOrigin = (ctx) => {
     const h = ctx.req.headers;
@@ -108,6 +126,8 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     if (host !== publicHost && host !== h.host) refuse();
   };
 
+  // Read a posted form and check it is really from our site: the origin check, then the CSRF token
+  // (it must equal the cookie, and the cookie must be valid for this session). Every POST route calls this first.
   const form = async (ctx) => {
     const f = await readForm(ctx.req);
     checkOrigin(ctx);
@@ -118,12 +138,17 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     return f;
   };
 
+  // The signed-in session for this request, or null.
   const current = (ctx) => auth.authenticate(ctx.cookies[SID], ctx.ip);
 
+  // Send a full HTML page inside the shared layout.
   const page = (ctx, title, body, { status = 200, user, wide } = {}) =>
     html(ctx.res, status, V.layout({ title, body, user: user ?? current(ctx)?.user, csrf: csrfToken(ctx), wide }));
 
-  /** Logged in with 2FA satisfied, else redirect to sign-in / step-up. */
+  /**
+   * Make sure the user is signed in and their 2FA check is current. If not, redirect to sign-in or to
+   * /verify and return null, so the route stops.
+   */
   const requireWeb = (ctx, opts) => {
     const a = current(ctx);
     if (!a) { redirect(ctx.res, `/login?next=${encodeURIComponent(ctx.url.pathname + ctx.url.search)}`); return null; }
@@ -132,7 +157,11 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     return a;
   };
 
-  /** For POSTs needing a fresh code: send through /verify, then back to the `back` page. */
+  /**
+   * For POSTs that need a fresh code. If the last code is older than the sensitive window, send the user
+   * through /verify and then back to the `back` page, and return false. `force` asks for a fresh code
+   * even when the user turned the "sensitive" check off.
+   */
   const requireFresh = (ctx, a, back, force = false) => {
     const age = auth.clock() - (a.session.mfaAt ?? 0);
     const needs = force || auth.checkSettings(a.user).sensitive;
@@ -146,6 +175,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
   router.get('/', (ctx) => (current(ctx) ? redirect(ctx.res, '/crawl') : page(ctx, 'Free software forge', V.landing(), { wide: true })));
 
   // ---- registration + mandatory 2FA enrollment -----------------------------
+  // Sign-up makes the account, then the user must scan a QR code and enter a code before it is active.
   router.get('/register', (ctx) => page(ctx, 'Create account', V.registerPage({ csrf: csrfToken(ctx) })));
 
   router.post('/register', async (ctx) => {
@@ -159,6 +189,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     }
   });
 
+  // The 2FA setup page: a QR code (and the secret as text) for the authenticator app.
   const enrollView = async (ctx, error, status = 200) => {
     const e = auth.enrollmentFor(ctx.cookies[ENROLL]);
     if (!e) return redirect(ctx.res, '/register');
@@ -181,6 +212,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
   });
 
   // ---- sign in: password, then authenticator code ---------------------------
+  // The password step gives a short-lived ticket cookie. The code step trades the ticket for a session.
   router.get('/login', (ctx) => {
     if (current(ctx)) return redirect(ctx.res, safeNext(ctx.url.searchParams.get('next')));
     page(ctx, 'Sign in', V.loginPage({ csrf: csrfToken(ctx), notice: NOTICES[ctx.url.searchParams.get('msg')], next: ctx.url.searchParams.get('next') ?? '' }));
@@ -217,7 +249,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
         ip: ctx.ip, userAgent: ctx.req.headers['user-agent'],
       });
       redirect(ctx.res, safeNext(f.next), {
-        // A new session gets a new CSRF token; whatever was in the browser before sign-in is replaced, not trusted.
+        // A new session gets a new CSRF token. Whatever was in the browser before sign-in is replaced, not trusted.
         'Set-Cookie': [...ctx.outCookies, cookie(TICKET, '', { secure: secureOf(ctx), maxAge: 0 }), cookie(SID, token, { secure: secureOf(ctx), maxAge: config.policy.sessionMaxAge }), csrfCookie(ctx, mintCsrf(token))],
       });
     } catch (err) {
@@ -228,6 +260,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
   });
 
   // ---- intermittent step-up -------------------------------------------------
+  // A step-up is a fresh code asked for now and then (on a timer, on a new network, or before a sensitive action).
   const verifyView = (ctx, { error, next, reason, status = 200 }) => page(ctx, 'Confirm it is you', V.codePage({
     csrf: csrfToken(ctx), error, next, reason: REASONS[reason], action: '/verify', title: 'Confirm it’s you',
     message: 'Enter the current code from your authenticator app to continue.',
@@ -259,6 +292,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
   });
 
   // ---- packages -----------------------------------------------------------
+  // With config.publicRead, anyone may browse packages. Otherwise the user must be signed in.
   router.get('/packages', (ctx) => {
     const a = config.publicRead ? current(ctx) : requireWeb(ctx);
     if (!a && !config.publicRead) return;
@@ -279,7 +313,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     packageView(ctx, a, ctx.params.name);
   });
 
-  /** Shared shape for team/package POST forms that need a fresh code. */
+  /** The shared shape for team and package POST forms that need a fresh code: check the form, sign-in and code, then run fn. */
   const sensitivePost = (back, fn) => async (ctx) => {
     const f = await form(ctx);
     const a = requireWeb(ctx);
@@ -329,7 +363,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     if (a) teamView(ctx, a, ctx.params.team, { notice: NOTICES[ctx.url.searchParams.get('msg')] });
   });
 
-  /** Team changes: on a rule violation, show the team page with the error. */
+  /** Team changes: if a team rule is broken, show the team page again with the error. */
   const teamPost = (fn) => sensitivePost((ctx) => `/teams/${ctx.params.team}`, async (ctx, a, f) => {
     try {
       await fn(ctx, a, f);
@@ -340,7 +374,8 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
   });
 
   router.post('/teams/:team/members', teamPost((ctx, a, f) => {
-    // Naming an owner hands over the whole team: it takes a code of its own, not just the open window.
+    // Making someone an owner hands over the whole team. So it needs a code of its own,
+    // not just a recent step-up.
     if (f.role === 'owner') auth.confirmAction(a, f.code, ctx.ip, 'Making someone an owner');
     teams.setMember(a.user, ctx.params.team, f.username, f.role, ctx.ip);
     redirect(ctx.res, `/teams/${ctx.params.team}?msg=member_saved`);
@@ -358,6 +393,8 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
   }));
 
   // ---- billing ----------------------------------------------------------------------
+  // Paying, cancelling and the provider portal always need a fresh code (force = true).
+  // An "owner" is "user:NAME" or "team:NAME". The page offers only the user and the teams they own.
   const billingBack = (owner) => `/billing?owner=${encodeURIComponent(owner ?? '')}`;
   const billingView = (ctx, a, owner, { error, notice, status = 200 } = {}) => {
     const view = billing.view(a.user, owner);
@@ -376,7 +413,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     if (!a || !requireFresh(ctx, a, `${billingBack(f.owner)}&msg=confirm_again`, true)) return;
     try {
       const { url } = await billing.checkout(a.user, { owner: f.owner, plan: f.plan, provider: f.provider }, ctx.ip);
-      // Only ever redirect to the provider URL the provider gave us.
+      // Only ever redirect to the URL the payment provider gave us.
       redirect(ctx.res, url);
     } catch (err) {
       if (!(err instanceof HttpError)) throw err;
@@ -384,6 +421,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     }
   });
 
+  // The payment provider sends the user back here after checkout. We ask the provider to confirm it.
   router.get('/billing/return', async (ctx) => {
     const a = requireWeb(ctx);
     if (!a) return;
@@ -414,7 +452,10 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
 
 
   // ---- account security -----------------------------------------------------
-  /** The three audit lists on the Account page, each 15 rows to a page: ?events=, ?others= and ?downloads= are page numbers. */
+  /**
+   * The three audit lists (logs of what happened) on the Account page, 15 rows to a page.
+   * ?events=, ?others= and ?downloads= are the page numbers. Bad numbers are clamped to a real page.
+   */
   const PER_PAGE = 15;
   const activityLists = (ctx, userId) => {
     const one = (kind, param) => {
@@ -426,6 +467,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     return { security: one('security', 'events'), others: one('others', 'others'), traffic: one('traffic', 'downloads') };
   };
 
+  // The Account page: email, 2FA check settings, signed-in devices, recovery codes left, and activity.
   const accountView = (ctx, a, { notice, error, status = 200 } = {}) => {
     const sessions = auth.store.sessionsForUser(a.user.id).filter((s) => s.kind !== 'enroll').sort((x, y) => y.lastSeen - x.lastSeen);
     const state = auth.mfaState(a);
@@ -445,8 +487,9 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     const f = await form(ctx);
     const a = requireWeb(ctx);
     if (!a) return;
-    // The code travels with the form and is used up by it. A locked box is shown disabled, so a browser never
-    // sends it: leave locked keys out of the change instead of reading their absence as "off" (AUTH-8).
+    // The code comes with the form and the change uses it up. A box that an admin locked is shown disabled,
+    // so a browser never sends it. We leave locked keys out of the change instead of reading
+    // their absence as "off" (AUTH-8).
     const locked = auth.checkSettings(a.user).locked;
     const changes = {};
     for (const key of ['interval', 'new_network', 'sensitive']) if (!locked.includes(key)) changes[key] = f[key] === 'on';
@@ -472,6 +515,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     }
   });
 
+  // Make a new set of recovery codes (one-time codes for when the phone is lost). The old ones stop working.
   router.post('/account/recovery-codes', async (ctx) => {
     await form(ctx);
     const a = requireWeb(ctx);
@@ -479,6 +523,8 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     page(ctx, 'Recovery codes', V.recoveryCodesPage({ codes: auth.regenerateRecoveryCodes(a.user, ctx.ip), fresh: false }), { user: a.user });
   });
 
+  // Sign out one device. The id is the first 16 characters of the session's hash, and it must be one of
+  // this user's own sessions.
   router.post('/account/sessions/:id/revoke', async (ctx) => {
     await form(ctx);
     const a = requireWeb(ctx);
@@ -491,6 +537,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
   return { page, form, csrfToken, csrfValid, current, requireWeb, requireFresh, NOTICES };
 }
 
+// A friendly device name from the User-Agent header, such as "Firefox on Linux".
 function browserName(ua = '') {
   const b = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
   const os = /Windows/.test(ua) ? 'Windows' : /Mac OS X/.test(ua) ? 'macOS' : /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Linux/.test(ua) ? 'Linux' : '';

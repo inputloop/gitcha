@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// The GraphQL API at /api/graphql: the one way, beside the web UI, to manage
-// everything that is not git(1) itself: profiles, agents, keys, posts,
-// projects, tasks, claims, reviews and budgets. Agents in the sandboxes call
-// it with their agent key; people with a device or console key (or the web
-// session, with a CSRF header).
+// The GraphQL API at /api/graphql. Beside the web pages, it is the one way to
+// manage everything that is not git itself: profiles, agents, keys, posts,
+// projects, tasks, claims, reviews, budgets, and the support and operations
+// tickets. People call it with a device or console key, or with the web
+// session plus a CSRF header. (CSRF is a trick where another site makes your
+// browser send a request. The header proves the request came from our own
+// page.) Agent keys are refused here: see principalFor below.
 import { buildSchema, getNamedType, graphql, GraphQLError, GraphQLScalarType, Kind, TypeInfo, visit, visitWithTypeInfo } from 'graphql';
 import { HttpError, mfaRequired } from '../errors.js';
 import { json, readJson, parseCookies } from '../http.js';
@@ -12,6 +14,8 @@ import { safeEqual } from '../crypto.js';
 import { principalKey } from './principal.js';
 import { markdown } from '../views.js';
 
+// The schema in GraphQL's schema language (SDL). The quoted strings inside are the
+// field docs that a client sees when it asks the schema about itself (introspection).
 export const SDL = `
 """Any JSON value."""
 scalar JSON
@@ -114,17 +118,18 @@ type Mutation {
 }
 `;
 
-const MAX_DEPTH = 8;
-const MAX_QUERY = 20_000;
-// What one request may ask for. Conservative defaults; the keepers can move them here.
+const MAX_DEPTH = 8; // how many levels a query may nest
+const MAX_QUERY = 20_000; // the longest query text, in characters
+// What one request may ask for. Careful defaults; the keepers can change them here.
 const MAX_ALIASES = 10; // aliased fields, after fragments are expanded
 const MAX_FIELDS = 400; // fields in all, after fragments are expanded (a fragment used twice counts twice)
 const MAX_OBJECTS = 5_000; // list items one request may build while it runs
 
 /**
- * Measure a request before it runs, following fragment spreads (a spread has no
- * selection of its own, so a chain of fragments reached any depth) and stopping
- * the moment a limit is passed, so the walk itself can never be the expensive part.
+ * Measures a request before it runs: depth, field count and aliases. It follows fragment
+ * spreads (a spread has no selection of its own, so a chain of fragments could reach any
+ * depth). It stops the moment a limit is passed, so the check itself can never be the slow
+ * part. It also refuses introspection when that is turned off.
  */
 function measure(doc, { introspection }) {
   const fragments = new Map(doc.definitions.filter((d) => d.kind === Kind.FRAGMENT_DEFINITION).map((d) => [d.name.value, d]));
@@ -152,7 +157,7 @@ function measure(doc, { introspection }) {
   }
 }
 
-/** A request's running count of list items built; passing the cap ends the request with a 400. */
+/** Counts the list items one request builds. Passing MAX_OBJECTS ends the request with a 400. */
 function makeMeter() {
   const m = { used: 0, fatal: null };
   m.spend = (list) => {
@@ -166,10 +171,10 @@ function makeMeter() {
   return m;
 }
 
-// GQL-4: names every object has. They are never an id of ours, and a lookup that is handed one must not find a prototype.
+// GQL-4: names every JavaScript object has. None of our ids look like these, and a lookup given one must not find a built-in property.
 const PROTO_IDS = new Set(['__proto__', 'constructor', 'prototype']);
 
-/** Refuse, before anything runs, an ID argument that is (or holds) one of those names. */
+/** Refuses, before anything runs, an ID argument that is (or holds) one of those names. It checks inline values and variables. */
 function refuseProtoIds(schema, doc, variables) {
   const bad = (v) => (typeof v === 'string' && PROTO_IDS.has(v)) || (Array.isArray(v) && v.some(bad));
   const holds = (node) => {
@@ -187,6 +192,7 @@ function refuseProtoIds(schema, doc, variables) {
   }));
 }
 
+// The JSON type passes values through as they are. Written inline in a query, only a string is accepted.
 const JSONScalar = new GraphQLScalarType({
   name: 'JSON',
   serialize: (v) => v,
@@ -194,14 +200,20 @@ const JSONScalar = new GraphQLScalarType({
   parseLiteral: (ast) => (ast.kind === Kind.STRING ? ast.value : null),
 });
 
+/**
+ * Builds the schema, attaches the resolvers (the functions that answer each field) and
+ * returns the request handler. `s` holds the app's services.
+ */
 export function makeGraphql(s) {
   const schema = buildSchema(SDL);
   Object.assign(schema.getType('JSON'), { serialize: JSONScalar.serialize, parseValue: JSONScalar.parseValue, parseLiteral: JSONScalar.parseLiteral });
   const { auth, agents, keys, budgets, projects, tasks, social, store, config, ops } = s;
-  // Schema introspection is the documentation; a public server answers it only when the operator turns it on.
+  // Introspection (asking the schema about itself) is the documentation. A public server answers it only when the operator turns it on.
   const introspection = config.social?.introspection ?? /^(1|true|yes|on)$/i.test(process.env.GITCHA_GRAPHQL_INTROSPECTION ?? '');
 
   // ---- guards ----------------------------------------------------------------------------
+  // anyone: no sign-in needed. someone: any signed-in caller, person or agent.
+  // person: people only. With `fresh`, the session must have typed a 2FA code within the sensitive window.
   const anyone = (ctx) => ctx.principal;
   const someone = (ctx) => {
     if (!ctx.principal) throw new HttpError(401, 'unauthenticated', 'Sign in (device or console key, agent key, or the web session).');
@@ -215,6 +227,7 @@ export function makeGraphql(s) {
     }
     return p;
   };
+  // project: finds a project by "owner/name", or 404. readableProject: also 404 when the caller may not read it.
   const project = (key) => {
     const [owner, name] = String(key ?? '').split('/');
     const p = projects.find(owner, name);
@@ -226,14 +239,17 @@ export function makeGraphql(s) {
     if (!tasks.access.read(ctx.principal, p)) throw new HttpError(404, 'project_not_found', `No project ${key}.`);
     return p;
   };
-  // Budgets are private: the owner reads a person's or an agent's, nobody else, whichever way the query reaches it.
+  // Budgets are private. Only the owner reads a person's or an agent's budget, whichever way the query reaches it.
   const ownBudget = (ctx, account) => {
     const p = someone(ctx);
     const mine = p.kind === 'agent' ? [`agent:${p.agent.handle}`] : [`user:${p.user.username}`, ...agents.forOwner(p.user.id).map((a) => `agent:${a.handle}`)];
     if (!mine.includes(account)) throw new HttpError(403, 'not_yours', 'You can read your own budget and your agents\' budgets.');
     return { account, balance: budgets.balance(account), ledger: ({ limit }) => budgets.ledger(account, limit) };
   };
+  // Is the caller this agent's owner, or the agent itself?
   const isOwnerOf = (ctx, a) => (ctx.principal?.kind === 'user' ? ctx.principal.user.id === a.owner : ctx.principal?.kind === 'agent' && ctx.principal.agent.handle === a.handle);
+  // The *View helpers turn stored records into the shapes the schema returns. Each list goes
+  // through the meter, so one request cannot build too many objects.
   const agentView = (ctx) => (a) => ({ ...agents.view(a, { owner: isOwnerOf(ctx, a) }), posts: ({ limit }, c) => c.meter.spend(social.feed({ author: `agent:${a.handle}`, sort: 'new', limit })), budget: () => ownBudget(ctx, `agent:${a.handle}`) });
   const userView = (ctx) => (u) => ({
     username: u.username, displayName: u.profile?.displayName ?? null, bio: u.profile?.bio ?? null,
@@ -252,6 +268,7 @@ export function makeGraphql(s) {
     const u = store.userById(p.user.id);
     return { kind: 'user', ...userView(ctx)(u), agent: null, sshKeys: keys.sshFor(u), gpgKeys: keys.gpgFor(u), agentKeys: keys.agentKeysFor(u), budget: ownBudget(ctx, `user:${u.username}`) };
   };
+  // Who a new key is for: the person, or one of their agents.
   const holder = (p, agent) => keys.holder(p.user, agent, agents);
 
   const resolvers = {
@@ -260,7 +277,7 @@ export function makeGraphql(s) {
       user: ({ username }, ctx) => { anyone(ctx); const u = store.userByName(username); return u && u.status === 'active' ? userView(ctx)(u) : null; },
       agent: ({ handle }, ctx) => { const a = agents.find(handle); return a ? agentView(ctx)(a) : null; },
       project: ({ owner, name }, ctx) => { const p = projects.find(owner, name); return p && tasks.access.read(ctx.principal, p) ? projectView(ctx)(p) : null; },
-      // A list shows what you belong to or the public; an administrator opens a private project by its name, which tells its owner.
+      // A list shows the public projects and the ones you belong to. An administrator opens a private project by its name, which tells its owner.
       projects: (_, ctx) => ctx.meter.spend(projects.list(ctx.principal).filter((p) => tasks.access.how(ctx.principal, p) !== 'admin')).map(projectView(ctx)),
       post: ({ id }, ctx) => { const p = Object.hasOwn(social.posts, id) ? social.posts[id] : null; return p ? postView(ctx)(p) : null; },
       feed: ({ tag, author, sort, limit, before }, ctx) => ctx.meter.spend(social.feed({ tag, author, sort: sort.toLowerCase(), limit, before })).map(postView(ctx)),
@@ -292,7 +309,7 @@ export function makeGraphql(s) {
       editChange: ({ id, ...rest }, ctx) => ops.editChange(person(ctx).user, id, rest),
       advanceChange: ({ id, to, note, code, via }, ctx) => {
         const p = person(ctx);
-        // OPS-2: the code rides with the decision. stepUp throws on a bad one; a window opened earlier is no use here.
+        // OPS-2: the code comes with the decision itself. stepUp throws on a bad code. A window opened by an earlier code does not count here.
         const carried = Boolean(code) && Boolean(p.auth);
         if (carried) auth.stepUp(p.auth, code, ctx.ip);
         return ops.advance(p.user, id, to, { note, fresh: carried, via });
@@ -332,17 +349,22 @@ export function makeGraphql(s) {
       revokeAgentKey: ({ id }, ctx) => { keys.revokeAgentKey(person(ctx, { fresh: true }).user, id, ctx.ip); return true; },
     },
   };
+  // Attach each resolver to its field. Ours take (args, ctx) instead of GraphQL's usual (root, args, ctx).
   for (const [typeName, fields] of Object.entries(resolvers)) {
     const type = schema.getType(typeName);
     for (const [name, fn] of Object.entries(fields)) type.getFields()[name].resolve = (_root, args, ctx) => fn(args, ctx);
   }
 
-  /** Resolve the caller: bearer token (person or agent key) or the web session (needs the CSRF header). */
+  /**
+   * Finds the caller: a bearer token (a person's device or console key) or the web session
+   * cookie. Over the web session, a mutation also needs the X-Gitcha-CSRF header to match the
+   * CSRF cookie. Agent keys are refused. No sign-in at all gives null (an anonymous reader).
+   */
   function principalFor(ctx, isMutation) {
     const h = ctx.req.headers.authorization ?? '';
     if (h.startsWith('Bearer ')) {
       const token = h.slice(7).trim();
-      // An agent key opens the sandbox door only; whether it is valid is not told here.
+      // An agent key opens only the sandbox door. We do not say here whether the key is valid.
       if (token.startsWith('gak_')) throw new HttpError(401, 'unauthenticated', 'Agent keys work only for the paid sandboxes. To contribute, use git, the extension or MCP; for scripts, a console key.');
       const p = s.principals.fromToken(token, ctx.ip);
       if (!p) throw new HttpError(401, 'unauthenticated', 'That token is not valid.');
@@ -357,6 +379,10 @@ export function makeGraphql(s) {
     return a ? { kind: 'user', user: a.user, auth: a } : null;
   }
 
+  /**
+   * Answers one GraphQL request (GET or POST). Before running it, it checks the size, the shape
+   * (measure) and the ids, and finds the caller. Afterwards it turns errors into safe messages.
+   */
   async function handle(ctx) {
     let body;
     if (ctx.req.method === 'GET') {
@@ -372,21 +398,23 @@ export function makeGraphql(s) {
     let doc;
     try { doc = parse(query); } catch (err) { return json(ctx.res, 400, { errors: [{ message: err.message }] }); }
     const isMutation = doc.definitions.some((d) => d.operation === 'mutation');
+    // Mutations must use POST, so a plain link cannot change anything.
     if (isMutation && ctx.req.method === 'GET') throw new HttpError(405, 'use_post', 'Mutations must be sent with POST.');
     measure(doc, { introspection });
     refuseProtoIds(schema, doc, body.variables);
     const principal = principalFor(ctx, isMutation);
-    // People must have passed their periodic 2FA check, as everywhere else.
+    // People must have passed their regular 2FA check, as everywhere else.
     if (principal?.kind === 'user' && principal.auth) auth.requireMfa(principal.auth);
     const meter = makeMeter();
     const result = await graphql({ schema, source: query, variableValues: body.variables ?? undefined, operationName: body.operationName ?? undefined, contextValue: { principal, ip: ctx.ip, meter } });
     if (meter.fatal) throw meter.fatal; // too costly: no partial answer
     if (result.errors) {
+      // Our own HttpErrors keep their message and code. Any other crash becomes "Internal error.", so no inside detail leaks out.
       result.errors = result.errors.map((e) => {
         const orig = e.originalError;
         if (orig instanceof HttpError) return { message: orig.message, path: e.path, extensions: { code: orig.code, status: orig.status, ...orig.extra } };
         if (orig && !(orig instanceof GraphQLError)) { console.error(orig); return { message: 'Internal error.', path: e.path, extensions: { code: 'internal' } }; }
-        // "Did you mean ..." would spell out the schema that introspection is not allowed to.
+        // "Did you mean ..." hints would spell out the schema that introspection is not allowed to show.
         return { message: introspection ? e.message : e.message.replace(/\s*Did you mean[\s\S]*$/, ''), locations: e.locations, path: e.path };
       });
     }

@@ -1,22 +1,28 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Web routes for the social and project side. Reading feeds, profiles,
-// forums and the ring needs no account (that is how people watch agents
-// work); everything that writes needs one, and keys need a fresh code.
+// Web routes (HTML pages and form posts) for the social and project side.
+// Reading feeds, profiles, forums and the ring needs no account: that is how
+// people watch agents work. Everything that writes needs one. Changing keys
+// and project collaborators also needs a fresh 2FA code. The pages themselves
+// are built in views.js; the rules live in the services (social, agents,
+// keys, projects, tasks, ops).
 import { html, redirect, readForm } from '../http.js';
 import { HttpError } from '../errors.js';
 import * as SV from './views.js';
 
+// "a, b, c" from a form field into ["a", "b", "c"].
 const list = (s) => String(s ?? '').split(',').map((x) => x.trim()).filter(Boolean);
 
+/** Adds the social and project pages to the router. `s` holds the app's services. */
 export function registerSocialWeb(router, s) {
   const { web, social, agents, keys, projects, tasks, ops, ring, store, budgets, teams } = s;
   const { page, form, csrfToken, current, requireWeb, requireFresh } = web;
+  // principalOf turns a web sign-in into a principal. myAgents: the signed-in person's agents.
   const principalOf = (a) => (a ? { kind: 'user', user: a.user, auth: a } : null);
   const myAgents = (a) => (a ? agents.forOwner(a.user.id).map((x) => agents.view(x, { owner: true })) : []);
   const views = (ctx, posts) => posts.map((p) => social.view(p, principalOf(current(ctx))));
 
-  /** Run a form action; on a rule violation show `onError(message)` instead of a stack. */
+  /** Runs a form action. When a rule says no (an HttpError), it calls `onError(err)` to show the page again with the message, instead of a crash. */
   const attempt = async (ctx, fn, onError) => {
     try { return await fn(); } catch (err) {
       if (!(err instanceof HttpError)) throw err;
@@ -36,6 +42,7 @@ export function registerSocialWeb(router, s) {
   router.get('/crawl', (ctx) => crawl(ctx));
   router.get('/t/:tag', (ctx) => crawl(ctx, { tag: ctx.params.tag.toLowerCase() }));
 
+  // Each form post calls `form` first, which checks the CSRF token. Then requireWeb checks the sign-in and the 2FA state.
   router.post('/posts', async (ctx) => {
     const f = await form(ctx);
     const a = requireWeb(ctx);
@@ -71,6 +78,7 @@ export function registerSocialWeb(router, s) {
   });
 
   // ---- profiles ---------------------------------------------------------------------------
+  // /@name goes to the agent's page if an agent has that handle, otherwise to the person's page.
   router.get('/@:name', (ctx) => {
     const n = ctx.params.name.toLowerCase();
     redirect(ctx.res, store.data.agents[n] ? `/a/${n}` : `/u/${n}`);
@@ -91,6 +99,7 @@ export function registerSocialWeb(router, s) {
   router.get('/a/:handle', (ctx) => {
     const a = current(ctx);
     const ag = agents.get(ctx.params.handle);
+    // Only reviews in public projects are listed on an agent's page.
     const reviews = Object.values(tasks.data).filter((t) => t.claimant?.handle === ag.handle && t.review && tasks.project(t)?.visibility === 'public').map((t) => tasks.view(t, null));
     page(ctx, ag.name, SV.profilePage({
       csrf: csrfToken(ctx), who: agents.view(ag, { owner: a?.user.id === ag.owner }), isAgent: true, posts: views(ctx, social.feed({ author: `agent:${ag.handle}`, sort: 'new', limit: 30 })),
@@ -139,6 +148,7 @@ export function registerSocialWeb(router, s) {
   // ---- keys -------------------------------------------------------------------------------------
   const keysView = (ctx, a, extra = {}) => page(ctx, 'Keys', SV.keysPage({ csrf: csrfToken(ctx), ssh: keys.sshFor(a.user), gpg: keys.gpgFor(a.user), agents: myAgents(a), ...extra }), { user: a.user, wide: true, status: extra.status ?? 200 });
   router.get('/keys', (ctx) => { const a = requireWeb(ctx); if (a) keysView(ctx, a, { notice: web.NOTICES[ctx.url.searchParams.get('msg')] }); });
+  // Every key change needs a fresh 2FA code. Without one, requireFresh sends the person to /verify and then back here.
   const keyPost = (fn) => async (ctx) => {
     const f = await form(ctx);
     const a = requireWeb(ctx);
@@ -152,6 +162,7 @@ export function registerSocialWeb(router, s) {
   router.post('/keys/console', keyPost((ctx, a, f) => { keysView(ctx, a, { newKey: keys.createConsoleKey(a.user, { name: f.name }, ctx.ip, { mfaAt: a.session.mfaAt }) }); }));
 
   // ---- projects -----------------------------------------------------------------------------------
+  // The list leaves out private projects the person sees only as an administrator (opening one by name tells its owner).
   const projectsView = (ctx, a, extra = {}) => page(ctx, 'Projects', SV.projectsPage({
     csrf: a ? csrfToken(ctx) : null, projects: projects.list(principalOf(a)).filter((p) => tasks.access.how(principalOf(a), p) !== 'admin').map((p) => projects.view(p, principalOf(a))),
     teams: a ? teams.forUser(a.user).filter((t) => t.role !== 'member').map((t) => t.name) : [], ...extra,
@@ -167,6 +178,7 @@ export function registerSocialWeb(router, s) {
     }, (err) => projectsView(ctx, a, { error: err.message, status: err.status }));
   });
 
+  // The project in the URL, if this person may read it. Otherwise a 404, so private projects stay hidden.
   const projectFor = (ctx, a) => {
     const p = projects.find(ctx.params.owner, ctx.params.name);
     if (!p || !tasks.access.read(principalOf(a), p)) throw new HttpError(404, 'not_found', 'No such project.');
@@ -177,6 +189,7 @@ export function registerSocialWeb(router, s) {
     maintainer: Boolean(a && projects.isMaintainer(a.user, p)), ...extra,
   }), { user: a?.user, wide: true, status: extra.status ?? 200 });
   router.get('/projects/:owner/:name', (ctx) => { const a = current(ctx); projectView(ctx, a, projectFor(ctx, a), { notice: web.NOTICES[ctx.url.searchParams.get('msg')] }); });
+  // A form post on a project page. With `fresh`, a fresh 2FA code is needed too.
   const projectPost = (fn, { fresh = false } = {}) => async (ctx) => {
     const f = await form(ctx);
     const a = requireWeb(ctx);
@@ -194,6 +207,7 @@ export function registerSocialWeb(router, s) {
   }, { fresh: true }));
 
   // ---- tasks -------------------------------------------------------------------------------------
+  // A task page. The "Claim as" list shows the person's agents that may claim it.
   const taskView = (ctx, a, id, extra = {}) => {
     const t = tasks.get(id);
     const principal = principalOf(a);
@@ -218,6 +232,7 @@ export function registerSocialWeb(router, s) {
   router.post('/tasks/:id/claim', taskPost((ctx, a, f) => tasks.claim(principalOf(a), ctx.params.id, { agent: f.agent || undefined })));
   router.post('/tasks/:id/release', taskPost((ctx, a) => tasks.release(principalOf(a), ctx.params.id)));
   router.post('/tasks/:id/review', taskPost((ctx, a, f) => {
+    // Findings come one per line as "severity | title | path".
     const findings = String(f.findings ?? '').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
       const [severity, title, path] = l.split('|').map((x) => x.trim());
       return { severity: (severity ?? '').toLowerCase(), title, path: path || null };
@@ -228,6 +243,7 @@ export function registerSocialWeb(router, s) {
   router.post('/tasks/:id/findings/:finding', taskPost((ctx, a, f) => tasks.decideFinding(a.user, ctx.params.id, ctx.params.finding, f.accept === 'yes')));
 
   // ---- support (tickets, as their reporters and tenants see them) ---------------------------------
+  // The billing accounts (the person's own and their teams') that a ticket may be about.
   const tenantsOf = (a) => [`user:${a.user.username}`, ...teams.forUser(a.user).map((t) => `team:${t.name}`)].filter((t) => store.data.billing?.accounts?.[t]);
   const supportView = (ctx, a, extra = {}) => page(ctx, 'Support', SV.supportPage({
     csrf: csrfToken(ctx), tickets: ops.tickets(a.user, { limit: 100 }).filter((t) => t.scope !== 'internal'), tenants: tenantsOf(a), ...extra,
