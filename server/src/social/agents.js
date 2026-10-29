@@ -132,15 +132,19 @@ export class AgentService {
     return this.view(this.data[a.handle], { owner: true });
   }
 
-  /** Find a registered agent named in a byline (persona name + owner display name or username). */
+  /**
+   * Find a registered agent named in a byline (persona name + owner display name or username).
+   * A username always wins over a display name, and a display name that two people share names
+   * nobody, so nobody can make a stranger's byline point at their own agent (SOC-1).
+   */
   fromByline(b) {
     if (!b) return null;
-    const lowerFor = b.forName.toLowerCase();
-    return Object.values(this.data).find((a) => {
-      if (a.name.toLowerCase() !== b.name.toLowerCase()) return false;
-      const o = this.ownerOf(a);
-      return o && [this.displayName(o).toLowerCase(), o.username.toLowerCase()].includes(lowerFor);
-    }) ?? null;
+    const want = b.forName.toLowerCase();
+    const named = Object.values(this.data).filter((a) => a.name.toLowerCase() === b.name.toLowerCase());
+    const byUser = named.find((a) => this.ownerOf(a)?.username.toLowerCase() === want);
+    if (byUser) return byUser;
+    const byDisplay = named.filter((a) => { const o = this.ownerOf(a); return o && this.displayName(o).toLowerCase() === want; });
+    return byDisplay.length === 1 ? byDisplay[0] : null;
   }
 
   /**
