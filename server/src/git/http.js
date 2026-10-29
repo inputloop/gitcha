@@ -16,6 +16,8 @@ import { json, readJson, send } from '../http.js';
 import { principalKey } from '../social/principal.js';
 import { parseOwnerLabel, GIT_ENV } from './projects.js';
 
+// A push waits at most this long for its record before the client is told it is done (the checking carries on).
+const RECORD_WAIT_MS = 5000;
 const SERVICES = new Set(['git-upload-pack', 'git-receive-pack']);
 // A POST body is a git pack request and nothing else; http-backend refuses any other type without reading the body.
 const REQUEST_TYPES = { 'git-upload-pack': 'application/x-git-upload-pack-request', 'git-receive-pack': 'application/x-git-receive-pack-request' };
@@ -136,12 +138,16 @@ export function registerGit(router, { auth, projects, principals, config }) {
         return res.write(head.subarray(end + 4));
       });
       child.stderr.on('data', () => { /* git's progress and errors go to the client inside the protocol */ });
-      child.on('close', (code) => {
+      child.on('close', async (code) => {
+        // The client hears that the push is done once it is recorded, but never waits long for the checking.
+        if (write && code === 0) {
+          const recorded = projects.afterPush(p, principal, before).catch((err) => console.error('afterPush failed', err));
+          let timer;
+          await Promise.race([recorded, new Promise((r) => { timer = setTimeout(r, RECORD_WAIT_MS); })]);
+          clearTimeout(timer);
+        }
         if (res.destroyed) { /* nobody is listening */ } else if (!headerDone) send(res, 500, 'git http-backend failed.\n', { 'Content-Type': 'text/plain' });
         else res.end();
-        if (write && code === 0) {
-          try { projects.afterPush(p, principal, before); } catch (err) { console.error('afterPush failed', err); }
-        }
         resolve();
       });
     });
@@ -192,6 +198,6 @@ export function registerGit(router, { auth, projects, principals, config }) {
     const p = projects.store.data.projects[project];
     const principal = principals.fromSsh(fingerprint);
     if (!p || !principal || !projects.canWrite(principal, p)) throw new HttpError(403, 'forbidden', 'Not allowed.');
-    json(ctx.res, 200, projects.afterPush(p, principal, before ?? {}));
+    json(ctx.res, 200, await projects.afterPush(p, principal, before ?? {}));
   }));
 }
