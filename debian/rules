@@ -1,0 +1,54 @@
+#!/usr/bin/make -f
+# debian/rules -- build inputloop-gitcha and inputloop-gitcha-runner with debhelper.
+# Copyright 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Corwin Brust <corwin@bru.st> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+#
+#   dpkg-buildpackage -us -uc -b                              with Cassandra (the default)
+#   dpkg-buildpackage -us -uc -b -P pkg.gitcha.nocassandra    without: no driver, the database in db.json
+#
+# deploy/build-debian.sh runs this with a +git<sha7> snapshot version; deploy/lay-out.sh says which files go where.
+
+ifneq (,$(filter pkg.gitcha.nocassandra,$(DEB_BUILD_PROFILES)))
+CASSANDRA := --without-cassandra
+WITH_CASSANDRA := no
+STORE_DEFAULT := file
+RECOMMENDS :=
+else
+CASSANDRA := --with-cassandra
+WITH_CASSANDRA := yes
+STORE_DEFAULT := cassandra
+RECOMMENDS := cassandra
+endif
+
+%:
+	dh $@
+
+# Nothing to compile, and the tests need the development tree (npm test runs in CI, not here).
+override_dh_auto_build override_dh_auto_test:
+
+override_dh_auto_install:
+	sh deploy/lay-out.sh server debian/inputloop-gitcha $(CASSANDRA) --debconf
+	sh deploy/lay-out.sh runner debian/inputloop-gitcha-runner
+
+# As in alphaOS, installing never enables or starts a service: the debconf question "enable" does, when answered yes.
+# Not stopped for an upgrade either: postinst restarts a running service once the new code is in place.
+override_dh_installsystemd:
+	dh_installsystemd -pinputloop-gitcha --name=gitcha --no-enable --no-start --no-stop-on-upgrade
+	dh_installsystemd -pinputloop-gitcha-runner --name=gitcha-runner --no-enable --no-start --no-stop-on-upgrade
+
+# The build option reaches the maintainer scripts and the debconf default through these two tokens.
+override_dh_installdeb:
+	dh_installdeb
+	sed -i 's/@WITH_CASSANDRA@/$(WITH_CASSANDRA)/; s/@STORE_DEFAULT@/$(STORE_DEFAULT)/' \
+	  debian/inputloop-gitcha/DEBIAN/config debian/inputloop-gitcha/DEBIAN/templates debian/inputloop-gitcha/DEBIAN/postinst
+
+override_dh_gencontrol:
+	dh_gencontrol -- -Vgitcha:Recommends="$(RECOMMENDS)"
+
+# dh_fixperms takes the execute bit off every .js file; these four are programs, run by the /usr/bin wrappers.
+override_dh_fixperms:
+	dh_fixperms
+	chmod 755 debian/inputloop-gitcha/usr/share/inputloop/gitcha/server/src/index.js \
+	  debian/inputloop-gitcha/usr/share/inputloop/gitcha/server/bin/gitcha-git-shell.js \
+	  debian/inputloop-gitcha/usr/share/inputloop/gitcha/server/bin/gitcha-ssh-keys.js \
+	  debian/inputloop-gitcha-runner/usr/share/inputloop/gitcha-runner/runner/bin/gitcha-runner.js

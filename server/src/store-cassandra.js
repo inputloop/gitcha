@@ -7,12 +7,15 @@
 //
 // The rows. Every top-level collection (users, sessions, packages...) is split one level down: a header row
 // says what the collection is, and each entry is its own row. One table, one partition per Gitcha instance:
-//   gitcha_db (instance, coll, item, body)   PRIMARY KEY ((instance), coll, item)
+//   gitcha_db (instance, coll, item, body, seq)   PRIMARY KEY ((instance), coll, item)
 //   (coll, '')       {"t":"o"} for a collection of entries, or {"t":"v","v":...} for any other value
 //   (coll, '.KEY')   the JSON of entry KEY (the dot keeps an entry named '' apart from the header)
 //   ('!lease', '')   who owns this instance now; ('!meta', 'key') the secret key's check value
 // A save sends only the rows that changed since the last one, as one batch in one partition. Cassandra
-// applies such a batch whole or not at all, so a crash never leaves half a change.
+// applies such a batch whole or not at all, so a crash never leaves half a change. `seq` keeps the order
+// entries were added in (Cassandra itself returns them sorted by key): an entry keeps its number when it
+// changes and a new one gets the next, as a JavaScript object orders its keys, so lists come back after
+// a restart in the order db.json would have kept.
 //
 // One owner. Like db.lock, a lease row lets one server at a time own an instance: a second server on the
 // same instance would erase what the first one wrote. The lease lives 60 seconds and is renewed while the
@@ -91,7 +94,9 @@ export class CassandraBackend {
     this.settings = settings;
     this.secretKey = secretKey;
     this.saved = new Map(); // the rows as Cassandra holds them, after the last save that was answered
-    this.uncertain = false; // a save whose outcome is unknown (a timeout): reload before trusting `saved`
+    this.seqOf = new Map(); // each saved row's place in the order of insertion
+    this.lastSeq = 0;
+    this.uncertain = false; // a save whose outcome is unknown (a timeout): read Cassandra again before trusting `saved`
     this.fenced = null; // why this server may no longer write (its lease was lost)
     this.seq = 0;
   }
@@ -103,7 +108,7 @@ export class CassandraBackend {
     const wait = this.settings.leaseWaitMs ?? LEASE_WAIT_MS; // tests shorten it
     const { rows } = this.call('open', { owner, keyCheck: keyCheck(this.secretKey), leaseTtl: LEASE_TTL_S, leaseWaitMs: wait }, wait + this.settings.timeoutMs * 4);
     this.opened = true;
-    this.saved = new Map(rows);
+    this.take(rows);
     if (this.saved.size === 0) return this.importFile();
     return fromRows(this.saved);
   }
@@ -130,12 +135,29 @@ export class CassandraBackend {
     return data;
   }
 
+  /** Rows as the worker read them ([key, body, seq]), in their order of insertion, become what is saved. */
+  take(rows) {
+    rows.sort((a, b) => (a[2] ?? Infinity) - (b[2] ?? Infinity) || (a[0] < b[0] ? -1 : 1));
+    this.saved = new Map(rows.map(([key, body]) => [key, body]));
+    this.seqOf = new Map(rows.map(([key, , seq]) => [key, seq ?? 0]));
+    this.lastSeq = rows.reduce((n, r) => Math.max(n, r[2] ?? 0), this.lastSeq);
+    this.uncertain = false;
+  }
+
   /** Send only the rows that changed. Throws if Cassandra refused or did not answer; then nothing is assumed saved. */
   save(data) {
+    // After a save that may or may not have landed, diff against what Cassandra really holds (or fail here).
+    if (this.uncertain) this.take(this.call('load', {}).rows);
     const rows = toRows(data);
     const upserts = [];
     const deletes = [];
-    for (const [key, body] of rows) if (this.saved.get(key) !== body) upserts.push([...key.split('\u0000'), body]);
+    const added = new Map();
+    for (const [key, body] of rows) {
+      if (this.saved.get(key) === body) continue;
+      let seq = this.seqOf.get(key);
+      if (seq === undefined) added.set(key, (seq = ++this.lastSeq));
+      upserts.push([...key.split('\u0000'), body, seq]);
+    }
     for (const key of this.saved.keys()) if (!rows.has(key)) deletes.push(key.split('\u0000'));
     if (!upserts.length && !deletes.length) return;
     try {
@@ -146,14 +168,17 @@ export class CassandraBackend {
       throw err;
     }
     this.saved = rows;
+    for (const [key, seq] of added) this.seqOf.set(key, seq);
+    for (const [coll, item] of deletes) this.seqOf.delete(rowKey(coll, item));
   }
 
-  /** What restore() goes back to: the last rows Cassandra confirmed, read again if the last save is in doubt. */
+  /**
+   * What restore() goes back to: the last rows Cassandra confirmed, read again if the last save is in doubt.
+   * If Cassandra cannot be read either, the last confirmed rows, and the next save reads it first.
+   */
   reload() {
     if (this.uncertain) {
-      const { rows } = this.call('load', {});
-      this.saved = new Map(rows);
-      this.uncertain = false;
+      try { this.take(this.call('load', {}).rows); } catch { /* still in doubt: save() tries again */ }
     }
     return fromRows(this.saved);
   }

@@ -2,8 +2,27 @@
 # SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 # SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 services:
+  # Apache Cassandra, the database (the official image).  Give it at least 2 GB of memory.
+  cassandra:
+    image: cassandra:5.0
+    environment:
+      CASSANDRA_CLUSTER_NAME: gitcha
+      MAX_HEAP_SIZE: 1G
+      HEAP_NEWSIZE: 200M
+    volumes:
+      - cassandra-data:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' >/dev/null"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+    restart: unless-stopped
   gitcha:
     build: .
+    depends_on:
+      cassandra:
+        condition: service_healthy
     ports:
       - "127.0.0.1:4873:4873"
     environment:
@@ -11,11 +30,15 @@ services:
       GITCHA_PUBLIC_URL: "http://localhost:4873"
       # Trust X-Forwarded-For only when running behind your own reverse proxy.
       GITCHA_TRUST_PROXY: "false"
+      # The database: the cassandra service above.  "file" keeps it in /data/db.json instead.
+      GITCHA_STORE: cassandra
+      GITCHA_CASSANDRA_CONTACT_POINTS: cassandra
       # Example: force periodic re-verification on for everyone.
       # GITCHA_LOCKED_CHECKS: "interval"
     volumes:
-      # One process per data volume: a second container on it silently loses accounts.
+      # One process per data volume (blobs, git, sites, secret.key) and per Cassandra instance.
       - gitcha-data:/data
     restart: unless-stopped
 volumes:
   gitcha-data:
+  cassandra-data:

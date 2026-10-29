@@ -32,14 +32,75 @@ builds on alphaOS VMs on the ghostwheel, and then for anyone who self-hosts and 
 
 ## Packages
 
+There are two recipes. Both lay the files out with `deploy/lay-out.sh`, so they install the same
+programs in the same places; they differ in what the package does when it is installed.
+
 ```sh
-sh deploy/build-debs.sh out/
+sh deploy/build-debian.sh out/                 # the full packaging: debian/, debhelper, debconf
+sh deploy/build-debs.sh out/                   # alphaOS's idiom: plain dpkg-deb, no root, asks nothing
 ```
 
-This builds `inputloop-gitcha` and `inputloop-gitcha-runner` with plain `dpkg-deb`, no root,
-in alphaOS's idiom: version `X.Y.Z+git<sha7>`, maintainer `inputloop`, and no service started
-or enabled by the package. The server's two npm dependencies come from the committed
-lockfile at build time.
+Both build `inputloop-gitcha` and `inputloop-gitcha-runner`, version `X.Y.Z+git<sha7>`, maintainer
+`inputloop`, and neither enables or starts a service unless asked to. The server's npm
+dependencies come from the committed lockfile at build time (so the build needs the npm registry,
+or a filled npm cache).
+
+- **`build-debian.sh`** exports the committed tree (`git archive HEAD`), gives `debian/changelog` a
+  snapshot entry and runs `dpkg-buildpackage`. It needs `debhelper` (13), `devscripts`, git and
+  Node.js 20+ with npm. The packages ask their settings with **debconf** (below), keep them in
+  `/etc/inputloop/gitcha/debconf.env`, and are lintian-clean. This is the one to put in an apt
+  repository and install on many hosts.
+- **`build-debs.sh`** is what alphaOS's image build calls. Its packages ask nothing: edit
+  `gitcha.env` by hand.
+
+**The build option: Apache Cassandra, on by default.** A default build carries the Cassandra
+driver (`cassandra-driver`, Apache-2.0), ships `GITCHA_STORE=cassandra` and recommends the
+`cassandra` package. To build without it, so the database is `db.json` and the driver is not in
+the package:
+
+```sh
+sh deploy/build-debian.sh out/ --without-cassandra      # = dpkg-buildpackage -P pkg.gitcha.nocassandra
+sh deploy/build-debs.sh out/ --without-cassandra
+docker build --build-arg GITCHA_WITH_CASSANDRA=no .
+npm ci --omit=optional                                   # from a checkout
+```
+
+Both packages depend on `nodejs (>= 20)`. Debian 12 and Ubuntu 24.04 ship Node 18, so those hosts
+need Node from NodeSource (or Debian 13, which has 20).
+
+### Installing many hosts
+
+Three pieces, all in `deploy/`:
+
+1. **An apt repository.** `sh deploy/apt-repo.sh REPO_DIR --sign KEYID out/*.deb` makes a signed
+   flat repository (Packages, Release, InRelease and the public key as
+   `inputloop-archive-keyring.gpg`). Serve `REPO_DIR` over HTTPS; run it again to add new builds.
+2. **A preseed file.** `deploy/preseed.example.cfg` answers every debconf question of both
+   packages: the public URL, hosting domains, the database (Cassandra nodes, data center,
+   keyspace, this host's instance name, replication, credentials), whether to start the service,
+   and for runners the server and a registration token. `@HOST@` and `@INSTANCE@` are filled in per
+   host.
+3. **`mass-install.sh`.** Given a hosts file (one SSH destination per line, optionally followed by
+   that host's Cassandra instance name) it runs, on each host over one SSH connection, as root:
+   `debconf-set-selections` with that host's answers, then `apt-get install` with no prompts. It
+   works through 8 hosts at a time (`--parallel N`), keeps a log per host and prints ok or failed
+   for each.
+
+```sh
+sh deploy/mass-install.sh servers.txt preseed.cfg \
+  --repo https://apt.example.org/gitcha --keyring repo/inputloop-archive-keyring.gpg --package inputloop-gitcha
+sh deploy/mass-install.sh runners.txt preseed.cfg --deb out/inputloop-gitcha-runner_*.deb
+```
+
+A runner fleet registers itself during installation: make one registration token with `uses` of
+at least the number of runners, put it in the preseed file, and each runner trades it for its own
+runner token (the registration token is used once and kept nowhere: not in debconf, not on the
+command line). Change any answer later on one host with `dpkg-reconfigure inputloop-gitcha`.
+
+Status: built and installed here from the signed repository, configured from a preseed file, run
+on Cassandra 5.0.9, and a runner registered itself through `mass-install.sh` (with a stand-in
+`ssh` that ran locally). **Not yet run over real SSH against separate hosts, nor under systemd**
+(the machine had none), so the enable-and-start answer is untried.
 
 ### Putting them in alphaOS
 
@@ -67,10 +128,13 @@ be named as such in alphaOS's security model.
 
 ## The server
 
-1. `apt install ./inputloop-gitcha_*.deb`
+1. `apt install ./inputloop-gitcha_*.deb`. The full packaging asks for the public URL, the
+   hosting domains, the database and whether to start now (`dpkg-reconfigure inputloop-gitcha`
+   asks again).
 2. Edit `/etc/inputloop/gitcha/gitcha.env` (a conffile, readable by root and the `gitcha`
-   group). At least `GITCHA_PUBLIC_URL`, and `GITCHA_HOSTING_DOMAINS` for hosting.
-3. `systemctl enable --now gitcha`
+   group) for everything else. With `build-debs.sh` packages, set at least `GITCHA_PUBLIC_URL`
+   there, `GITCHA_HOSTING_DOMAINS` for hosting, and the database settings.
+3. `systemctl enable --now gitcha` (unless debconf already did)
 4. Open the public URL and register. **The first account becomes the administrator.**
 5. Set `GITCHA_OPEN_REGISTRATION=false` afterwards if sign-up should be closed.
 
@@ -79,11 +143,49 @@ be named as such in alphaOS's security model.
 - **Firewall:** open 443 and 80 for the proxy, and 22 if you offer git over SSH; nothing else (4873 stays on loopback).
 - **`GITCHA_TRUST_PROXY=true`** makes Gitcha believe `X-Forwarded-For`; turn it on only when the proxy on this host is the one way in, or anyone can choose the address that rate limits and the new-network check see.
 - **Upgrades:** the package restarts a running `gitcha` itself (`systemctl try-restart`); if you installed the new code any other way, run `systemctl restart gitcha`, or a security fix is installed and not live.
-- **One process per data directory:** the database is one file held in memory, so a second server on the same directory (a hand-started `gitcha-server` beside the unit, a second container on the volume) silently loses accounts.
+- **One process per data directory, and per Cassandra instance:** the database is held in memory and saved whole or row by row, so a second server on the same data (a hand-started `gitcha-server` beside the unit, a second container on the volume) would silently lose accounts. `db.lock` and the Cassandra lease stop it (see "The database").
 - **`GITCHA_LOCKED_CHECKS`** is a comma list of the two-factor checks people cannot turn off (`interval`, `new_network`, `sensitive`); it is empty unless you set it.
 - **Limits in the units:** the server unit caps memory at 2G and tasks at 512, the runner's at 6G and 1024, and both allow only `AF_UNIX`, `AF_INET` and `AF_INET6`. They are the keepers' numbers: change them with `systemctl edit`. The runner's unit also drops every capability, which has not been tried against a real bContain job yet.
 - **Settings:** `gitcha.env` lists every setting the server reads, with its default on a `#` line.
 - **Docker:** the image has `git` and `gpg`, no sshd, so there is no git over SSH there.
+
+### The database: Cassandra or a file
+
+`GITCHA_STORE` chooses. Either way the server holds the whole database in memory, serves every
+read from there, and saves after every change before it answers; blobs, git repositories, sites,
+logs and `secret.key` stay in `/var/lib/gitcha`.
+
+- **`cassandra`** (the packages' default): rows in an Apache Cassandra keyspace. Each collection is
+  split one row per entry (one user, one session, one package), and a save sends only the rows it
+  changed, as one batch in one partition, which Cassandra applies whole or not at all. One table,
+  `gitcha_db`, one partition per instance (`GITCHA_CASSANDRA_INSTANCE`), so many Gitcha servers can
+  share a keyspace, one instance each. The keyspace and table are made at the first start
+  (`GITCHA_CASSANDRA_REPLICATION`, `SimpleStrategy:1` by default; set
+  `NetworkTopologyStrategy:dc1=3` for a real cluster, or `GITCHA_CASSANDRA_CREATE_KEYSPACE=no` and
+  make it yourself). Reads and writes use `LOCAL_QUORUM` (`GITCHA_CASSANDRA_CONSISTENCY`).
+- **`file`**: `/var/lib/gitcha/db.json`, written whole and synced on every change.
+
+**Moving to Cassandra.** Point a server that has a `db.json` at an empty instance and start it: it
+imports the file once and renames it `db.json.imported-to-cassandra`. Keep the same `secret.key`.
+
+**One owner.** A server takes a lease row on its instance (60 s, renewed every 15 s), and every save
+is a compare-and-set on that lease. A second server on the same instance waits up to 90 s for the
+lease to lapse, then stops with `another Gitcha server (HOST, pid N) owns instance ...`; a lease left
+by a dead process on the same machine is taken over at once. A server that loses its lease refuses
+every change from then on and says so in its log; restart it.
+
+**The key.** The instance remembers a check value of the `secret.key` that wrote it, so a server
+started with another key stops (`... was written with a different secret key`) instead of
+locking every account out.
+
+**What it costs.** Each save waits for Cassandra (a few milliseconds on a local node; it was about
+7 ms per change against Cassandra 5.0.9 here), during which that server answers nothing else, as it
+waits for fsync with `db.json`. A save that takes longer than `GITCHA_CASSANDRA_TIMEOUT` (15 s) fails
+and the change is undone. A change larger than 4 MB is sent as several batches, which are not atomic
+together; only importing a big `db.json` comes near that. The whole instance is one partition, read
+once at start: fine for the size of database one server holds in memory, and deletions (expired
+sessions) leave tombstones in it until `gc_grace_seconds` (10 days) passes, so run `nodetool repair`
+on the usual schedule.
 
 ### TLS and DNS
 
@@ -163,6 +265,10 @@ accounts** (the machine this was written on had no sshd).
 
 ### Backups
 
+With `GITCHA_STORE=cassandra`, back up the keyspace (`nodetool snapshot gitcha` on each node, or
+your cluster's backup) **and** `/var/lib/gitcha` (repositories, sites, blobs, `secret.key`); the
+rest of this section is about `db.json`.
+
 Back up `/var/lib/gitcha`. Keep `secret.key` apart from the database backups: passwords
 (as AES-256-GCM-sealed scrypt hashes) and authenticator secrets are encrypted with it, so the
 database alone is useless to a thief, and the database without the key is useless to you.
@@ -186,7 +292,8 @@ file's name rather than being overwritten.
 1. Install bContain on the runner VM and check it: `bcontain doctor`. The runner VM needs
    `/dev/kvm`; inside a VM that means nested virtualization on the host, or bContain falls
    back to software emulation, which is slow.
-2. `apt install ./inputloop-gitcha-runner_*.deb`
+2. `apt install ./inputloop-gitcha-runner_*.deb`. The full packaging can do steps 3 and 4 for
+   you: give debconf the server URL and a registration token (or put them in the preseed file).
 3. In Gitcha, an administrator creates a registration token (`POST
    /api/v1/runners/registrations`; team owners can create one for a team runner). It works
    for one runner and for an hour (`{"uses": 5}` lets a fleet share one, up to 20);

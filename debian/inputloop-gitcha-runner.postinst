@@ -1,0 +1,48 @@
+#!/bin/sh
+# postinst for inputloop-gitcha-runner: the gitcha-runner user (in the kvm group, for bContain), registration
+# when debconf was given a server and a token, and (only when asked) enabling and starting the service.
+# Copyright 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Corwin Brust <corwin@bru.st> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+set -e
+. /usr/share/debconf/confmodule
+HOME_DIR=/var/lib/gitcha-runner
+start=no server='' token='' name='' labels=''
+
+if [ "$1" = configure ]; then
+  getent group gitcha-runner >/dev/null || addgroup --system gitcha-runner
+  getent passwd gitcha-runner >/dev/null || adduser --system --ingroup gitcha-runner --home "$HOME_DIR" --shell /usr/sbin/nologin gitcha-runner
+  if getent group kvm >/dev/null; then adduser gitcha-runner kvm >/dev/null || true; fi
+  db_get inputloop-gitcha-runner/server_url; server=${RET%/}
+  db_get inputloop-gitcha-runner/registration_token; token=$RET
+  db_get inputloop-gitcha-runner/name; name=${RET:-$(hostname)}
+  db_get inputloop-gitcha-runner/labels; labels=$RET
+  # The registration token is used once, below; it is not kept in the debconf database.
+  db_set inputloop-gitcha-runner/registration_token ""
+  db_get inputloop-gitcha-runner/enable
+  if [ "$RET" = true ]; then start=yes; fi
+fi
+db_stop
+
+#DEBHELPER#
+
+if [ "$1" = configure ]; then
+  if [ -n "$server" ] && [ -n "$token" ] && [ ! -f "$HOME_DIR/runner.json" ]; then
+    install -d -o gitcha-runner -g gitcha-runner -m 700 "$HOME_DIR"
+    # The token goes through the environment, not the command line, so other users cannot read it from ps.
+    if GITCHA_RUNNER_REGISTRATION_TOKEN=$token runuser -u gitcha-runner -- env GITCHA_RUNNER_HOME="$HOME_DIR" \
+         gitcha-runner register --server "$server" --name "$name" ${labels:+--labels "$labels"} --backend bcontain >&2; then
+      :
+    else
+      echo "inputloop-gitcha-runner: registering with $server failed; register by hand (README.Debian) and start the service" >&2
+      start=no
+    fi
+  fi
+  [ -d /run/systemd/system ] && systemctl --system daemon-reload >/dev/null 2>&1 || true
+  if [ "$start" = yes ] && [ -f "$HOME_DIR/runner.json" ]; then
+    deb-systemd-helper enable gitcha-runner.service >/dev/null || true
+    deb-systemd-invoke restart gitcha-runner.service >/dev/null 2>&1 || echo "inputloop-gitcha-runner: gitcha-runner did not start; see journalctl -u gitcha-runner" >&2
+  else
+    deb-systemd-invoke try-restart gitcha-runner.service >/dev/null 2>&1 || true
+  fi
+fi
+exit 0

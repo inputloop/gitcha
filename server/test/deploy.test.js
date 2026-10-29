@@ -58,3 +58,42 @@ test('DEP-10: the Docker image has the git and gpg the server runs', () => {
   assert.match(docker, /apk add[^\n]*\bgit\b/);
   assert.match(docker, /apk add[^\n]*\bgnupg\b/);
 });
+
+test('DEB-1: the full packaging never stops a service for an upgrade, and restarts one that runs', () => {
+  const rules = read('debian/rules');
+  for (const unit of ['gitcha', 'gitcha-runner']) {
+    assert.match(rules, new RegExp(`dh_installsystemd -pinputloop-${unit} --name=${unit} --no-enable --no-start --no-stop-on-upgrade`), `${unit}: no stop in preinst, no enable or start by debhelper`);
+    assert.match(read(`debian/inputloop-${unit}.postinst`), new RegExp(`try-restart ${unit}\\.service`), `${unit}: a running service gets the new code`);
+  }
+});
+
+test('DEB-2: every debconf question is asked by config and used by postinst, and only those', () => {
+  /** The questions a script names: "pkg/name" literally, or "pkg/prefix_$q" inside a "for q in a b c" loop. */
+  const questions = (file) => {
+    const text = read(file);
+    const out = new Set([...text.matchAll(/"?(inputloop-[\w-]+\/\w+)(?!\w*\$)/g)].map((m) => m[1]));
+    for (const m of text.matchAll(/for q in ([\w ]+); do[^\n]*\n?[^\n]*"(inputloop-[\w-]+\/\w*)\$q"/g)) {
+      out.delete(m[2]);
+      for (const q of m[1].trim().split(/\s+/)) out.add(m[2] + q);
+    }
+    return [...out].sort();
+  };
+  for (const pkg of ['inputloop-gitcha', 'inputloop-gitcha-runner']) {
+    const templates = [...read(`debian/${pkg}.templates`).matchAll(/^Template: (\S+)$/gm)].map((m) => m[1]).sort();
+    assert.deepEqual(questions(`debian/${pkg}.config`), templates, `${pkg}: config asks each template`);
+    assert.deepEqual(questions(`debian/${pkg}.postinst`), templates, `${pkg}: postinst reads each answer`);
+  }
+});
+
+test('DEB-3: the debconf answers become settings the server reads, and the build option has its anchors', () => {
+  const postinst = read('debian/inputloop-gitcha.postinst');
+  const env = read('deploy/gitcha.env');
+  const written = [...postinst.matchAll(/(GITCHA_[A-Z_]+)=/g)].map((m) => m[1]);
+  for (const q of /for q in ([\w ]+); do/.exec(postinst)[1].trim().split(/\s+/)) written.push(`GITCHA_CASSANDRA_${q.toUpperCase()}`);
+  for (const name of new Set(written)) assert.match(env, new RegExp(`^#?${name}=`, 'm'), `${name} is a setting in gitcha.env`);
+  // lay-out.sh turns the option off and hands the debconf settings over by editing these exact lines.
+  assert.match(env, /^GITCHA_STORE=cassandra$/m, 'the packaged default is Cassandra, as one line lay-out.sh can switch');
+  for (const name of ['GITCHA_PUBLIC_URL', 'GITCHA_CASSANDRA_CONTACT_POINTS']) assert.match(env, new RegExp(`^${name}=`, 'm'));
+  assert.match(read('deploy/gitcha.service'), /^EnvironmentFile=-\/etc\/inputloop\/gitcha\/debconf\.env$/m, 'debconf.env is optional, and read after gitcha.env');
+  assert.match(read('debian/rules'), /pkg\.gitcha\.nocassandra/);
+});

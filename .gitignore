@@ -5,3 +5,4 @@ gitcha_modules/
 .env
 .env.*
 secret.key
+mass-install-logs/

@@ -16,3 +16,43 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: npm ci
       - run: npm test
+
+  # The whole server suite again, on a real Apache Cassandra instead of db.json.
+  cassandra:
+    runs-on: ubuntu-latest
+    services:
+      cassandra:
+        image: cassandra:5.0
+        ports:
+          - 9042:9042
+        env:
+          MAX_HEAP_SIZE: 1G
+          HEAP_NEWSIZE: 200M
+        options: >-
+          --health-cmd "cqlsh -e 'describe keyspaces'"
+          --health-interval 15s --health-timeout 10s --health-retries 20 --health-start-period 60s
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm --workspace server test
+        env:
+          GITCHA_TEST_STORE: cassandra
+          GITCHA_TEST_CASSANDRA: 127.0.0.1:9042
+
+  # The Debian packages, both ways the build option goes, through both recipes; lintian must find no error.
+  debian:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: sudo apt-get update -q && sudo apt-get install -y -q debhelper devscripts lintian apt-utils
+      - run: sh deploy/build-debian.sh out
+      - run: sh deploy/build-debian.sh out-nocassandra --without-cassandra
+      - run: sh deploy/build-debs.sh out-alphaos
+      - run: lintian --fail-on error out/*.deb out-nocassandra/*.deb
+      - run: sh deploy/apt-repo.sh repo out/*.deb

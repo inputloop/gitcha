@@ -1,0 +1,82 @@
+Template: inputloop-gitcha/public_url
+Type: string
+Default: https://gitcha.example.org
+Description: Public URL of this Gitcha server:
+ The address people and agents use to reach this server: the TLS proxy in
+ front of it, so normally https://.  Secure cookies are on when it starts
+ with https://.
+
+Template: inputloop-gitcha/hosting_domains
+Type: string
+Default:
+Description: Domains that hosted sites get subdomains on (may be empty):
+ A comma list, for example pages.example.net,apps.example.net.  Use
+ registrable domains other than the public URL's, so a site's scripts cannot
+ set cookies for Gitcha.  Empty offers no platform subdomains.
+
+Template: inputloop-gitcha/store
+Type: select
+Choices: cassandra, file
+Default: @STORE_DEFAULT@
+Description: Where should Gitcha keep its database?
+ cassandra: an Apache Cassandra keyspace (the next questions say which).
+ .
+ file: one file, /var/lib/gitcha/db.json.
+ .
+ Blobs, git repositories, sites and secret.key stay in /var/lib/gitcha either
+ way.  When an empty Cassandra instance finds a db.json there, it imports it.
+
+Template: inputloop-gitcha/cassandra_contact_points
+Type: string
+Default: 127.0.0.1
+Description: Cassandra nodes to connect to:
+ Host names or addresses, comma separated, each with an optional :port (9042
+ when none is given).  A few nodes are enough: the driver finds the rest.
+
+Template: inputloop-gitcha/cassandra_datacenter
+Type: string
+Default: datacenter1
+Description: Cassandra data center of those nodes:
+ Cassandra's own default is datacenter1.
+
+Template: inputloop-gitcha/cassandra_keyspace
+Type: string
+Default: gitcha
+Description: Cassandra keyspace:
+ Created at the first start if it does not exist yet.
+
+Template: inputloop-gitcha/cassandra_instance
+Type: string
+Default: main
+Description: Name of this Gitcha server inside the keyspace:
+ Several Gitcha servers may share one keyspace, each under a name of its own
+ (a letter, then letters, digits or _).  Only one running server may use a
+ name at a time.
+
+Template: inputloop-gitcha/cassandra_replication
+Type: string
+Default: SimpleStrategy:1
+Description: Replication for a new keyspace:
+ Used only when Gitcha creates the keyspace: SimpleStrategy:1 for a single
+ node, or for example NetworkTopologyStrategy:dc1=3 for three copies in data
+ center dc1.
+
+Template: inputloop-gitcha/cassandra_username
+Type: string
+Default:
+Description: Cassandra user name (empty: no authentication):
+
+Template: inputloop-gitcha/cassandra_password
+Type: password
+Description: Cassandra password:
+ Kept in /etc/inputloop/gitcha/debconf.env (readable by root and the gitcha
+ group only), not in the debconf database.  Leave it empty to keep the one
+ already set.
+
+Template: inputloop-gitcha/enable
+Type: boolean
+Default: false
+Description: Enable and start the gitcha service now?
+ Gitcha listens on 127.0.0.1:4873 only; put a TLS proxy in front of it
+ (/usr/share/doc/inputloop-gitcha/Caddyfile.example).  If not now, later:
+ systemctl enable --now gitcha

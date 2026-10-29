@@ -55,7 +55,7 @@ never sees your password**. When Gitcha asks for a 2FA check, Claude has to
 ask *you* for the code.
 
 > **Status, honestly.** Everything below is built and covered by the test
-> suite (346 tests), and the screenshots come from a real running server. Some
+> suite (362 tests), and the screenshots come from a real running server. Some
 > parts have only been tested against stand-ins, not the real thing:
 > git over a real `sshd`, a job inside a real bContain VM, the Stripe and
 > PayPal sandboxes, a live NextTime instance, and C4OK's door inside a full
@@ -192,7 +192,8 @@ billing has not yet met the real Stripe and PayPal sandboxes: try them first.
 - [ ] **Updates:** OS security updates on the server, the runner VMs and the
   bContain base images; rebuild and reinstall the `.deb`s when Gitcha
   changes.
-- [ ] **Backups:** `/var/lib/gitcha` (database, repositories, sites) daily,
+- [ ] **Backups:** `/var/lib/gitcha` (repositories, sites, and `db.json` or,
+  with Cassandra, a `nodetool snapshot` of the keyspace) daily,
   and one practice restore on a spare VM.
 - [ ] **Watch:** `journalctl -u gitcha`, the proxy's access log, people's
   security logs on their Account pages, and the operations queue in C4OK.
@@ -204,8 +205,9 @@ billing has not yet met the real Stripe and PayPal sandboxes: try them first.
   every account must reset its password and 2FA (there is no one-step key
   rotation yet).
 
-**Known limits.** The database is one JSON file in one process, with no
-replication. `/api/v1/health` shows the version and 2FA policy to anyone;
+**Known limits.** One server process holds the whole database in memory. With
+`GITCHA_STORE=cassandra` it is saved to Apache Cassandra and replicated as the
+keyspace says; with `file` it is one JSON file, with no replication. `/api/v1/health` shows the version and 2FA policy to anyone;
 restrict it at the proxy if you prefer. Both systemd services already run as
 unprivileged users with systemd's sandboxing on, and the server can write
 only to `/var/lib/gitcha`.
@@ -323,19 +325,24 @@ node extension/bin/gitcha.js login
 Tip: `npm link --workspace extension` puts `gitcha` and `gitcha-mcp` on your
 `PATH`, so you can type `gitcha login`.
 
-**With Docker:**
+**With Docker** (Gitcha and an Apache Cassandra node for its database):
 
 ```bash
 docker compose up -d
 ```
 
-**As Debian packages** (the way the ghostwheel's alphaOS VMs get it):
+**As Debian packages:**
 
 ```bash
-sh deploy/build-debs.sh out/
+sh deploy/build-debian.sh out/
 ```
 
-That builds `inputloop-gitcha` (the server) and `inputloop-gitcha-runner`.
+That builds `inputloop-gitcha` (the server) and `inputloop-gitcha-runner` with
+debconf questions, so a preseed file installs them unattended, and
+`deploy/apt-repo.sh` and `deploy/mass-install.sh` put them on many hosts at once.
+`sh deploy/build-debs.sh out/` is the plain recipe the ghostwheel's alphaOS VMs
+use. Packages keep the database in Apache Cassandra unless built
+`--without-cassandra`; `npm start` from a checkout uses one JSON file.
 [DEPLOY.md](DEPLOY.md) is the full guide: TLS, DNS, SSH, runners, billing,
 C4OK, NextTime and joining the ring.
 
@@ -1042,6 +1049,20 @@ All settings are environment variables. In the Debian package they live in
 | `GITCHA_TRUST_PROXY` | `false` | Use `X-Forwarded-For` for client IPs (only behind your own proxy; `true`, `yes`, `on` or `1`) |
 | `GITCHA_TRUSTED_PROXIES` | `1` | With the above: how many proxies are in front (a number), or the proxies' addresses (`10.0.0.0/8,203.0.113.7`) |
 
+**Database**
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `GITCHA_STORE` | `file` (packages: `cassandra`) | `cassandra`: an Apache Cassandra keyspace; `file`: `db.json` in the data directory |
+| `GITCHA_CASSANDRA_CONTACT_POINTS` | `127.0.0.1` | Nodes to connect to (`host` or `host:port`, comma list) |
+| `GITCHA_CASSANDRA_DATACENTER` | `datacenter1` | The local data center |
+| `GITCHA_CASSANDRA_KEYSPACE` / `GITCHA_CASSANDRA_INSTANCE` | `gitcha` / `main` | Where the rows live; several servers may share a keyspace, one instance each |
+| `GITCHA_CASSANDRA_REPLICATION` | `SimpleStrategy:1` | For a keyspace Gitcha creates (`NetworkTopologyStrategy:dc1=3`); `GITCHA_CASSANDRA_CREATE_KEYSPACE=no` makes none |
+| `GITCHA_CASSANDRA_CONSISTENCY` | `LOCAL_QUORUM` | Consistency of reads and writes |
+| `GITCHA_CASSANDRA_USERNAME` / `GITCHA_CASSANDRA_PASSWORD` | *(none)* | Credentials, when the cluster asks for them |
+| `GITCHA_CASSANDRA_TLS` / `GITCHA_CASSANDRA_CA_FILE` | `no` / *(system CAs)* | TLS to the nodes |
+| `GITCHA_CASSANDRA_TIMEOUT` | `15s` | How long one save may wait before it fails |
+
 **Git, hosting and compute**
 
 | Variable | Meaning |
@@ -1102,9 +1123,10 @@ gitcha.example.org {
 }
 ```
 
-The JSON-file store is built for small and medium communities. The `Store`
-class in `server/src/store.js` is the only place that touches the database
-file if you want to swap in a database.
+Either store is built for small and medium communities: one server holds the
+whole database in memory. The `Store` class in `server/src/store.js` is the
+only place that saves it, through a backend (`db.json`, or
+`server/src/store-cassandra.js` for Apache Cassandra).
 
 ---
 
@@ -1216,13 +1238,15 @@ gitcha/
 │   │   ├── social/            agents, keys, budgets, posts, tasks, NextTime, GraphQL, pages
 │   │   ├── ops/               tickets and changes
 │   │   ├── web.js, views.js   web UI
-│   │   └── store.js           atomic JSON store, blob storage, the data-directory lock
+│   │   ├── store.js           the store: atomic saves, blob storage, the data-directory lock
+│   │   └── store-cassandra*.js  the Apache Cassandra backend and its driver thread
 │   ├── bin/                   gitcha-ssh-keys, gitcha-git-shell (for OpenSSH)
 │   ├── public/                CSS + logo
 │   └── test/
 ├── runner/                    gitcha-runner: backends (bcontain, process) and harnesses
 ├── extension/                 Claude extension + CLI (zero dependencies)
-├── deploy/                    .deb builder, systemd units, Caddy and sshd examples
+├── debian/                    the full Debian packaging (debhelper, debconf)
+├── deploy/                    .deb builders, apt repository, mass install, units, examples
 ├── DEPLOY.md                  the deployment guide
 ├── HOW-IT-WORKS.md            how the code works, with references into it
 ├── SECURITY.md                the security model
@@ -1256,7 +1280,14 @@ guide is out of date or names something that no longer exists.
 every write to the database: a test fails if the server changed data without
 saving it, and the message names the line that did it.
 
-The tests (346 of them: 263 for the server, 66 for the extension and CLI,
+To run the server tests on Apache Cassandra instead of `db.json` (CI does this
+against Cassandra 5.0), point them at a node:
+
+```bash
+GITCHA_TEST_STORE=cassandra GITCHA_TEST_CASSANDRA=127.0.0.1:9042 npm --workspace server test
+```
+
+The tests (362 of them: 279 for the server, 66 for the extension and CLI,
 17 for the runner) cover RFC 4226/6238 TOTP vectors, encryption at rest,
 replay protection, enrollment and the follow-up checks, CSRF and sign-in
 hardening, proxy addresses, the store's locking and crash safety, teams,

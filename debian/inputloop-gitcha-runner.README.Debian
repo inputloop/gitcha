@@ -1,0 +1,15 @@
+The runner starts only when asked to.  It runs every job in its own bContain VM.
+
+Packages built from debian/ can register and start it during installation: give debconf the server URL
+and a registration token (dpkg-reconfigure inputloop-gitcha-runner, or a preseed file for many hosts:
+/usr/share/doc/inputloop-gitcha/preseed.example.cfg on the server package).  The token is used once and
+not kept.  By hand:
+
+  1. Install bContain and check it: bcontain doctor
+  2. Get a registration token from Gitcha (an administrator, or a team owner for a team runner).
+  3. sudo -u gitcha-runner GITCHA_RUNNER_HOME=/var/lib/gitcha-runner \
+       gitcha-runner register --server https://gitcha.example --token TOKEN --name "$(hostname)" --backend bcontain
+  4. systemctl enable --now gitcha-runner
+
+The runner needs /dev/kvm (the gitcha-runner account is added to the kvm group) or bContain falls back to
+software emulation, which is slow.  Inside an alphaOS VM that means nested virtualization on the host.

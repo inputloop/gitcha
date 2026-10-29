@@ -4,7 +4,8 @@
 // A stand-in for the cassandra-driver package, enough for store-cassandra-worker.js: it understands the
 // handful of statements the worker sends. Its rows live in the JSON file named by GITCHA_FAKE_CASSANDRA, so
 // they outlive one worker thread (a restart) just as a real cluster's do. A test can set `failNext` in that
-// file to make the next batch fail ('error') without applying it.
+// file to make the next batch fail without applying it ('error'), or apply it and then fail ('lost-answer'),
+// and `failReads` to make that many reads of all the rows fail.
 import fs from 'node:fs';
 
 const file = () => process.env.GITCHA_FAKE_CASSANDRA;
@@ -24,7 +25,7 @@ function run(s, query, p) {
     s.rows[k(instance, coll, item)] = { body, until: Date.now() + ttl * 1000 };
     return result(true);
   }
-  if (/^INSERT /.test(query)) { const [instance, coll, item, body] = p; s.rows[k(instance, coll, item)] = { body }; return result(true); }
+  if (/^INSERT /.test(query)) { const [instance, coll, item, body, seq] = p; s.rows[k(instance, coll, item)] = { body, seq }; return result(true); }
   if (/^UPDATE .* IF body = \?$/.test(query)) {
     const [ttl, body, instance, coll, item, expect] = p;
     const have = live(s, k(instance, coll, item));
@@ -54,20 +55,25 @@ class Client {
   async execute(query, params = []) { const s = load(); const r = run(s, query, params); save(s); return r; }
   async batch(queries) {
     const s = load();
-    if (s.failNext) { const why = s.failNext; delete s.failNext; save(s); throw new Error(`fake cassandra: batch failed (${why})`); }
+    const why = s.failNext;
+    delete s.failNext;
+    if (why === 'error') { save(s); throw new Error(`fake cassandra: batch failed (${why})`); }
     const [fence, ...rest] = queries;
     const ok = run(s, fence.query, fence.params);
     if (!ok.wasApplied()) { save(s); return ok; }
     for (const q of rest) run(s, q.query, q.params);
     s.batches.push(rest.length);
     save(s);
+    // 'lost-answer': the batch landed, but its answer never came back (a timeout, as far as the server knows).
+    if (why === 'lost-answer') throw new Error('fake cassandra: write timeout (the batch did land)');
     return ok;
   }
   async *stream(query, [instance]) {
     const s = load();
+    if (s.failReads) { s.failReads--; save(s); throw new Error('fake cassandra: read failed'); }
     for (const key of Object.keys(s.rows).sort()) {
       const [inst, coll, item] = JSON.parse(key);
-      if (inst === instance && live(s, key)) yield { coll, item, body: s.rows[key].body };
+      if (inst === instance && live(s, key)) yield { coll, item, body: s.rows[key].body, seq: s.rows[key].seq ?? null };
     }
   }
   async shutdown() {}

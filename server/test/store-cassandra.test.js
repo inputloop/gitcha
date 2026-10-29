@@ -85,6 +85,24 @@ for (const [kind, extra] of CLUSTERS) {
     again.close();
   });
 
+  test(`${kind}: entries come back in the order they were added, as a JavaScript object (and db.json) keeps them`, () => {
+    const dir = tmpDir();
+    const backend = backendFor(extra);
+    const a = new Store(dir, { backend, secretKey: KEY });
+    a.tx((d) => { d.users.zed = { n: 1 }; d.users.amy = { n: 2 }; d.users.max = { n: 3 }; });
+    a.close();
+    const b = new Store(dir, { backend, secretKey: KEY });
+    assert.deepEqual(Object.keys(b.data.users), ['zed', 'amy', 'max'], 'not sorted by key');
+    b.tx((d) => { d.users.amy.n = 20; delete d.users.zed; });
+    b.tx((d) => { d.users.zed = { n: 4 }; }); // deleted and added again: now last, as in memory
+    const want = Object.keys(b.data.users);
+    b.close();
+    const c = new Store(dir, { backend, secretKey: KEY });
+    assert.deepEqual(Object.keys(c.data.users), want);
+    assert.deepEqual(want, ['amy', 'max', 'zed']);
+    c.close();
+  });
+
   test(`${kind}: an existing db.json is imported once into an empty instance, then renamed`, () => {
     const dir = tmpDir();
     fs.writeFileSync(path.join(dir, 'db.json'), JSON.stringify({ version: 1, users: { u1: { id: 'u1', username: 'alice' } }, audit: { u1: { security: [{ at: 1, event: 'account.activated' }], others: [], traffic: [] } } }));
@@ -131,6 +149,27 @@ test('fake: a failed save changes nothing in memory, and the next save writes wh
   s.close();
   const again = new Store(dir, { backend, secretKey: KEY });
   assert.deepEqual(Object.keys(again.data.users).sort(), ['u1', 'u3']);
+  again.close();
+});
+
+test('fake: after a save whose answer was lost, memory and Cassandra agree, even when Cassandra could not be read at once', () => {
+  const backend = backendFor(CLUSTERS[0][1]);
+  const dir = tmpDir();
+  const s = new Store(dir, { backend, secretKey: KEY });
+  s.tx((d) => { d.users.u1 = { id: 'u1', username: 'alice' }; });
+  // The batch landed but the answer was lost: memory goes back to what Cassandra holds, as with db.json.
+  editFake((st) => { st.failNext = 'lost-answer'; });
+  assert.throws(() => s.tx((d) => { d.users.u2 = { id: 'u2', username: 'bob' }; }), /write timeout/);
+  assert.ok(s.data.users.u2, 'it landed, so memory has it too');
+  // Again, and now Cassandra cannot be read back either: memory goes to the last confirmed rows, and the next
+  // save reads Cassandra first, so the row that landed unannounced is removed instead of reappearing later.
+  editFake((st) => { st.failNext = 'lost-answer'; st.failReads = 2; }); // two: flush and tx each restore
+  assert.throws(() => s.tx((d) => { d.users.ghost = { id: 'ghost', username: 'ghost' }; }), /write timeout/);
+  assert.equal(s.data.users.ghost, undefined);
+  s.tx((d) => { d.users.u3 = { id: 'u3', username: 'carol' }; });
+  s.close();
+  const again = new Store(dir, { backend, secretKey: KEY });
+  assert.deepEqual(Object.keys(again.data.users).sort(), ['u1', 'u2', 'u3']);
   again.close();
 });
 

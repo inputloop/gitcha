@@ -1,0 +1,4 @@
+# autopkgtest: the installed server starts, answers /health, and stops.
+Tests: smoke
+Depends: inputloop-gitcha, curl
+Restrictions: needs-root, allow-stderr

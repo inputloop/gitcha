@@ -24,13 +24,14 @@ const HELP = `gitcha-runner v${VERSION}: runs CI jobs and functions for a Gitcha
   gitcha-runner bcontain-command      show the bContain command a job would use
 
 Registration tokens come from the Gitcha web UI or API (admins: instance-wide;
-team owners: for their team). The runner token is saved in ${configFile} (mode 600).
+team owners: for their team). Instead of --token, GITCHA_RUNNER_REGISTRATION_TOKEN
+may hold it. The runner token is saved in ${configFile} (mode 600).
 
 Backends:
   bcontain  each job in its own throwaway VM via inputloop/bContain (default; use this)
   process   a plain child process, NO isolation; refused unless GITCHA_RUNNER_UNSAFE_PROCESS=1
 
-Environment: GITCHA_RUNNER_HOME, BCONTAIN_BIN, BCONTAIN_HOME, GITCHA_ORGVM_CMD (enables the orgvm label)`;
+Environment: GITCHA_RUNNER_HOME, GITCHA_RUNNER_REGISTRATION_TOKEN, BCONTAIN_BIN, BCONTAIN_HOME, GITCHA_ORGVM_CMD (enables the orgvm label)`;
 
 function args(argv) {
   const out = { _: [], f: {} };
@@ -62,6 +63,8 @@ async function main() {
   const cmd = _[0];
   if (!cmd || f.help) return console.log(HELP);
   if (cmd === 'register') {
+    // The token may come from the environment instead, so it is not on the command line for ps to show.
+    if (typeof f.token !== 'string' && process.env.GITCHA_RUNNER_REGISTRATION_TOKEN) f.token = process.env.GITCHA_RUNNER_REGISTRATION_TOKEN;
     for (const k of ['server', 'token', 'name']) if (typeof f[k] !== 'string') throw new Error(`--${k} is required`);
     const backend = f.backend ?? 'bcontain';
     if (!BACKENDS[backend]) throw new Error(`Unknown backend "${backend}".`);

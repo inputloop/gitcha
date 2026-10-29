@@ -65,7 +65,7 @@ async function connect() {
   const ks = settings.keyspace;
   if (settings.createKeyspace) await client.execute(`CREATE KEYSPACE IF NOT EXISTS ${ks} WITH replication = ${replication(settings.replication)}`);
   table = `${ks}.gitcha_db`;
-  await client.execute(`CREATE TABLE IF NOT EXISTS ${table} (instance text, coll text, item text, body text, PRIMARY KEY ((instance), coll, item))`);
+  await client.execute(`CREATE TABLE IF NOT EXISTS ${table} (instance text, coll text, item text, body text, seq bigint, PRIMARY KEY ((instance), coll, item))`);
 }
 
 const get = async ([coll, item]) => (await client.execute(`SELECT body FROM ${table} WHERE instance = ? AND coll = ? AND item = ?`, [settings.instance, coll, item])).first()?.body ?? null;
@@ -121,10 +121,15 @@ async function renew() {
   }
 }
 
+// seq is a bigint: the driver reads it as a Long and wants one back.
+const toLong = (n) => (driver.types.Long ? driver.types.Long.fromNumber(n) : n);
+const fromLong = (v) => (v === null || v === undefined ? null : typeof v === 'number' ? v : v.toNumber());
+
+/** Every data row of this instance, as [rowKey, body, seq]. */
 async function readAll() {
   const rows = [];
-  const stream = client.stream(`SELECT coll, item, body FROM ${table} WHERE instance = ?`, [settings.instance], { prepare: true, fetchSize: 1000, autoPage: true });
-  for await (const r of stream) if (!r.coll.startsWith('!')) rows.push([`${r.coll}\u0000${r.item}`, r.body]);
+  const stream = client.stream(`SELECT coll, item, body, seq FROM ${table} WHERE instance = ?`, [settings.instance], { prepare: true, fetchSize: 1000, autoPage: true });
+  for await (const r of stream) if (!r.coll.startsWith('!')) rows.push([`${r.coll}\u0000${r.item}`, r.body, fromLong(r.seq)]);
   return rows;
 }
 
@@ -151,7 +156,7 @@ const OPS = {
     if (lost) throw fail(lost, { code: 'refused' });
     const statements = [
       ...deletes.map(([coll, item]) => ({ query: `DELETE FROM ${table} WHERE instance = ? AND coll = ? AND item = ?`, params: [settings.instance, coll, item], size: 64 })),
-      ...upserts.map(([coll, item, body]) => ({ query: `INSERT INTO ${table} (instance, coll, item, body) VALUES (?, ?, ?, ?)`, params: [settings.instance, coll, item, body], size: body.length + coll.length + item.length })),
+      ...upserts.map(([coll, item, body, seq]) => ({ query: `INSERT INTO ${table} (instance, coll, item, body, seq) VALUES (?, ?, ?, ?, ?)`, params: [settings.instance, coll, item, body, toLong(seq)], size: body.length + coll.length + item.length + 8 })),
     ];
     const batches = [[]];
     let bytes = 0;

@@ -1,0 +1,9 @@
+gitcha (0.1.0) unstable; urgency=medium
+
+  * Full Debian packaging (debian/, dpkg-buildpackage): debconf questions so
+    a preseed file installs and configures Gitcha with no prompts, an apt
+    repository builder, and a mass-install script for many hosts.
+  * Apache Cassandra as the database, the build option on by default; the
+    build profile pkg.gitcha.nocassandra leaves it out (db.json instead).
+
+ -- inputloop <nathanielfrankford@gmail.com>  Thu, 29 Oct 2026 22:00:00 +0000

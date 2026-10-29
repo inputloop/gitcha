@@ -1,0 +1,14 @@
+#!/bin/sh
+# postrm for inputloop-gitcha.  Purging removes the configuration, never the data in /var/lib/gitcha.
+# Copyright 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Corwin Brust <corwin@bru.st> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+set -e
+if [ "$1" = purge ]; then
+  rm -f /etc/inputloop/gitcha/debconf.env /etc/inputloop/gitcha/debconf.env.dpkg-new
+  rmdir /etc/inputloop/gitcha /etc/inputloop 2>/dev/null || true
+  # Accounts, repositories, sites and secret.key are someone's work: remove /var/lib/gitcha by hand if you mean it.
+fi
+
+#DEBHELPER#
+
+exit 0

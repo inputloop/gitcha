@@ -9,7 +9,10 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY server/package.json server/
 COPY extension/package.json extension/
-RUN npm ci --omit=dev --workspace server
+# The build option: Cassandra support (the cassandra-driver module) is in unless --build-arg GITCHA_WITH_CASSANDRA=no.
+# The image's database is still chosen at run time with GITCHA_STORE (docker-compose.yml picks cassandra).
+ARG GITCHA_WITH_CASSANDRA=yes
+RUN if [ "$GITCHA_WITH_CASSANDRA" = no ]; then omit=--omit=optional; fi; npm ci --omit=dev $omit --workspace server
 COPY server server
 COPY extension/lib extension/lib
 ENV GITCHA_HOST=0.0.0.0 GITCHA_PORT=4873 GITCHA_DATA_DIR=/data NODE_ENV=production

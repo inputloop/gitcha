@@ -4,10 +4,14 @@
 [Unit]
 Description=Gitcha: forge, registry, hosting and community (loopback; put a TLS proxy in front)
 After=network.target
+# With GITCHA_STORE=cassandra on the same machine, start after it (harmless when it is not installed).
+After=cassandra.service
 [Service]
 User=gitcha
 Group=gitcha
 EnvironmentFile=/etc/inputloop/gitcha/gitcha.env
+# Written by debconf (packages built from debian/); read second, so its values win.  Absent otherwise.
+EnvironmentFile=-/etc/inputloop/gitcha/debconf.env
 Environment=GITCHA_DATA_DIR=/var/lib/gitcha
 StateDirectory=gitcha
 StateDirectoryMode=0700
