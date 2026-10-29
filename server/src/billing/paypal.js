@@ -3,7 +3,9 @@
 // PayPal, over its REST API with no SDK: subscriptions (Billing Plans created
 // in the PayPal dashboard), cancellation, and webhook verification through
 // PayPal's own verify-webhook-signature call.
+import crypto from 'node:crypto';
 import { HttpError } from '../errors.js';
+import { PROVIDER_TIMEOUT_MS, providerError, providerFetch } from './provider-call.js';
 
 const STATUS = { ACTIVE: 'active', APPROVAL_PENDING: 'pending', APPROVED: 'pending', SUSPENDED: 'past_due', CANCELLED: 'canceled', EXPIRED: 'canceled' };
 const EVENT_STATUS = {
@@ -12,39 +14,59 @@ const EVENT_STATUS = {
   'BILLING.SUBSCRIPTION.CANCELLED': 'canceled', 'BILLING.SUBSCRIPTION.EXPIRED': 'canceled',
 };
 
+/** The PayPal API host says whether this is the live service or the sandbox. */
+export function paypalMode(api) {
+  try {
+    const h = new URL(api).hostname;
+    if (h === 'api-m.paypal.com' || h === 'api.paypal.com') return 'live';
+    if (h.includes('sandbox')) return 'test';
+  } catch { /* not a URL: unknown */ }
+  return 'unknown';
+}
+
 export class PayPalProvider {
-  constructor({ clientId, clientSecret, webhookId, api, plans, fetchImpl, clock, brand }) {
-    Object.assign(this, { clientId, clientSecret, webhookId, api, plans, fetchImpl, clock, brand });
+  constructor({ clientId, clientSecret, webhookId, api, plans, fetchImpl, clock, brand, log, timeoutMs = PROVIDER_TIMEOUT_MS }) {
+    Object.assign(this, { clientId, clientSecret, webhookId, api, plans, fetchImpl, clock, brand, log, timeoutMs });
     this.token = null;
+    this.tokenFlight = null; // one token fetch at a time, shared by whoever asks meanwhile
+    this.verifiedUntil = new Map(); // deliveries PayPal has confirmed, so a repeat costs no call
+    this.inFlight = new Map();
+    this.mode = paypalMode(api);
   }
 
   get canSell() { return Object.values(this.plans).some(Boolean); }
 
   async accessToken() {
     if (this.token && this.token.expiresAt > this.clock() + 60_000) return this.token.value;
-    const res = await this.fetchImpl(`${this.api}/v1/oauth2/token`, {
+    this.tokenFlight ??= this.fetchToken().finally(() => { this.tokenFlight = null; });
+    return this.tokenFlight;
+  }
+
+  async fetchToken() {
+    const res = await providerFetch({ fetchImpl: this.fetchImpl, name: 'PayPal', code: 'paypal_error', log: this.log, timeoutMs: this.timeoutMs, what: 'POST /v1/oauth2/token' }, `${this.api}/v1/oauth2/token`, {
       method: 'POST',
       headers: { Authorization: `Basic ${Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64')}`, 'Content-Type': 'application/x-www-form-urlencoded' },
       body: 'grant_type=client_credentials',
     });
     const j = await res.json().catch(() => ({}));
-    if (!res.ok || !j.access_token) throw new HttpError(502, 'paypal_error', 'PayPal did not issue an access token (check PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET).');
+    if (!res.ok || !j.access_token) throw providerError('PayPal', 'paypal_error', this.log, `no access token (status ${res.status}); check PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET`, res.status);
     this.token = { value: j.access_token, expiresAt: this.clock() + (j.expires_in ?? 300) * 1000 };
     return this.token.value;
   }
 
   async call(method, path, body, requestId) {
-    const res = await this.fetchImpl(this.api + path, {
+    const token = await this.accessToken();
+    const res = await providerFetch({ fetchImpl: this.fetchImpl, name: 'PayPal', code: 'paypal_error', log: this.log, timeoutMs: this.timeoutMs, what: `${method} ${path}` }, this.api + path, {
       method,
       headers: {
-        Authorization: `Bearer ${await this.accessToken()}`, 'Content-Type': 'application/json', Accept: 'application/json',
+        Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'application/json',
         ...(requestId ? { 'PayPal-Request-Id': requestId } : {}),
       },
       body: body ? JSON.stringify(body) : undefined,
     });
     if (res.status === 204) return {};
     const j = await res.json().catch(() => ({}));
-    if (!res.ok) throw new HttpError(502, 'paypal_error', `PayPal refused the request: ${j.message ?? j.name ?? res.status}`);
+    if (!res.ok) throw providerError('PayPal', 'paypal_error', this.log, `${method} ${path} answered ${res.status}: ${j.message ?? j.name ?? ''}`, res.status);
     return j;
   }
 
@@ -76,23 +98,48 @@ export class PayPalProvider {
     return this.fromSubscription(await this.call('GET', `/v1/billing/subscriptions/${subscriptionId}`));
   }
 
+  /** PayPal has no cancel at period end: it cancels at once, and Gitcha keeps the paid plan to the period end itself. */
   async cancel(sub) {
-    if (sub.subscriptionId) await this.call('POST', `/v1/billing/subscriptions/${sub.subscriptionId}/cancel`, { reason: 'Cancelled by the account owner in Gitcha.' });
+    if (!sub.subscriptionId) return;
+    try { await this.call('POST', `/v1/billing/subscriptions/${sub.subscriptionId}/cancel`, { reason: 'Cancelled by the account owner in Gitcha.' }); } catch (err) { if (err.providerStatus !== 404) throw err; } // already gone is as good as cancelled
+  }
+
+  /** PayPal's verdict on one delivery (its ids, signature and exact bytes), asked once at a time and remembered for ten minutes when it was yes. */
+  async deliveryVerified(key, ask) {
+    const now = this.clock();
+    if ((this.verifiedUntil.get(key) ?? 0) > now) return true;
+    let flight = this.inFlight.get(key);
+    if (!flight) {
+      flight = ask().then((ok) => {
+        if (ok) {
+          if (this.verifiedUntil.size >= 1000) for (const [k, until] of this.verifiedUntil) if (until <= now) this.verifiedUntil.delete(k);
+          if (this.verifiedUntil.size >= 1000) this.verifiedUntil.delete(this.verifiedUntil.keys().next().value);
+          this.verifiedUntil.set(key, now + 10 * 60_000);
+        }
+        return ok;
+      }).finally(() => this.inFlight.delete(key));
+      this.inFlight.set(key, flight);
+    }
+    return flight;
   }
 
   async verifyWebhook(rawBody, headers) {
     if (!this.webhookId) throw new HttpError(503, 'webhook_unconfigured', 'PAYPAL_WEBHOOK_ID is not set.');
-    let event;
-    try { event = JSON.parse(rawBody.toString('utf8')); } catch { throw new HttpError(400, 'bad_body', 'Not JSON.'); }
-    const v = await this.call('POST', '/v1/notifications/verify-webhook-signature', {
+    // Every genuine delivery carries all five headers; without them PayPal is not asked (a verify call costs the merchant's API allowance).
+    const sig = {
       auth_algo: headers['paypal-auth-algo'], cert_url: headers['paypal-cert-url'], transmission_id: headers['paypal-transmission-id'],
       transmission_sig: headers['paypal-transmission-sig'], transmission_time: headers['paypal-transmission-time'],
-      webhook_id: this.webhookId, webhook_event: event,
-    });
-    if (v.verification_status !== 'SUCCESS') throw new HttpError(400, 'bad_signature', 'PayPal signature check failed.');
-    if (!(event.event_type in EVENT_STATUS)) return { id: event.id, type: event.event_type, owner: null };
+    };
+    if (Object.values(sig).some((v) => typeof v !== 'string' || !v)) throw new HttpError(400, 'bad_signature', 'PayPal signature check failed.');
+    let event;
+    try { event = JSON.parse(rawBody.toString('utf8')); } catch { throw new HttpError(400, 'bad_body', 'Not JSON.'); }
+    const ok = await this.deliveryVerified(`${sig.transmission_id}|${sig.transmission_sig}|${crypto.createHash('sha256').update(rawBody).digest('hex')}`,
+      async () => (await this.call('POST', '/v1/notifications/verify-webhook-signature', { ...sig, webhook_id: this.webhookId, webhook_event: event })).verification_status === 'SUCCESS');
+    if (!ok) throw new HttpError(400, 'bad_signature', 'PayPal signature check failed.');
+    if (!Object.hasOwn(EVENT_STATUS, event.event_type)) return { id: event.id, type: event.event_type, owner: null };
     const r = event.resource ?? {};
     const status = EVENT_STATUS[event.event_type] ?? STATUS[r.status] ?? null;
-    return { id: event.id, type: event.event_type, owner: r.custom_id ?? null, status, plan: this.planForId(r.plan_id), subscriptionId: r.id };
+    const at = Date.parse(event.create_time); // PayPal's own time for the event
+    return { id: event.id, type: event.event_type, owner: r.custom_id ?? null, status, plan: this.planForId(r.plan_id), subscriptionId: r.id, ...(Number.isFinite(at) ? { at } : {}) };
   }
 }

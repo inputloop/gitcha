@@ -5,8 +5,13 @@
 // (HMAC-SHA256 over "timestamp.payload", as Stripe documents).
 import crypto from 'node:crypto';
 import { HttpError } from '../errors.js';
+import { PROVIDER_TIMEOUT_MS, providerError, providerFetch } from './provider-call.js';
 
 const TOLERANCE_S = 300;
+/** Which Stripe account the secret key belongs to: live or test (restricted keys carry the same marker). */
+export const stripeMode = (key) => (/^(sk|rk)_live_/.test(key ?? '') ? 'live' : /^(sk|rk)_test_/.test(key ?? '') ? 'test' : 'unknown');
+const SUB_ID = /^sub_\w+$/; // ids that go into a URL path are checked first
+const idOf = (x) => (typeof x === 'string' ? x : x?.id ?? undefined); // an expandable field is an id or an object
 const STATUS = { active: 'active', trialing: 'active', past_due: 'past_due', unpaid: 'past_due', canceled: 'canceled', incomplete: 'pending', incomplete_expired: 'canceled', paused: 'canceled' };
 
 /** Stripe's form encoding, including nested keys like line_items[0][price]. */
@@ -27,19 +32,22 @@ export function verifyStripeSignature(rawBody, header, secret, nowS) {
   const t = Number(parts.t);
   if (!t || !sigs.length) return false;
   if (Math.abs(nowS - t) > TOLERANCE_S) return false;
-  const expected = crypto.createHmac('sha256', secret).update(`${t}.${rawBody.toString('utf8')}`).digest('hex');
-  return sigs.some((s) => s.length === expected.length && crypto.timingSafeEqual(Buffer.from(s), Buffer.from(expected)));
+  // The MAC is over the exact bytes Stripe sent; the compare is on decoded bytes, after the lengths agree in characters and in bytes.
+  const expected = crypto.createHmac('sha256', secret).update(`${t}.`).update(rawBody).digest('hex');
+  const want = Buffer.from(expected, 'hex');
+  return sigs.some((s) => { const got = Buffer.from(s, 'hex'); return s.length === expected.length && got.length === want.length && crypto.timingSafeEqual(got, want); });
 }
 
 export class StripeProvider {
-  constructor({ secretKey, webhookSecret, api, prices, fetchImpl, clock }) {
-    Object.assign(this, { secretKey, webhookSecret, api, prices, fetchImpl, clock });
+  constructor({ secretKey, webhookSecret, api, prices, fetchImpl, clock, log, timeoutMs = PROVIDER_TIMEOUT_MS }) {
+    Object.assign(this, { secretKey, webhookSecret, api, prices, fetchImpl, clock, log, timeoutMs });
+    this.mode = stripeMode(secretKey);
   }
 
   get canSell() { return Object.values(this.prices).some(Boolean); }
 
   async call(method, path, body, idempotencyKey) {
-    const res = await this.fetchImpl(this.api + path, {
+    const res = await providerFetch({ fetchImpl: this.fetchImpl, name: 'Stripe', code: 'stripe_error', log: this.log, timeoutMs: this.timeoutMs, what: `${method} ${path.split('?')[0]}` }, this.api + path, {
       method,
       headers: {
         Authorization: `Bearer ${this.secretKey}`, 'Stripe-Version': '2024-06-20',
@@ -49,7 +57,7 @@ export class StripeProvider {
       body: body ? form(body) : undefined,
     });
     const json = await res.json().catch(() => ({}));
-    if (!res.ok) throw new HttpError(502, 'stripe_error', `Stripe refused the request: ${json.error?.message ?? res.status}`);
+    if (!res.ok) throw providerError('Stripe', 'stripe_error', this.log, `${method} ${path.split('?')[0]} answered ${res.status}: ${json.error?.message ?? ''}`, res.status);
     return json;
   }
 
@@ -74,11 +82,15 @@ export class StripeProvider {
     if (sessionId) {
       if (!/^cs_[\w]+$/.test(sessionId)) return null;
       const s = await this.call('GET', `/v1/checkout/sessions/${sessionId}?expand[]=subscription`);
+      if (typeof s.subscription === 'string' && !SUB_ID.test(s.subscription)) return null;
       sub = typeof s.subscription === 'object' ? s.subscription : s.subscription ? await this.call('GET', `/v1/subscriptions/${s.subscription}`) : null;
       if (!sub) return null;
       return this.fromSubscription(sub, s.client_reference_id);
     }
-    if (subscriptionId) return this.fromSubscription(await this.call('GET', `/v1/subscriptions/${subscriptionId}`));
+    if (subscriptionId) {
+      if (!SUB_ID.test(subscriptionId)) return null;
+      return this.fromSubscription(await this.call('GET', `/v1/subscriptions/${subscriptionId}`));
+    }
     return null;
   }
 
@@ -92,8 +104,11 @@ export class StripeProvider {
     };
   }
 
-  async cancel(sub) {
-    if (sub.subscriptionId) await this.call('DELETE', `/v1/subscriptions/${sub.subscriptionId}`);
+  /** End the subscription now, or (atPeriodEnd) stop it renewing and let the period already paid for run out. */
+  async cancel(sub, { atPeriodEnd = false } = {}) {
+    if (!SUB_ID.test(sub.subscriptionId ?? '')) return;
+    const path = `/v1/subscriptions/${sub.subscriptionId}`;
+    try { await (atPeriodEnd ? this.call('POST', path, { cancel_at_period_end: true }) : this.call('DELETE', path)); } catch (err) { if (err.providerStatus !== 404) throw err; } // already gone is as good as cancelled
   }
 
   async portal(customerId, returnUrl) {
@@ -109,15 +124,23 @@ export class StripeProvider {
     }
     const ev = JSON.parse(rawBody.toString('utf8'));
     const o = ev.data?.object ?? {};
+    const at = Number.isFinite(ev.created) ? ev.created * 1000 : undefined; // Stripe's own time for the event
+    const out = this.translate(ev, o);
+    return out && { ...out, ...(at !== undefined ? { at } : {}), ...(typeof ev.livemode === 'boolean' ? { livemode: ev.livemode } : {}) };
+  }
+
+  translate(ev, o) {
     switch (ev.type) {
       case 'checkout.session.completed':
-        return { id: ev.id, type: ev.type, owner: o.client_reference_id ?? o.metadata?.owner, plan: o.metadata?.plan, status: 'active', subscriptionId: o.subscription, customerId: o.customer };
+        // Only a paid subscription session counts; the account is found by the session id we recorded, so any other session is ignored upstream.
+        if (o.mode !== 'subscription' || !['paid', 'no_payment_required'].includes(o.payment_status)) return { id: ev.id, type: ev.type, owner: null };
+        return { id: ev.id, type: ev.type, owner: o.client_reference_id ?? o.metadata?.owner, checkoutSessionId: o.id, status: 'active', subscriptionId: idOf(o.subscription), customerId: idOf(o.customer) };
       case 'customer.subscription.created':
       case 'customer.subscription.updated':
       case 'customer.subscription.deleted':
         return { id: ev.id, type: ev.type, ...this.fromSubscription(o), ...(ev.type.endsWith('deleted') ? { status: 'canceled' } : {}) };
       case 'invoice.payment_failed':
-        return { id: ev.id, type: ev.type, owner: o.subscription_details?.metadata?.owner ?? o.lines?.data?.[0]?.metadata?.owner, status: 'past_due' };
+        return { id: ev.id, type: ev.type, owner: o.subscription_details?.metadata?.owner ?? o.lines?.data?.[0]?.metadata?.owner, subscriptionId: idOf(o.subscription) ?? idOf(o.parent?.subscription_details?.subscription), status: 'past_due' };
       default:
         return { id: ev.id, type: ev.type, owner: null };
     }

@@ -47,6 +47,9 @@ function fakeProviders() {
   return { fetchImpl, calls, state };
 }
 
+/** The five headers PayPal sends with every delivery. */
+const ppHeaders = (sig) => ({ 'paypal-auth-algo': 'SHA256withRSA', 'paypal-cert-url': 'https://api.paypal.com/cert.pem', 'paypal-transmission-id': 'tx-1', 'paypal-transmission-sig': sig, 'paypal-transmission-time': '2026-10-28T10:00:00Z' });
+
 const billingOverrides = {
   enabled: true,
   stripe: { secretKey: 'sk_test_x', webhookSecret: STRIPE_WH, api: 'https://stripe.test' },
@@ -117,7 +120,7 @@ test('Stripe: checkout, server-side confirmation, webhooks, portal and cancel', 
     assert.equal(conf.body.subscription.status, 'active');
 
     // Webhook: unsigned or tampered events are refused; a signed one applies once.
-    const ev = JSON.stringify({ id: 'evt_1', type: 'invoice.payment_failed', data: { object: { subscription_details: { metadata: { owner: 'user:alice' } } } } });
+    const ev = JSON.stringify({ id: 'evt_1', type: 'invoice.payment_failed', data: { object: { subscription: 'sub_1', subscription_details: { metadata: { owner: 'user:alice' } } } } });
     assert.equal((await fetch(`${srv.url}/api/v1/billing/stripe/webhook`, { method: 'POST', body: ev, headers: { 'stripe-signature': 't=1,v1=00' } })).status, 400);
     const ok = await fetch(`${srv.url}/api/v1/billing/stripe/webhook`, { method: 'POST', body: ev, headers: { 'stripe-signature': stripeSign(ev) } });
     assert.equal(ok.status, 200);
@@ -144,9 +147,9 @@ test('PayPal: subscription approval, confirmation and verified webhooks', async 
     assert.equal(conf.body.plan, 'pro');
 
     const ev = { id: 'WH-EV-1', event_type: 'BILLING.SUBSCRIPTION.CANCELLED', resource: { id: 'I-ABC', custom_id: 'team:acme', plan_id: 'P-PRO', status: 'CANCELLED' } };
-    const bad = await fetch(`${srv.url}/api/v1/billing/paypal/webhook`, { method: 'POST', body: JSON.stringify(ev), headers: { 'paypal-transmission-sig': 'forged' } });
+    const bad = await fetch(`${srv.url}/api/v1/billing/paypal/webhook`, { method: 'POST', body: JSON.stringify(ev), headers: ppHeaders('forged') });
     assert.equal(bad.status, 400);
-    const good = await fetch(`${srv.url}/api/v1/billing/paypal/webhook`, { method: 'POST', body: JSON.stringify(ev), headers: { 'paypal-transmission-sig': 'good' } });
+    const good = await fetch(`${srv.url}/api/v1/billing/paypal/webhook`, { method: 'POST', body: JSON.stringify(ev), headers: ppHeaders('good') });
     assert.equal((await good.json()).status, 'canceled');
     assert.equal((await api(srv.url, 'GET', '/api/v1/billing?owner=team:acme', { token })).body.plan, 'free');
   } finally { await srv.close(); }

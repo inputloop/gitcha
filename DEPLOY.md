@@ -232,7 +232,32 @@ Off unless `GITCHA_BILLING=yes`. Then:
   webhook to `https://gitcha.example.org/api/v1/billing/paypal/webhook` for the
   `BILLING.SUBSCRIPTION.*` events; put its id in `PAYPAL_WEBHOOK_ID`.
 - Plans and limits default to Free, Pro and Team; replace them with a JSON file named by
-  `GITCHA_PLANS_FILE`.
+  `GITCHA_PLANS_FILE`. A numeric `price` is shown per month in `GITCHA_CURRENCY` (USD by default),
+  text as written; what is charged is whatever the Stripe Price or PayPal Plan says.
+- On start the server logs which mode each provider's keys are in (Stripe from the `sk_live_` or
+  `sk_test_` prefix, PayPal from the API host). A subscription records the mode that wrote it, and
+  one written with test keys is not a paid plan once the keys are live; the log counts them.
+- An event is applied only to the subscription the account holds, found by the id Gitcha
+  recorded, and in the provider's order; a late older event, an unknown subscription or a payment
+  session Gitcha did not start is recorded as ignored (`billing.event_ignored` in the audit log).
+  Changing plan keeps the old subscription until the new one is paid, then cancels it at the
+  provider. A failed payment keeps the paid limits for seven days from the first failure, and so
+  does a paid period that ran out without word from the provider; Gitcha asks the provider about
+  those every few minutes (PayPal does not announce renewals).
+- Cancelling in Gitcha stops renewal and keeps the plan to the end of the period already paid for
+  (Stripe is told `cancel_at_period_end`; PayPal can only cancel at once, so Gitcha holds the plan
+  itself). `GET /api/v1/billing` shows the date as `subscription.endsAt`. An account whose last
+  payment failed has no paid period left and ends at once.
+- Every change to an account is written to the audit log of each owner of that account (and of the
+  member who acted), saying who or what made it: the member (with the network address), the return
+  page, a webhook (with the provider's event id) or the refresh. Owners see the last 25 in
+  `GET /api/v1/billing` as `history`; plain team members do not.
+- The Free limits are one allowance for a person's own account and the teams they created (a paid team
+  has its own). When a paid plan ends, the newest sites over the Free limit stay served but are refused
+  new deploys fourteen days after the paid period and its grace ended; an account that never paid is
+  not locked, it just cannot add more. `GET /api/v1/billing` lists them as `overQuota`.
+- Deleting a team closes its billing account: its subscription is cancelled at the provider (a
+  refused cancel is retried and logged) and a team that later takes the name starts on Free.
 
 Keys live only in `gitcha.env`. Status: tested against fake Stripe and PayPal endpoints;
 **not yet run against either provider's sandbox**. Do that first, with test keys.
