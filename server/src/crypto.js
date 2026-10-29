@@ -45,6 +45,15 @@ export function sha256(data) {
   return crypto.createHash('sha256').update(data).digest('hex');
 }
 
+/** A purpose-bound key derived from the server key (HMAC, so a leak of one purpose's output tells nothing of another). */
+export function deriveKey(keyB64, purpose) {
+  return crypto.createHmac('sha256', Buffer.from(keyB64, 'base64')).update(`gitcha:${purpose}`).digest();
+}
+
+export function hmac(key, data) {
+  return crypto.createHmac('sha256', key).update(data).digest('base64url');
+}
+
 export function safeEqual(a, b) {
   const ab = Buffer.from(String(a));
   const bb = Buffer.from(String(b));

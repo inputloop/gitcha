@@ -7,14 +7,21 @@ import assert from 'node:assert/strict';
 import { startServer, createUser } from './helpers.js';
 
 let srv, cookieA, cookieB, userB;
-const CSRF = 'test-csrf-token-0123456789abcdef';
-
 function browser(cookie) {
-  const headers = { Cookie: `${cookie}; gitcha_csrf=${CSRF}` };
+  // The server binds the CSRF token to the session cookie, so ask it for one the way a browser does: load a form.
+  let token;
+  const csrf = async () => {
+    if (!token) {
+      const r = await fetch(srv.url + '/register', { headers: { Cookie: cookie }, redirect: 'manual' });
+      token = /gitcha_csrf=([^;]+)/.exec(r.headers.getSetCookie().join('\n'))[1];
+    }
+    return token;
+  };
+  const headers = async () => ({ Cookie: `${cookie}; gitcha_csrf=${await csrf()}` });
   return {
-    get: async (p) => { const r = await fetch(srv.url + p, { headers, redirect: 'manual' }); return { status: r.status, text: await r.text(), location: r.headers.get('location') }; },
+    get: async (p) => { const r = await fetch(srv.url + p, { headers: await headers(), redirect: 'manual' }); return { status: r.status, text: await r.text(), location: r.headers.get('location') }; },
     post: async (p, fields) => {
-      const r = await fetch(srv.url + p, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ _csrf: CSRF, ...fields }), redirect: 'manual' });
+      const r = await fetch(srv.url + p, { method: 'POST', headers: { ...(await headers()), 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ _csrf: await csrf(), ...fields }), redirect: 'manual' });
       return { status: r.status, text: await r.text(), location: r.headers.get('location') };
     },
   };

@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 import QRCode from 'qrcode';
 import { html, redirect, readForm, cookie } from './http.js';
 import { HttpError } from './errors.js';
-import { safeEqual } from './crypto.js';
+import { safeEqual, deriveKey, hmac } from './crypto.js';
 import * as V from './views.js';
 
 const SID = 'gitcha_sid';
@@ -57,19 +57,59 @@ export function safeNext(n) {
 export function registerWeb(router, { auth, packages, teams, config, billing }) {
   const secure = config.secureCookies;
 
+  // CSRF token = nonce.HMAC(server key, session cookie | nonce) (AUTH-10). It is bound to the session that was in
+  // the browser when it was issued, so a value planted from a sibling subdomain, or lifted from another session,
+  // fails; a new sign-in changes the session, so the old token stops working at once. Before sign-in the session
+  // part is empty, which binds nothing: the Origin check below is what covers that gap.
+  const csrfKey = deriveKey(config.secretKey, 'csrf v1');
+  const csrfMac = (sid, nonce) => hmac(csrfKey, `${sid}\n${nonce}`);
+  const mintCsrf = (sid) => {
+    const nonce = crypto.randomBytes(18).toString('base64url');
+    return `${nonce}.${csrfMac(sid, nonce)}`;
+  };
+  const csrfValid = (ctx, token) => {
+    if (typeof token !== 'string') return false;
+    const dot = token.indexOf('.');
+    return dot > 0 && safeEqual(token.slice(dot + 1), csrfMac(ctx.cookies[SID] ?? '', token.slice(0, dot)));
+  };
+  const csrfCookie = (token) => cookie(CSRF, token, { secure, maxAge: 86400_000 });
+
   const csrfToken = (ctx) => {
-    let t = ctx.cookies[CSRF];
-    if (!t || t.length < 20) {
-      t = crypto.randomBytes(24).toString('base64url');
-      ctx.setCookie(cookie(CSRF, t, { secure, maxAge: 86400_000 }));
-      ctx.cookies[CSRF] = t;
-    }
+    const have = ctx.cookies[CSRF];
+    if (csrfValid(ctx, have)) return have;
+    const t = mintCsrf(ctx.cookies[SID] ?? '');
+    ctx.setCookie(csrfCookie(t));
+    ctx.cookies[CSRF] = t;
     return t;
+  };
+
+  const publicHost = new URL(config.publicUrl).host;
+  /**
+   * A browser says where a write came from. Sec-Fetch-Site is set by the browser and cannot be forged by a page;
+   * when it is absent (older browsers, scripts) the Origin header must name this site. Origin "null" is what our
+   * own Referrer-Policy (no-referrer) makes browsers send on a same-site form post, so it is let through only
+   * when Sec-Fetch-Site is absent, and the token still has to match.
+   */
+  const checkOrigin = (ctx) => {
+    const h = ctx.req.headers;
+    const site = h['sec-fetch-site'];
+    const origin = h.origin;
+    const refuse = () => { throw new HttpError(403, 'csrf', 'This form was not sent from this site. Reload the page and try again.'); };
+    if (site !== undefined) {
+      if (site !== 'same-origin' && site !== 'none') refuse();
+      return;
+    }
+    if (origin === undefined || origin === 'null') return;
+    let host;
+    try { host = new URL(origin).host; } catch { refuse(); }
+    if (host !== publicHost && host !== h.host) refuse();
   };
 
   const form = async (ctx) => {
     const f = await readForm(ctx.req);
-    if (!ctx.cookies[CSRF] || !safeEqual(f._csrf ?? '', ctx.cookies[CSRF])) {
+    checkOrigin(ctx);
+    const have = ctx.cookies[CSRF];
+    if (!have || !safeEqual(f._csrf ?? '', have) || !csrfValid(ctx, have)) {
       throw new HttpError(403, 'csrf', 'Your form expired. Go back, reload the page and try again.');
     }
     return f;
@@ -174,7 +214,8 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
         ip: ctx.ip, userAgent: ctx.req.headers['user-agent'],
       });
       redirect(ctx.res, safeNext(f.next), {
-        'Set-Cookie': [...ctx.outCookies, cookie(TICKET, '', { secure, maxAge: 0 }), cookie(SID, token, { secure, maxAge: config.policy.sessionMaxAge })],
+        // A new session gets a new CSRF token; whatever was in the browser before sign-in is replaced, not trusted.
+        'Set-Cookie': [...ctx.outCookies, cookie(TICKET, '', { secure, maxAge: 0 }), cookie(SID, token, { secure, maxAge: config.policy.sessionMaxAge }), csrfCookie(mintCsrf(token))],
       });
     } catch (err) {
       if (!(err instanceof HttpError)) throw err;
@@ -444,7 +485,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     redirect(ctx.res, '/account?msg=revoked');
   });
 
-  return { page, form, csrfToken, current, requireWeb, requireFresh, NOTICES };
+  return { page, form, csrfToken, csrfValid, current, requireWeb, requireFresh, NOTICES };
 }
 
 function browserName(ua = '') {

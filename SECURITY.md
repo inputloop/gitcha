@@ -63,9 +63,17 @@ Gitcha server**.
   Passwords are hashed off the main thread, so a burst of sign-ins does not stall
   the server.
 - Unknown usernames take the same scrypt time as real ones.
-- Web: `HttpOnly`, `SameSite=Lax`, `Secure` (on https) cookies; CSRF tokens on
-  every form; strict CSP with no inline script; `frame-ancestors 'none'`;
-  same-site-only redirects.
+- Web: `HttpOnly`, `SameSite=Lax`, `Secure` (on https) cookies; strict CSP with no
+  inline script; `frame-ancestors 'none'`; same-site-only redirects.
+- Web writes: every form carries a CSRF token that is an HMAC (keyed from the
+  server key) of the session cookie it was issued with, so a value planted from a
+  sibling subdomain or lifted from another session is refused, and a new sign-in
+  replaces the token. Before sign-in the token binds to no session; there the
+  `Sec-Fetch-Site` header (must be `same-origin` or `none`) or, when a browser does
+  not send it, the `Origin` header (must be this site) decides. `Origin: null` is
+  accepted only when `Sec-Fetch-Site` is absent, because our own
+  `Referrer-Policy: no-referrer` makes browsers send it on a same-site form post.
+  The GraphQL endpoint still uses the older cookie-equals-header check.
 - API: refuses `Sec-Fetch-Site: cross-site` requests; bearer tokens only.
 - Packages: SHA-256 integrity checked on upload, on download, and against
   `gitcha-lock.json`; versions are immutable; tarballs containing links,
