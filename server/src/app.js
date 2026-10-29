@@ -137,6 +137,6 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
   });
   const sweeper = setInterval(() => { services.jobs.sweep(); auth.sweep(); }, 30_000);
   sweeper.unref();
-  server.on('close', () => { clearInterval(sweeper); services.jobs.cancelWaiters(); });
+  server.on('close', () => { clearInterval(sweeper); services.jobs.cancelWaiters(); store.close(); });
   return { server, ...services, router, version: VERSION };
 }

@@ -81,7 +81,9 @@ Gitcha server**.
 - API: refuses `Sec-Fetch-Site: cross-site` requests; bearer tokens only.
 - Packages: SHA-256 integrity checked on upload, on download, and against
   `gitcha-lock.json`; versions are immutable; tarballs containing links,
-  absolute paths or `..` are rejected on both server and client.
+  absolute paths or `..` are rejected on both server and client. A stored tarball
+  is written whole (temporary name, sync, rename) and is hashed again the first time
+  this process serves it; a damaged one is refused (500 `blob_damaged`), not served.
 - The client refuses plain `http://` for anything but localhost.
 - Every security-relevant event is written to a per-user audit log shown on
   the Account page. The log is kept per user (1,000 security rows, 200 rows of

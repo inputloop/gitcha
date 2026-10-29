@@ -131,6 +131,14 @@ it prints `gitcha: cannot start: ...` and exits 1 instead of making a new key, w
 account out. It also refuses a `db.json` it cannot read and a key file that is empty or not 32 bytes in
 base64. A new key is made only on a first start, or when `db.json` holds no accounts.
 
+Run **one server per data directory**. The server takes `db.lock` (its process id) when it starts and a
+second server on the same directory exits with `another process (pid N) is already using ...`; a lock left
+by a crashed or killed server is recognised as dead and taken over. If a different, unrelated process now
+has that pid and the message is wrong, delete `db.lock`. `db.json` is replaced atomically and synced to
+disk on every change, so copying it while the server runs gives a consistent file; leftover `*.tmp`
+files from a crash are removed at start, and a `db.json` that is not valid JSON stops the start with the
+file's name rather than being overwritten.
+
 ## Runners
 
 1. Install bContain on the runner VM and check it: `bcontain doctor`. The runner VM needs
