@@ -131,3 +131,54 @@ test('LOG-1: a log piece over the cap keeps its first part and gets a plain 413 
     assert.equal((await post('after\n')).status, 204, 'the next call is fine');
   } finally { await srv.close(); }
 });
+
+// ---- who may register a runner, and what a runner may touch (RUN-1, RUN-2, FMT-2) ----------------------------
+test('RUN-1: a registration token works once, for an hour, and can be listed and revoked', async () => {
+  const { srv, ta } = await setup();
+  try {
+    const mint = (body = {}) => api(srv.url, 'POST', '/api/v1/runners/registrations', { token: ta, body });
+    const one = (await mint()).body;
+    assert.ok(srv.jobs.register({ token: one.token, name: 'first' }, '127.0.0.1').token);
+    assert.throws(() => srv.jobs.register({ token: one.token, name: 'second' }, '127.0.0.1'), (e) => e.status === 401, 'the same token a second time');
+
+    const two = (await mint({ uses: 2 })).body;
+    srv.jobs.register({ token: two.token, name: 'a' }, '127.0.0.1');
+    srv.jobs.register({ token: two.token, name: 'b' }, '127.0.0.1');
+    assert.throws(() => srv.jobs.register({ token: two.token, name: 'c' }, '127.0.0.1'), (e) => e.status === 401);
+    assert.equal((await mint({ uses: 500 })).status, 400);
+
+    const open = (await mint()).body;
+    const listed = await api(srv.url, 'GET', '/api/v1/runners/registrations', { token: ta });
+    assert.equal(listed.status, 200);
+    assert.equal(listed.body.registrations.length, 1, 'only the unused one is open');
+    assert.equal(JSON.stringify(listed.body).includes(open.token), false, 'the token itself is never listed');
+    const revoked = await api(srv.url, 'DELETE', `/api/v1/runners/registrations/${listed.body.registrations[0].id}`, { token: ta });
+    assert.equal(revoked.status, 200, JSON.stringify(revoked.body));
+    assert.throws(() => srv.jobs.register({ token: open.token, name: 'late' }, '127.0.0.1'), (e) => e.status === 401, 'revoked');
+
+    const old = (await mint()).body;
+    srv.clock.advance(61 * 60_000);
+    assert.throws(() => srv.jobs.register({ token: old.token, name: 'late' }, '127.0.0.1'), (e) => e.status === 401, 'an hour is up');
+  } finally { await srv.close(); }
+});
+
+test('RUN-2: a job token is good only for the runner that claimed the job', async () => {
+  const { srv, tb, runner, runnerToken } = await setup();
+  try {
+    const other = srv.jobs.register({ token: srv.jobs.createRegistration(srv.store.userByName('alice'), {}, '127.0.0.1').token, name: 'other' }, '127.0.0.1');
+    const r = await queue(srv, tb, pipeline());
+    const got = await srv.jobs.claim(runner, 50);
+    const post = (bearer) => fetch(`${srv.url}/api/v1/runner/jobs/${r.body.id}/log`, { method: 'POST', headers: { Authorization: `Bearer ${bearer}`, 'X-Gitcha-Job-Token': got.jobToken, 'Content-Type': 'text/plain' }, body: 'x\n' });
+    assert.equal((await post(other.token)).status, 401, 'another runner holding the job token');
+    assert.equal((await post(runnerToken)).status, 204, 'the runner that claimed it is accepted')
+  } finally { await srv.close(); }
+});
+
+test('FMT-2: an image that could be read as an option is refused in pipelines and functions', async () => {
+  const { normalizePipeline, normalizeFunction } = await import('../src/compute/formats.js');
+  for (const image of ['--help', '-e', '--privileged']) {
+    assert.throws(() => normalizePipeline({ image, steps: [{ name: 's', run: 'true' }] }), /image/, `pipeline image ${image}`);
+    assert.throws(() => normalizeFunction({ name: 'f', runtime: 'sh', entry: 'f.sh', image }, new Map([['f.sh', Buffer.from('true')]])), /image/, `function image ${image}`);
+  }
+  assert.equal(normalizePipeline({ image: 'docker.io/library/node:22-alpine', steps: [{ name: 's', run: 'true' }] }).image, 'docker.io/library/node:22-alpine');
+});

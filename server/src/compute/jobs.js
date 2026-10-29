@@ -15,7 +15,9 @@ import { randomToken, sha256 } from '../crypto.js';
 
 const LOG_LIMIT = 5 * 1024 * 1024;
 const JOB_HISTORY = 1000;
-const REG_TTL = 7 * 24 * 3600_000;
+// A registration token is the key to a runner that may see builds: one use, one hour, unless the keeper asks otherwise.
+const REG_TTL = 3600_000;
+const REG_MAX_USES = 20;
 const RUNNER_NAME_RE = /^[\w .@:-]{1,80}$/;
 // Conservative defaults the keepers can change (config.compute.maxActiveJobs, maxQueuedJobs, maxQueuedCalls).
 const MAX_ACTIVE_JOBS = 10;   // builds one owner may have queued or running
@@ -47,7 +49,7 @@ export class JobService {
   }
 
   // ---- runner registration ----------------------------------------------------------
-  createRegistration(user, { team } = {}, ip) {
+  createRegistration(user, { team, uses = 1 } = {}, ip) {
     let scope;
     if (team) {
       const t = this.teams.get(team);
@@ -57,17 +59,43 @@ export class JobService {
       if (user.role !== 'admin') throw new HttpError(403, 'admin_only', 'Only an administrator can register instance-wide runners. Team owners can register runners for their team.');
       scope = { type: 'instance' };
     }
+    const n = Number(uses);
+    if (!Number.isInteger(n) || n < 1 || n > REG_MAX_USES) throw new HttpError(400, 'bad_uses', `"uses" is how many runners may register with the token: 1 to ${REG_MAX_USES}.`);
+    const ttl = this.config.compute.registrationTtlMs ?? REG_TTL;
     const token = randomToken('gtrr_');
     this.store.tx((d) => {
-      d.runnerRegs[sha256(token)] = { scope, createdBy: user.username, createdAt: this.clock(), expiresAt: this.clock() + REG_TTL };
-      this.store.audit({ userId: user.id, event: 'runner.registration_created', ip, scope: scope.type === 'team' ? `team:${scope.name}` : 'instance' });
+      d.runnerRegs[sha256(token)] = { scope, createdBy: user.username, createdAt: this.clock(), expiresAt: this.clock() + ttl, uses: n, used: 0 };
+      this.store.audit({ userId: user.id, event: 'runner.registration_created', ip, scope: scope.type === 'team' ? `team:${scope.name}` : 'instance', uses: n });
     });
-    return { token, scope, expiresAt: this.clock() + REG_TTL };
+    return { token, scope, expiresAt: this.clock() + ttl, uses: n };
+  }
+
+  canManageRegistration(user, reg) {
+    return user.role === 'admin' || (reg.scope.type === 'team' && this.teams.has(this.teams.get(reg.scope.name), user, 'owner'));
+  }
+
+  /** The registration tokens still good, as the person may see them (never the token itself). */
+  registrationsFor(user) {
+    return Object.entries(this.data.runnerRegs)
+      .filter(([, r]) => r.expiresAt >= this.clock() && (r.used ?? 0) < (r.uses ?? 1) && this.canManageRegistration(user, r))
+      .map(([hash, r]) => ({ id: hash.slice(0, 16), scope: r.scope, createdBy: r.createdBy, createdAt: r.createdAt, expiresAt: r.expiresAt, usesLeft: (r.uses ?? 1) - (r.used ?? 0) }));
+  }
+
+  revokeRegistration(user, id, ip) {
+    const hash = Object.keys(this.data.runnerRegs).find((h) => h.slice(0, 16) === String(id));
+    const reg = hash && this.data.runnerRegs[hash];
+    if (!reg || !this.canManageRegistration(user, reg)) throw new HttpError(404, 'not_found', 'No such registration token.');
+    this.store.tx((d) => {
+      delete d.runnerRegs[hash];
+      this.store.audit({ userId: user.id, event: 'runner.registration_revoked', ip, scope: reg.scope.type === 'team' ? `team:${reg.scope.name}` : 'instance' });
+    });
+    return { revoked: String(id) };
   }
 
   register({ token, name, labels = [], capabilities = ['ci', 'fn'], backend = 'unknown', version = '' }, ip) {
-    const reg = this.data.runnerRegs[sha256(String(token ?? ''))];
-    if (!reg || reg.expiresAt < this.clock()) throw new HttpError(401, 'bad_registration', 'That runner registration token is invalid or expired.');
+    const regKey = sha256(String(token ?? ''));
+    const reg = this.data.runnerRegs[regKey];
+    if (!reg || reg.expiresAt < this.clock() || (reg.used ?? 0) >= (reg.uses ?? 1)) throw new HttpError(401, 'bad_registration', 'That runner registration token is invalid or expired.');
     if (!RUNNER_NAME_RE.test(String(name ?? ''))) throw new HttpError(400, 'bad_name', 'Give the runner a short name.');
     const id = newId('run');
     const runnerToken = randomToken('gtrn_');
@@ -76,7 +104,7 @@ export class JobService {
       capabilities: capabilities.filter((c) => ['ci', 'fn'].includes(c)), backend: String(backend).slice(0, 30), version: String(version).slice(0, 30),
       tokenHash: sha256(runnerToken), createdAt: this.clock(), lastSeen: this.clock(), ip,
     };
-    this.store.tx((d) => { d.runners[id] = runner; });
+    this.store.tx((d) => { d.runners[id] = runner; d.runnerRegs[regKey].used = (reg.used ?? 0) + 1; });
     return { id, token: runnerToken, scope: runner.scope };
   }
 
@@ -228,11 +256,12 @@ export class JobService {
   }
 
   /** A job token is only good for its own job, while it runs. */
-  jobFor(id, token) {
+  jobFor(id, token, runnerId) {
     const j = this.get(id);
     if (!j || !token) throw new HttpError(401, 'bad_job_token', 'Unknown job or token.');
     if (j.status !== 'running') throw new HttpError(409, 'job_finished', `This job is already ${j.status}.`);
-    if (j.tokenHash !== sha256(token)) throw new HttpError(401, 'bad_job_token', 'Unknown job or token.');
+    // The token belongs to the runner that claimed the job, not to whoever else holds it (RUN-2).
+    if (j.tokenHash !== sha256(token) || (runnerId && j.runnerId !== runnerId)) throw new HttpError(401, 'bad_job_token', 'Unknown job or token.');
     return j;
   }
 

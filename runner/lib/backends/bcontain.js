@@ -35,6 +35,8 @@ function walk(dir, base = dir, out = []) {
 
 /** The exact argv handed to bcontain (exported for tests and `--dry-run`). */
 export function command({ bin = 'bcontain', image, cpus = 1, memoryMb = 512, port, token }) {
+  // The image comes from a job; one that starts with "-" would be read as an option by the launcher.
+  if (!/^[A-Za-z0-9][\w./:@-]{0,199}$/.test(String(image))) throw new Error(`refusing image "${String(image).slice(0, 60)}": not a plain image reference`);
   const base = `http://${GUEST_HOST}:${port}/${token}`;
   const bootstrap = `set -e; mkdir -p /job; cd /job; wget -q -O b.tgz ${base}/bundle.tgz; tar xzf b.tgz; rm b.tgz; exec sh /job/package/run.sh`;
   return [bin, 'run', image, '--cpus', String(cpus), '--memory', `${memoryMb}M`, '--display', 'headless',

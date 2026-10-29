@@ -39,8 +39,8 @@ export function registerComputeApi(router, { auth, jobs, ci, functions, config, 
     return r;
   };
   const jobAuth = (ctx) => {
-    runnerAuth(ctx);
-    return jobs.jobFor(ctx.params.id, ctx.req.headers['x-gitcha-job-token']);
+    const r = runnerAuth(ctx);
+    return jobs.jobFor(ctx.params.id, ctx.req.headers['x-gitcha-job-token'], r.id);
   };
 
   router.post('/api/v1/runner/register', async (ctx) => {
@@ -92,8 +92,18 @@ export function registerComputeApi(router, { auth, jobs, ci, functions, config, 
   // ---- managing runners ------------------------------------------------------------
   router.post('/api/v1/runners/registrations', async (ctx) => {
     const a = verified(ctx, { sensitive: true });
-    const { team } = await readJson(ctx.req);
-    json(ctx.res, 201, jobs.createRegistration(a.user, { team }, ctx.ip));
+    const { team, uses } = await readJson(ctx.req);
+    json(ctx.res, 201, jobs.createRegistration(a.user, { team, uses }, ctx.ip));
+  });
+
+  router.get('/api/v1/runners/registrations', (ctx) => {
+    const a = verified(ctx);
+    json(ctx.res, 200, { registrations: jobs.registrationsFor(a.user) });
+  });
+
+  router.delete('/api/v1/runners/registrations/:id', (ctx) => {
+    const a = verified(ctx, { sensitive: true });
+    json(ctx.res, 200, jobs.revokeRegistration(a.user, ctx.params.id, ctx.ip));
   });
 
   router.get('/api/v1/runners', (ctx) => {

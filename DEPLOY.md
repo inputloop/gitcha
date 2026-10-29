@@ -177,7 +177,10 @@ file's name rather than being overwritten.
    back to software emulation, which is slow.
 2. `apt install ./inputloop-gitcha-runner_*.deb`
 3. In Gitcha, an administrator creates a registration token (`POST
-   /api/v1/runners/registrations`; team owners can create one for a team runner).
+   /api/v1/runners/registrations`; team owners can create one for a team runner). It works
+   for one runner and for an hour (`{"uses": 5}` lets a fleet share one, up to 20);
+   `GET /api/v1/runners/registrations` lists the ones still open and `DELETE
+   /api/v1/runners/registrations/ID` revokes one.
 4. Register and start:
    ```sh
    sudo -u gitcha-runner GITCHA_RUNNER_HOME=/var/lib/gitcha-runner \

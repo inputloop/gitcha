@@ -88,7 +88,7 @@ export async function executeJob(client, config, { job, job_token: jobToken }, s
     const image = job.kind === 'ci' ? job.spec.pipeline.image : (job.spec.fn.image ?? config.defaultImage);
     const result = await backend.run({
       workdir, timeoutMs: job.timeoutMs, config, image,
-      cpus: config.cpus, memoryMb: job.kind === 'fn' ? job.spec.fn.memoryMb : config.memoryMb,
+      cpus: config.cpus, memoryMb: job.kind === 'fn' ? Math.min(job.spec.fn.memoryMb, config.memoryMb ?? job.spec.fn.memoryMb) : config.memoryMb, // never above the operator's own cap
       onOutput: job.kind === 'ci' ? take : null, signal: stopper.signal,
     });
     if (stopper.signal.aborted) { say(`job ${job.id} was ended by the server; stopped`); return; }
