@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // A stateful fake Stripe and PayPal, plus the helpers the billing tests share. Not a test file itself.
 import crypto from 'node:crypto';
-import { startServer, createUser, api, deviceLogin } from './helpers.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { startServer, createUser, api, deviceLogin, tmpDir } from './helpers.js';
 
 export const STRIPE_WH = 'whsec_test';
 export const DAY = 86_400_000;
@@ -97,12 +99,17 @@ export const billingOverrides = (extra = {}) => ({
   ...extra,
 });
 
-/** A server with billing on against the fake providers, and `alice` signed in. Sessions never expire while the clock jumps. */
-export async function setup({ billing = {}, env = {}, users = ['alice'] } = {}) {
+/**
+ * A server with billing on against the fake providers, and the first user signed in. Sessions never expire while the clock jumps,
+ * unless `longSessions` is false (to test the fresh-code rule). `plans` replaces the plan table (written to a plans file).
+ */
+export async function setup({ billing = {}, env = {}, users = ['alice'], plans = null, longSessions = true } = {}) {
   const fake = fakeProviders();
+  let plansFile;
+  if (plans) { plansFile = path.join(tmpDir('gitcha-plans-'), 'plans.json'); fs.writeFileSync(plansFile, JSON.stringify(plans)); }
   const srv = await startServer({
     env: { GITCHA_HOSTING_DOMAINS: 'pages.test', ...env },
-    overrides: { billing: billingOverrides(billing), policy: { sessionIdle: BIG, sessionMaxAge: BIG, stepUpInterval: BIG, sensitiveWindow: BIG, stepUpOnNewNetwork: false } },
+    overrides: { billing: billingOverrides({ ...(plansFile ? { plansFile } : {}), ...billing }), ...(longSessions ? { policy: { sessionIdle: BIG, sessionMaxAge: BIG, stepUpInterval: BIG, sensitiveWindow: BIG, stepUpOnNewNetwork: false } } : {}) },
     appOpts: { fetchImpl: fake.fetchImpl },
   });
   const people = {};
