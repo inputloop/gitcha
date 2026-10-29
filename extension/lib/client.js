@@ -65,7 +65,8 @@ export class GitchaClient {
   whoami() { return this.request('GET', '/api/v1/auth/whoami'); }
   logout() { return this.request('POST', '/api/v1/auth/logout'); }
   getSecurity() { return this.request('GET', '/api/v1/security'); }
-  setSecurity(checks) { return this.request('PUT', '/api/v1/security', { body: { checks } }); }
+  // The code is spent by the change itself (AUTH-4); a step-up beforehand is not enough.
+  setSecurity(checks, code) { return this.request('PUT', '/api/v1/security', { body: { checks, code } }); }
   search(q = '', { team } = {}) {
     return this.request('GET', `/api/v1/packages?q=${encodeURIComponent(q)}${team ? `&team=${encodeURIComponent(team)}` : ''}`);
   }

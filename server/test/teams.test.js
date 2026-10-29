@@ -164,15 +164,16 @@ test('a publish cannot change who sees a team package; the visibility route does
 });
 
 test('moving a package out of a team is for that team\'s owners, and every owner of both teams is told (PKG-F9)', async () => {
-  const { srv, tok } = await setup();
+  const { srv, users, tok } = await setup();
   try {
     const id = (n) => srv.store.userByName(n).id;
     const events = (n) => srv.store.auditFor(id(n)).filter((e) => e.event === 'package.transferred');
     await api(srv.url, 'POST', '/api/v1/teams', { token: tok.alice, body: { name: 'acme' } });
     await api(srv.url, 'PUT', '/api/v1/teams/acme/members/bob', { token: tok.alice, body: { role: 'maintainer' } });
-    await api(srv.url, 'PUT', '/api/v1/teams/acme/members/carol', { token: tok.alice, body: { role: 'owner' } });
+    // Naming an owner takes a code sent with the change (AUTH-4).
+    await api(srv.url, 'PUT', '/api/v1/teams/acme/members/carol', { token: tok.alice, body: { role: 'owner', code: users.alice.nextCode() } });
     await api(srv.url, 'POST', '/api/v1/teams', { token: tok.bob, body: { name: 'bobs' } });
-    await api(srv.url, 'PUT', '/api/v1/teams/bobs/members/dave', { token: tok.bob, body: { role: 'owner' } });
+    await api(srv.url, 'PUT', '/api/v1/teams/bobs/members/dave', { token: tok.bob, body: { role: 'owner', code: users.bob.nextCode() } });
     await publish(srv, tok.alice, { name: 'acme-pub', version: '1.0.0', team: 'acme' });
 
     // a maintainer of acme who owns another team used to be able to walk off with it, unseen

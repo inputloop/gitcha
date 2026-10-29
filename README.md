@@ -871,7 +871,7 @@ password.
 gitcha login [--server URL] [--device NAME]   sign in with password + authenticator code
 gitcha status                                 who you are and when the next 2FA check is due
 gitcha verify [CODE]                          re-confirm 2FA now
-gitcha security [--interval on|off] [--new-network on|off] [--sensitive on|off]
+gitcha security [--interval on|off] [--new-network on|off] [--sensitive on|off] [--code NNNNNN]
 gitcha search [query]
 gitcha info <name>
 gitcha install [name[@version]] [--dir DIR] [--allow-yanked]   one package, or everything in gitcha.json

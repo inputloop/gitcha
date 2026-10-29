@@ -90,5 +90,6 @@ package and version to the user and get their yes before you call it.
 
 Sign-in always needs 2FA. The follow-up checks (`interval`, `new_network`,
 `sensitive`) can be turned on/off with `gitcha_security_settings`, but only when
-the user explicitly asks, and a fresh code is required. Some checks may be
-locked on by the administrator.
+the user explicitly asks. The 6-digit code the user just typed goes in the same
+call as `code` and is used up by the change. Some checks may be locked on by
+the administrator.
