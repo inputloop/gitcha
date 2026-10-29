@@ -1,11 +1,31 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // JSON API for runners, CI runs and functions.
-import { json, send, readJson, readBody } from '../http.js';
+import { json, send, readJson } from '../http.js';
 import { HttpError } from '../errors.js';
 import { makeGuards } from '../api.js';
 import { pipelineFromTarball } from './ci.js';
 import { parseOwner } from './functions.js';
+
+const LOG_PIECE = 256 * 1024;
+
+/** Read a request body, keeping at most `limit` bytes and discarding (not storing) up to 16 MiB more. */
+async function readCapped(req, limit) {
+  const kept = [];
+  let n = 0;
+  let over = false;
+  for await (const c of req) {
+    n += c.length;
+    if (n <= limit) kept.push(c);
+    else {
+      over = true;
+      const room = limit - (n - c.length);
+      if (room > 0) kept.push(c.subarray(0, room));
+      if (n > limit + 16 * 1024 * 1024) break;
+    }
+  }
+  return { body: Buffer.concat(kept), over };
+}
 
 const tarballFrom = (body) => Buffer.from(String(body.tarball ?? ''), 'base64');
 
@@ -52,7 +72,10 @@ export function registerComputeApi(router, { auth, jobs, ci, functions, config, 
 
   router.post('/api/v1/runner/jobs/:id/log', async (ctx) => {
     const j = jobAuth(ctx);
-    jobs.appendLog(j, (await readBody(ctx.req, 256 * 1024)).toString('utf8'));
+    // A piece over the cap keeps its first part, is read to the end (so the connection stays usable) and gets a clear 413.
+    const { body, over } = await readCapped(ctx.req, LOG_PIECE);
+    jobs.appendLog(j, body.toString('utf8'));
+    if (over) throw new HttpError(413, 'log_piece_too_large', `Send the log in pieces under ${LOG_PIECE} bytes; the first ${LOG_PIECE} bytes of this one were kept.`);
     send(ctx.res, 204, '');
   });
 
@@ -102,7 +125,7 @@ export function registerComputeApi(router, { auth, jobs, ci, functions, config, 
     const tarball = tarballFrom(body);
     // A build that publishes a site is as sensitive as deploying by hand.
     let found = null;
-    try { found = pipelineFromTarball(tarball, { defaultImage: config.compute.defaultImage }); } catch { /* run() reports it */ }
+    try { found = pipelineFromTarball(tarball, { defaultImage: config.compute.defaultImage, maxUnpackedBytes: 4 * config.maxPackageBytes }); } catch { /* run() reports it */ }
     if (found?.pipeline.deploy) a = verified(ctx, { sensitive: true });
     json(ctx.res, 201, ci.run(a.user, { tarball, team: body.team || undefined }, ctx.ip));
   });
@@ -115,12 +138,12 @@ export function registerComputeApi(router, { auth, jobs, ci, functions, config, 
   router.get('/api/v1/ci/runs/:id', (ctx) => {
     const a = verified(ctx);
     const j = ci.get(a.user, ctx.params.id);
-    json(ctx.res, 200, { ...jobs.view(j), log: jobs.readLog(j) });
+    json(ctx.res, 200, { ...jobs.view(j), spec: jobs.specOf(j), log: jobs.readLog(j) });
   });
 
-  router.post('/api/v1/ci/runs/:id/cancel', (ctx) => {
+  router.post('/api/v1/ci/runs/:id/cancel', async (ctx) => {
     const a = verified(ctx);
-    json(ctx.res, 200, jobs.view(jobs.cancel(a.user, ctx.params.id, (u, j) => ci.canManage(u, j))));
+    json(ctx.res, 200, jobs.view(await jobs.cancel(a.user, ctx.params.id, (u, j) => ci.canManage(u, j))));
   });
 
   // ---- functions -----------------------------------------------------------------------

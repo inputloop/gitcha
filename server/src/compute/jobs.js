@@ -17,6 +17,10 @@ const LOG_LIMIT = 5 * 1024 * 1024;
 const JOB_HISTORY = 1000;
 const REG_TTL = 7 * 24 * 3600_000;
 const RUNNER_NAME_RE = /^[\w .@:-]{1,80}$/;
+// Conservative defaults the keepers can change (config.compute.maxActiveJobs, maxQueuedJobs, maxQueuedCalls).
+const MAX_ACTIVE_JOBS = 10;   // builds one owner may have queued or running
+const MAX_QUEUED_JOBS = 500;  // builds waiting anywhere on the instance
+const MAX_QUEUED_CALLS = 50;  // function calls of one owner waiting for a runner
 
 export const ownerKey = (o) => `${o.type}:${o.name}`;
 const newId = (prefix) => `${prefix}_${crypto.randomBytes(9).toString('base64url')}`;
@@ -108,6 +112,12 @@ export class JobService {
 
   /** kind 'ci' jobs persist; kind 'fn' jobs live in memory. */
   enqueue(job) {
+    if (job.kind === 'fn') {
+      // Calls nobody has picked up yet sit in memory; one owner's pile of them is bounded (FN-1).
+      let waiting = 0;
+      for (const j of this.live.values()) if (j.status === 'queued' && ownerKey(j.owner) === ownerKey(job.owner)) waiting++;
+      if (waiting >= (this.config.compute.maxQueuedCalls ?? MAX_QUEUED_CALLS)) throw new HttpError(429, 'busy', 'Too many calls to these functions are waiting for a runner; try again shortly.');
+    }
     const full = {
       id: newId(job.kind === 'fn' ? 'inv' : 'job'), status: 'queued', createdAt: this.clock(), labels: [], logBytes: 0, ...job,
       tokenHash: null,
@@ -120,6 +130,42 @@ export class JobService {
     this.queue.push(full.id);
     this.dispatch();
     return full;
+  }
+
+  /** One owner, and the instance, may only have so many builds waiting or running (LIM-2). */
+  assertRoom(owner) {
+    const mine = ownerKey(owner);
+    let active = 0;
+    let queued = 0;
+    for (const j of Object.values(this.data.jobs)) {
+      if (j.kind !== 'ci' || !['queued', 'running'].includes(j.status)) continue;
+      if (j.status === 'queued') queued++;
+      if (ownerKey(j.owner) === mine) active++;
+    }
+    if (active >= (this.config.compute.maxActiveJobs ?? MAX_ACTIVE_JOBS)) throw new HttpError(429, 'too_many_jobs', `${mine} already has ${active} builds queued or running; wait for some to finish, or cancel them.`);
+    if (queued >= (this.config.compute.maxQueuedJobs ?? MAX_QUEUED_JOBS)) throw new HttpError(429, 'queue_full', 'The build queue is full; try again shortly.');
+  }
+
+  /** Minutes the owner's waiting and running plan-paid builds may still use, counted at their timeouts (QUOTA-1). */
+  reservedMinutes(owner) {
+    const mine = ownerKey(owner);
+    let n = 0;
+    for (const j of Object.values(this.data.jobs)) {
+      if (j.kind === 'ci' && !j.paidByBudget && ['queued', 'running'].includes(j.status) && ownerKey(j.owner) === mine) n += Math.ceil(j.timeoutMs / 60_000);
+    }
+    return n;
+  }
+
+  /** The pipeline a build runs, kept once in a blob rather than in every job record (LIM-2). */
+  specOf(j) {
+    if (j.spec) return j.spec;
+    if (!j.pipelineSha) return null;
+    try { return { pipeline: JSON.parse(this.store.readBlob(j.pipelineSha).toString('utf8')) }; } catch { return null; }
+  }
+
+  /** A build's source is only needed until it ends; it is stored under a key of its own, so removing it is safe (LIM-1b). */
+  dropSource(job) {
+    if (job.kind === 'ci' && job.ownSource && job.sourceSha) fs.rmSync(path.join(this.store.blobDir, job.sourceSha), { force: true });
   }
 
   trimHistory() {
@@ -154,10 +200,13 @@ export class JobService {
     if (job.kind === 'fn') Object.assign(job, patch);
     else this.store.tx((d) => Object.assign(d.jobs[job.id], patch));
     const j = this.get(job.id);
-    return {
-      job: { id: j.id, kind: j.kind, spec: j.spec, timeoutMs: j.timeoutMs, hasSource: Boolean(j.sourceSha), owner: j.owner },
+    const handed = {
+      job: { id: j.id, kind: j.kind, spec: this.specOf(j), timeoutMs: j.timeoutMs, hasSource: Boolean(j.sourceSha), owner: j.owner },
       jobToken,
     };
+    // The runner has the caller's request now; the server need not keep its body while the call runs (FN-1).
+    if (j.kind === 'fn' && j.spec?.request) j.spec = { ...j.spec, request: { ...j.spec.request, body: '' } };
+    return handed;
   }
 
   /** Long-poll: resolves with { job, jobToken } or null after waitMs. */
@@ -220,13 +269,18 @@ export class JobService {
     if (job.kind === 'fn') Object.assign(job, patch, { response });
     else this.store.tx((d) => Object.assign(d.jobs[job.id], patch));
     const final = this.get(job.id);
-    if (this.onComplete) {
-      try { await this.onComplete(final); } catch (err) { this.appendLog(final, `\n[gitcha] after-job step failed: ${err.message}\n`); }
-    }
+    await this.ended(final);
     this.done.get(job.id)?.(final);
     this.done.delete(job.id);
     if (job.kind === 'fn') setTimeout(() => this.live.delete(job.id), 60_000).unref();
     return final;
+  }
+
+  /** Every way a build can end comes through here: its source goes, and its minutes are metered (TRIG-1). */
+  async ended(job) {
+    this.dropSource(job);
+    if (!this.onComplete) return;
+    try { await this.onComplete(job); } catch (err) { this.appendLog(job, `\n[gitcha] after-job step failed: ${err.message}\n`); }
   }
 
   /** Wait for a job to finish (used for function invocations). */
@@ -236,19 +290,23 @@ export class JobService {
         this.done.delete(job.id);
         this.queue = this.queue.filter((id) => id !== job.id);
         if (['queued', 'running'].includes(job.status)) Object.assign(job, { status: 'timed_out', finishedAt: this.clock(), tokenHash: null });
+        // Nobody will read this call again: do not keep it, or the caller's body, in memory (FN-1).
+        if (job.kind === 'fn') { this.live.delete(job.id); if (job.spec?.request) job.spec = { ...job.spec, request: { ...job.spec.request, body: '' } }; }
         resolve(job);
       }, ms);
       this.done.set(job.id, (j) => { clearTimeout(t); resolve(j); });
     });
   }
 
-  cancel(user, id, canManage) {
+  async cancel(user, id, canManage) {
     const j = this.data.jobs[id];
     if (!j || !canManage(user, j)) throw new HttpError(404, 'not_found', 'No such job.');
     if (!['queued', 'running'].includes(j.status)) return j;
     this.queue = this.queue.filter((x) => x !== id);
     this.store.tx((d) => Object.assign(d.jobs[id], { status: 'cancelled', finishedAt: this.clock(), tokenHash: null }));
-    return this.get(id);
+    const final = this.get(id);
+    await this.ended(final); // the minutes it used are metered; the runner learns on its next log call and stops
+    return final;
   }
 
   /** Mark CI jobs past their deadline as timed out. Call periodically. */
@@ -256,12 +314,13 @@ export class JobService {
     for (const j of Object.values(this.data.jobs)) {
       if (j.status === 'running' && j.deadline < this.clock()) {
         this.store.tx((d) => Object.assign(d.jobs[j.id], { status: 'timed_out', finishedAt: this.clock(), tokenHash: null }));
+        this.ended(this.data.jobs[j.id]).catch(() => {});
       }
     }
   }
 
   view(j) {
-    const { tokenHash, log, ...rest } = j;
+    const { tokenHash, log, spec, pipelineSha, ...rest } = j;
     return rest;
   }
 }

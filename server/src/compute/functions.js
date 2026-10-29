@@ -131,8 +131,11 @@ export class FunctionService {
       },
     });
     const done = await this.jobs.awaitResult(job, v.timeoutMs + this.config.compute.queueWaitMs);
-    this.billing?.record(ownerKey(fn.owner), 'fn_invocations', 1);
-    this.store.data.functions[this.key(fn.owner, fn.name)].invocations = (fn.invocations ?? 0) + 1;
+    // Only a call a runner picked up is counted; one nobody served costs the owner nothing (FN-1b).
+    if (done.startedAt) {
+      this.billing?.record(ownerKey(fn.owner), 'fn_invocations', 1);
+      this.store.data.functions[this.key(fn.owner, fn.name)].invocations = (fn.invocations ?? 0) + 1;
+    }
     if (done.status === 'succeeded' && done.response) return { ...normalizeResponse(done.response), ms: this.clock() - started, log: done.log ?? '' };
     if (done.status === 'timed_out' && !done.startedAt) {
       return { status: 503, headers: { 'content-type': 'text/plain; charset=utf-8' }, body: Buffer.from('No runner is available to run this function right now.\n'), ms: this.clock() - started };

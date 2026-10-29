@@ -1,0 +1,49 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+// The runner under a noisy build and a cancelled one (LOG-1, TRIG-1), with a real server and the process backend.
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import { startServer, createUser, api, deviceLogin } from '../../server/test/helpers.js';
+import { packFiles } from '../../extension/lib/tar.js';
+import { RunnerClient, loop } from '../lib/runner.js';
+
+const b64 = (steps) => packFiles([{ path: 'gitcha-ci.json', data: JSON.stringify({ image: 'local', steps, timeout: '1m' }) }]).toString('base64');
+let srv, token, client, config;
+
+before(async () => {
+  srv = await startServer({ overrides: { compute: { defaultImage: 'local', maxJobMs: 60_000, orgvm: false } } });
+  token = await deviceLogin(srv, createUser(srv, 'alice', 'first long pass!'));
+  const reg = await api(srv.url, 'POST', '/api/v1/runners/registrations', { token, body: {} });
+  const r = await new RunnerClient({ server: srv.url, version: 'test' }).register({ token: reg.body.token, name: 'fix-runner', backend: 'process' });
+  client = new RunnerClient({ server: srv.url, token: r.token, version: 'test' });
+  config = { backend: 'process', unsafeProcess: true, concurrency: 1, defaultImage: 'local' };
+});
+after(() => srv.close());
+
+const status = async (id) => (await api(srv.url, 'GET', `/api/v1/ci/runs/${id}`, { token })).body;
+
+test('LOG-1: a build that prints 400 KB in one burst succeeds and its log is kept', async () => {
+  const run = await api(srv.url, 'POST', '/api/v1/ci/runs', {
+    token, body: { tarball: b64([{ name: 'noisy', run: "yes 'a line of ordinary build output' | head -c 400000; echo; echo END-OF-OUTPUT" }]) },
+  });
+  assert.equal(run.status, 201, JSON.stringify(run.body));
+  await loop(client, config, { once: true });
+  const done = await status(run.body.id);
+  assert.equal(done.status, 'succeeded', `${done.error} ${done.log.slice(0, 200)}`);
+  assert.match(done.log, /END-OF-OUTPUT/, 'the end of the output arrived');
+  assert.ok(done.log.length > 400_000, `${done.log.length} characters kept`);
+});
+
+test('TRIG-1: a cancelled build is stopped on the runner, not left to run out its time', async () => {
+  const run = await api(srv.url, 'POST', '/api/v1/ci/runs', { token, body: { tarball: b64([{ name: 'long', run: 'sleep 40' }]) } });
+  assert.equal(run.status, 201, JSON.stringify(run.body));
+  const working = loop(client, config, { once: true });
+  for (let i = 0; i < 50 && (await status(run.body.id)).status !== 'running'; i++) await new Promise((r) => setTimeout(r, 100));
+  assert.equal((await status(run.body.id)).status, 'running');
+  const t0 = Date.now();
+  assert.equal((await api(srv.url, 'POST', `/api/v1/ci/runs/${run.body.id}/cancel`, { token })).body.status, 'cancelled');
+  await working;
+  const took = Date.now() - t0;
+  assert.ok(took < 15_000, `the runner stopped ${took} ms after the cancel`);
+  assert.equal((await status(run.body.id)).status, 'cancelled');
+});

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // CI: build a source tarball with the steps in its pipeline file, on a runner,
 // and optionally publish the result to a hosted site.
+import crypto from 'node:crypto';
 import { HttpError } from '../errors.js';
 import { sha256 } from '../crypto.js';
 import { unpackFiles, packFiles } from '../../../extension/lib/tar.js';
@@ -11,8 +12,8 @@ import { ownerKey } from './jobs.js';
 export const PIPELINE_FILES = ['gitcha-ci.json', 'gitcha-ci.org', 'gitcha-ci.topoforge.json'];
 
 /** Find and compile the pipeline in a source tarball (null when there is none). */
-export function pipelineFromTarball(tarball, opts) {
-  const files = new Map(unpackFiles(tarball).map((f) => [f.path, f.data]));
+export function pipelineFromTarball(tarball, { maxUnpackedBytes, ...opts } = {}) {
+  const files = new Map(unpackFiles(tarball, maxUnpackedBytes ? { maxBytes: maxUnpackedBytes } : undefined).map((f) => [f.path, f.data]));
   const found = PIPELINE_FILES.find((f) => files.has(f));
   if (!found) return null;
   const text = files.get(found).toString('utf8');
@@ -57,7 +58,7 @@ export class CiService {
     if (tarball.length > this.config.maxPackageBytes) throw new HttpError(413, 'too_large', 'Source is too large.');
     let found;
     try {
-      found = pipelineFromTarball(tarball, { defaultImage: this.config.compute.defaultImage, maxTimeoutMs: this.config.compute.maxJobMs });
+      found = pipelineFromTarball(tarball, { defaultImage: this.config.compute.defaultImage, maxTimeoutMs: this.config.compute.maxJobMs, maxUnpackedBytes: 4 * this.config.maxPackageBytes });
     } catch (err) {
       if (err instanceof HttpError) throw err;
       throw new HttpError(400, 'bad_tarball', `Invalid source tarball: ${err.message}`);
@@ -72,13 +73,29 @@ export class CiService {
       if (!this.sites.canManage(user, site)) throw new HttpError(403, 'site_forbidden', `You cannot deploy to "${site.name}".`);
       deployTarget = this.sites.identity(site); // the site as it is now; a name made again later is another site
     }
-    if (!sandboxAgent || paidByPlan) this.billing?.check(ownerKey(o), 'build_minutes');
-    const sourceSha = sha256(tarball);
-    this.store.writeBlob(sourceSha, tarball);
+    // One owner's builds waiting or running are bounded before anything is stored (LIM-2).
+    this.jobs.assertRoom(o);
+    // The plan's minutes are spent when a build ends, so builds still waiting or running count at their timeouts (QUOTA-1).
+    if (!sandboxAgent || paidByPlan) {
+      this.billing?.check(ownerKey(o), 'build_minutes', (this.billing.usage(ownerKey(o)).build_minutes ?? 0) + this.jobs.reservedMinutes(o));
+    }
+    // A sandbox agent's budget is reserved for the whole timeout now and the unused part is refunded when the build ends.
+    const budgetKey = sandboxAgent && !paidByPlan ? `agent:${sandboxAgent}` : null;
+    const reservedMinutes = budgetKey ? Math.ceil(found.pipeline.timeoutMs / 60_000) : 0;
+    if (budgetKey && (this.budgets?.balance(budgetKey) ?? 0) < reservedMinutes) {
+      throw new HttpError(402, 'budget_exhausted', `${sandboxAgent} needs ${reservedMinutes} credits reserved for a build that may run ${reservedMinutes} minutes (a shorter "timeout" in the pipeline reserves less).`);
+    }
+    // The source and the pipeline are stored once, in blobs: the source under a key of its own so it can go when the build ends.
+    const sourceKey = crypto.randomBytes(32).toString('hex');
+    this.store.writeBlob(sourceKey, tarball);
+    const pipelineJson = Buffer.from(JSON.stringify(found.pipeline));
+    const pipelineSha = sha256(pipelineJson);
+    this.store.writeBlob(pipelineSha, pipelineJson);
+    if (budgetKey) this.budgets.entry(budgetKey, -reservedMinutes, 'sandbox_reserve', 'queued');
     const job = this.jobs.enqueue({
-      kind: 'ci', owner: o, createdBy: user.username, trigger, sourceSha, pipelineFile: found.file,
-      spec: { pipeline: found.pipeline }, timeoutMs: found.pipeline.timeoutMs, deploy: found.pipeline.deploy, deployAllowedBy: found.pipeline.deploy ? user.username : null, deployTarget,
-      sandboxAgent, paidByBudget: Boolean(sandboxAgent && !paidByPlan),
+      kind: 'ci', owner: o, createdBy: user.username, trigger, sourceSha: sourceKey, ownSource: true, pipelineFile: found.file,
+      pipelineSha, timeoutMs: found.pipeline.timeoutMs, deploy: found.pipeline.deploy, deployAllowedBy: found.pipeline.deploy ? user.username : null, deployTarget,
+      sandboxAgent, paidByBudget: Boolean(budgetKey), reservedMinutes,
     });
     this.store.tx(() => this.store.audit({ userId: user.id, event: 'ci.queued', ip, job: job.id, owner: ownerKey(o), trigger }));
     return this.jobs.view(job);
@@ -87,7 +104,7 @@ export class CiService {
   /** Called after a package is published: build it if its pipeline asks to run on publish. */
   onPublish(user, pkg, tarball, ip) {
     let found;
-    try { found = pipelineFromTarball(tarball, { defaultImage: this.config.compute.defaultImage, maxTimeoutMs: this.config.compute.maxJobMs }); } catch { return null; }
+    try { found = pipelineFromTarball(tarball, { defaultImage: this.config.compute.defaultImage, maxTimeoutMs: this.config.compute.maxJobMs, maxUnpackedBytes: 4 * this.config.maxPackageBytes }); } catch { return null; }
     if (!found?.pipeline.on.includes('publish')) return null;
     const owner = pkg.team ? { type: 'team', name: pkg.team } : { type: 'user', name: user.username };
     try {
@@ -99,15 +116,23 @@ export class CiService {
 
   async afterJob(job) {
     if (job.kind !== 'ci') return;
-    if (job.startedAt) {
-      const minutes = Math.max(1, Math.ceil(((job.finishedAt ?? this.clock()) - job.startedAt) / 60_000));
-      if (job.paidByBudget) {
-        // Sandbox minutes come out of the agent's earned budget (it may go to zero, not below).
-        const bal = this.budgets?.balance(`agent:${job.sandboxAgent}`) ?? 0;
-        if (bal > 0) this.budgets.entry(`agent:${job.sandboxAgent}`, -Math.min(minutes, bal), 'sandbox_minutes', `job:${job.id}`);
-      } else {
-        this.billing?.record(ownerKey(job.owner), 'build_minutes', minutes);
+    const minutes = job.startedAt ? Math.max(1, Math.ceil(((job.finishedAt ?? this.clock()) - job.startedAt) / 60_000)) : 0;
+    if (job.paidByBudget) {
+      const key = `agent:${job.sandboxAgent}`;
+      const reserved = job.reservedMinutes ?? 0;
+      if (reserved) {
+        // Give back what the reservation did not use; a build that ran over pays the difference, as far as the budget goes.
+        const refund = reserved - Math.min(minutes, reserved);
+        if (refund > 0) this.budgets.entry(key, refund, 'sandbox_refund', `job:${job.id}`);
+        const bal = this.budgets?.balance(key) ?? 0;
+        if (minutes > reserved && bal > 0) this.budgets.entry(key, -Math.min(minutes - reserved, bal), 'sandbox_minutes', `job:${job.id}`);
+      } else if (minutes) {
+        // Queued before reservations existed: charged at the end, as before (it may go to zero, not below).
+        const bal = this.budgets?.balance(key) ?? 0;
+        if (bal > 0) this.budgets.entry(key, -Math.min(minutes, bal), 'sandbox_minutes', `job:${job.id}`);
       }
+    } else if (minutes) {
+      this.billing?.record(ownerKey(job.owner), 'build_minutes', minutes);
     }
     if (job.status !== 'succeeded' || !job.deploy || !job.deployAllowedBy) return;
     if (!job.artifactSha) {
