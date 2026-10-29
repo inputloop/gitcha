@@ -8,6 +8,8 @@ import path from 'node:path';
 import { startServer, createUser, api, deviceLogin } from './helpers.js';
 import { packFiles } from '../../extension/lib/tar.js';
 import { HttpError } from '../src/errors.js';
+import { JobService } from '../src/compute/jobs.js';
+import { CiService } from '../src/compute/ci.js';
 
 const pipeline = (extra = {}) => packFiles([{ path: 'gitcha-ci.json', data: JSON.stringify({ image: 'local', steps: [{ name: 'step-one', run: 'true' }], timeout: '1m', ...extra }) }]);
 const queue = (srv, token, tar) => api(srv.url, 'POST', '/api/v1/ci/runs', { token, body: { tarball: tar.toString('base64') } });
@@ -217,5 +219,70 @@ test('SITE-1 class: a function, a pipeline and a handed-out job each have a cap 
     // And a caller that names no cap gets a bounded one, not 200 MiB.
     const { pipelineFromTarball } = await import('../src/compute/ci.js');
     assert.throws(() => pipelineFromTarball(packFiles([{ path: 'big.bin', data: Buffer.alloc(101 * 1024 * 1024) }])), /./);
+  } finally { await srv.close(); }
+});
+
+test('AGENT-1: every build an agent queues holds credits of its own, and only the unused part of each comes back', async () => {
+  const { srv, runner, bobRec } = await setup();
+  try {
+    srv.budgets.entry('agent:ada', 10, 'seed');
+    const run = (tarball) => srv.ci.run(bobRec, { tarball, sandboxAgent: 'ada', paidByPlan: false }, '127.0.0.1');
+    const first = run(pipeline({ timeout: '5m' }));
+    const second = run(pipeline({ timeout: '5m' }));
+    assert.equal(srv.budgets.balance('agent:ada'), 0, 'two builds, two holds of five');
+    assert.throws(() => run(pipeline()), (e) => e.status === 402, 'and nothing is left for a third');
+    for (const id of [first.id, second.id]) {
+      const got = await srv.jobs.claim(runner, 50);
+      assert.equal(got.job.id, id);
+      srv.clock.advance(20_000);
+      await srv.jobs.complete(srv.jobs.get(id), { status: 'succeeded', exitCode: 0 });
+    }
+    assert.equal(srv.budgets.balance('agent:ada'), 8, 'a started minute each: 10 - 1 - 1');
+    // A build cancelled before it starts gives all of its hold back.
+    const third = run(pipeline({ timeout: '3m' }));
+    assert.equal(srv.budgets.balance('agent:ada'), 5);
+    await srv.jobs.cancel(bobRec, third.id, () => true);
+    assert.equal(srv.budgets.balance('agent:ada'), 8);
+  } finally { await srv.close(); }
+});
+
+test('AGENT-1: a build that asks for more minutes than the agent has is cut to the credits it can hold', async () => {
+  const { srv, tb, bobRec } = await setup();
+  try {
+    srv.budgets.entry('agent:ada', 3, 'seed');
+    const job = srv.ci.run(bobRec, { tarball: pipeline({ timeout: '10m' }), sandboxAgent: 'ada', paidByPlan: false }, '127.0.0.1');
+    assert.equal(job.timeoutMs, 3 * 60_000, 'a three-minute limit, one credit a minute');
+    assert.equal(srv.budgets.balance('agent:ada'), 0);
+    const shown = (await api(srv.url, 'GET', `/api/v1/ci/runs/${job.id}`, { token: tb })).body;
+    assert.match(shown.log, /time limit cut to 3 minutes/, 'the build log says why');
+    assert.throws(() => srv.ci.run(bobRec, { tarball: pipeline(), sandboxAgent: 'ada', paidByPlan: false }, '127.0.0.1'), (e) => e.status === 402, 'no credits, no build');
+  } finally { await srv.close(); }
+});
+
+test('AGENT-1: a build running when the server stopped is metered once at the next start, for at most its own time limit', async () => {
+  const { srv, runner, bobRec } = await setup();
+  try {
+    const restart = () => {
+      const jobs = new JobService({ store: srv.store, config: srv.config, teams: srv.teams, clock: srv.clock });
+      return new CiService({ ...srv, jobs });
+    };
+    // An old build the sweep failed at some earlier start, never metered: a later start leaves it alone.
+    srv.store.tx((d) => { d.jobs.job_old = { id: 'job_old', kind: 'ci', owner: { type: 'user', name: 'bob' }, status: 'failed', error: 'The server restarted while this job ran.', startedAt: 1, finishedAt: 1 + 3_600_000, timeoutMs: 60_000 }; });
+
+    srv.budgets.entry('agent:ada', 5, 'seed');
+    const agent = srv.ci.run(bobRec, { tarball: pipeline({ timeout: '5m' }), sandboxAgent: 'ada', paidByPlan: false }, '127.0.0.1');
+    assert.equal((await srv.jobs.claim(runner, 50)).job.id, agent.id);
+    srv.clock.advance(20_000);
+    restart();
+    assert.equal(srv.jobs.get(agent.id).status, 'failed');
+    assert.equal(srv.budgets.balance('agent:ada'), 4, 'one started minute used, four given back');
+    restart();
+    assert.equal(srv.budgets.balance('agent:ada'), 4, 'a second start gives nothing back again');
+
+    const plan = srv.ci.run(bobRec, { tarball: pipeline() }, '127.0.0.1'); // a one-minute limit
+    assert.equal((await srv.jobs.claim(runner, 50)).job.id, plan.id);
+    srv.clock.advance(40 * 60_000); // the server was down for forty minutes
+    restart();
+    assert.equal(srv.billing.usage('user:bob').build_minutes, 1, 'the downtime is not build time, and the old build is not charged now');
   } finally { await srv.close(); }
 });

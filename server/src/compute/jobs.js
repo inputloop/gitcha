@@ -42,9 +42,14 @@ export class JobService {
     this.done = new Map();    // job id -> resolve() for awaitResult
     this.onComplete = null;   // set by the CI service (deploy artifacts)
     // Requeue CI jobs that were queued when the server stopped; fail ones that were running.
+    // The CI service meters the ones failed here (`restarted`) once, so a held budget does not stay held for ever.
+    this.restarted = [];
     for (const j of Object.values(this.data.jobs)) {
       if (j.status === 'queued') this.queue.push(j.id);
-      if (j.status === 'running') Object.assign(j, { status: 'failed', error: 'The server restarted while this job ran.', finishedAt: this.clock() });
+      if (j.status === 'running') {
+        Object.assign(j, { status: 'failed', error: 'The server restarted while this job ran.', finishedAt: this.clock() });
+        this.restarted.push(j.id);
+      }
     }
   }
 

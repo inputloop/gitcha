@@ -31,6 +31,12 @@ export class CiService {
   constructor({ store, config, teams, sites, jobs, billing, budgets, clock = Date.now }) {
     Object.assign(this, { store, config, teams, sites, jobs, billing, budgets, clock });
     jobs.onComplete = (job) => this.afterJob(job);
+    // A build that was running when the server stopped (the job service failed it just now) is still owed its metering and
+    // its refund. The downtime is not build time: at most the build's own time limit counts.
+    for (const id of jobs.restarted ?? []) {
+      const j = store.data.jobs[id];
+      if (j?.kind === 'ci') this.meter(j, Math.ceil(j.timeoutMs / 60_000));
+    }
   }
 
   ownerFor(user, team) {
@@ -79,11 +85,17 @@ export class CiService {
     if (!sandboxAgent || paidByPlan) {
       this.billing?.check(ownerKey(o), 'build_minutes', (this.billing.usage(ownerKey(o)).build_minutes ?? 0) + this.jobs.reservedMinutes(o));
     }
-    // A sandbox agent's budget is reserved for the whole timeout now and the unused part is refunded when the build ends.
+    // A sandbox agent's budget is held for the whole time limit now and the unused part is given back when the build ends
+    // (BUD-2): the limit is cut to the credits it has, one credit a minute, so the hold always covers what the build can use.
     const budgetKey = sandboxAgent && !paidByPlan ? `agent:${sandboxAgent}` : null;
-    const reservedMinutes = budgetKey ? Math.ceil(found.pipeline.timeoutMs / 60_000) : 0;
-    if (budgetKey && (this.budgets?.balance(budgetKey) ?? 0) < reservedMinutes) {
-      throw new HttpError(402, 'budget_exhausted', `${sandboxAgent} needs ${reservedMinutes} credits reserved for a build that may run ${reservedMinutes} minutes (a shorter "timeout" in the pipeline reserves less).`);
+    let timeoutMs = found.pipeline.timeoutMs;
+    let reservedMinutes = 0;
+    let cutTo = null;
+    if (budgetKey) {
+      const credits = Math.floor(this.budgets?.balance(budgetKey) ?? 0);
+      reservedMinutes = Math.min(Math.ceil(timeoutMs / 60_000), credits);
+      if (reservedMinutes < 1) throw new HttpError(402, 'budget_exhausted', `${sandboxAgent} has no sandbox credits left to hold for a build.`);
+      if (reservedMinutes * 60_000 < timeoutMs) { timeoutMs = reservedMinutes * 60_000; cutTo = reservedMinutes; }
     }
     // The source and the pipeline are stored once, in blobs: the source under a key of its own so it can go when the build ends.
     const sourceKey = crypto.randomBytes(32).toString('hex');
@@ -91,12 +103,14 @@ export class CiService {
     const pipelineJson = Buffer.from(JSON.stringify(found.pipeline));
     const pipelineSha = sha256(pipelineJson);
     this.store.writeBlob(pipelineSha, pipelineJson);
-    if (budgetKey) this.budgets.entry(budgetKey, -reservedMinutes, 'sandbox_reserve', 'queued');
     const job = this.jobs.enqueue({
       kind: 'ci', owner: o, createdBy: user.username, trigger, sourceSha: sourceKey, ownSource: true, pipelineFile: found.file,
-      pipelineSha, timeoutMs: found.pipeline.timeoutMs, deploy: found.pipeline.deploy, deployAllowedBy: found.pipeline.deploy ? user.username : null, deployTarget,
+      pipelineSha, timeoutMs, deploy: found.pipeline.deploy, deployAllowedBy: found.pipeline.deploy ? user.username : null, deployTarget,
       sandboxAgent, paidByBudget: Boolean(budgetKey), reservedMinutes,
     });
+    // The hold is its own ledger entry per build (an entry with the same ref is skipped, so the ref carries the job).
+    if (budgetKey) this.budgets.entry(budgetKey, -reservedMinutes, 'sandbox_reserve', `job:${job.id}:reserve`);
+    if (cutTo) this.jobs.appendLog(job, `[gitcha] time limit cut to ${cutTo} minute${cutTo === 1 ? '' : 's'}: that is the sandbox credit ${sandboxAgent} had to hold\n`);
     this.store.tx(() => this.store.audit({ userId: user.id, event: 'ci.queued', ip, job: job.id, owner: ownerKey(o), trigger }));
     return this.jobs.view(job);
   }
@@ -114,9 +128,11 @@ export class CiService {
     }
   }
 
-  async afterJob(job) {
-    if (job.kind !== 'ci') return;
-    const minutes = job.startedAt ? Math.max(1, Math.ceil(((job.finishedAt ?? this.clock()) - job.startedAt) / 60_000)) : 0;
+  /** What a build used: plan minutes recorded, or the agent's held credits settled. Once per build, never more than `atMost` minutes. */
+  meter(job, atMost = Infinity) {
+    if (job.settled) return;
+    this.store.tx((d) => { if (d.jobs[job.id]) d.jobs[job.id].settled = true; });
+    const minutes = job.startedAt ? Math.min(atMost, Math.max(1, Math.ceil(((job.finishedAt ?? this.clock()) - job.startedAt) / 60_000))) : 0;
     if (job.paidByBudget) {
       const key = `agent:${job.sandboxAgent}`;
       const reserved = job.reservedMinutes ?? 0;
@@ -134,6 +150,11 @@ export class CiService {
     } else if (minutes) {
       this.billing?.record(ownerKey(job.owner), 'build_minutes', minutes);
     }
+  }
+
+  async afterJob(job) {
+    if (job.kind !== 'ci') return;
+    this.meter(job);
     if (job.status !== 'succeeded' || !job.deploy || !job.deployAllowedBy) return;
     if (!job.artifactSha) {
       this.jobs.appendLog(job, '\n[gitcha] the pipeline asked to deploy but the runner returned no artifacts\n');
