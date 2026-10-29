@@ -121,7 +121,7 @@ export function registerComputeApi(router, { auth, jobs, ci, functions, config, 
     // An agent key runs work in the paid sandbox for its agent.
     const tok = bearer(ctx.req);
     if (tok?.startsWith('gak_')) {
-      const p = principals.fromToken(tok, ctx.ip);
+      const p = principals.fromToken(tok, ctx.ip, { purpose: 'sandbox' }); // an agent key opens this door only
       if (!p) throw new HttpError(401, 'unauthenticated', 'That agent key is not valid.');
       const paid = billing.enabled && billing.plans[billing.planFor(`user:${p.owner.username}`)]?.paid;
       if (!paid && budgets.balance(`agent:${p.agent.handle}`) <= 0) throw new HttpError(402, 'budget_exhausted', `${p.agent.handle} has no sandbox budget left and its owner has no paid plan.`);

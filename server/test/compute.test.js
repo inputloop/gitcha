@@ -182,3 +182,20 @@ test('FMT-2: an image that could be read as an option is refused in pipelines an
   }
   assert.equal(normalizePipeline({ image: 'docker.io/library/node:22-alpine', steps: [{ name: 's', run: 'true' }] }).image, 'docker.io/library/node:22-alpine');
 });
+
+test('KEY-1: the CI door names its purpose, so an agent key opens it (and only it) once keys are door-strict', async () => {
+  const { srv, bobRec } = await setup();
+  try {
+    srv.agents.register(bobRec, { handle: 'ada', name: 'Ada', model: 'claude-opus-5-5' }, '127.0.0.1');
+    srv.budgets.entry('agent:ada', 5, 'seed');
+    const key = srv.keys.createAgentKey(bobRec, srv.store.data.agents.ada, { purpose: 'sandbox' }, '127.0.0.1').token;
+    // What keys.js does after KEY-1: a gak_ key resolves for a door that names the purpose it was issued for, and for no other.
+    const real = srv.principals.fromToken.bind(srv.principals);
+    const asked = [];
+    srv.principals.fromToken = (token, ip, opts = {}) => { asked.push(opts.purpose); return token.startsWith('gak_') && opts.purpose !== 'sandbox' ? null : real(token, ip, opts); };
+    const r = await api(srv.url, 'POST', '/api/v1/ci/runs', { token: key, body: { tarball: pipeline().toString('base64') } });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    assert.deepEqual(asked, ['sandbox'], 'the door says what it is for');
+    assert.equal(srv.jobs.get(r.body.id).sandboxAgent, 'ada');
+  } finally { await srv.close(); }
+});
