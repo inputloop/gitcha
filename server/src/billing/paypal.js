@@ -98,6 +98,7 @@ export class PayPalProvider {
     return this.fromSubscription(await this.call('GET', `/v1/billing/subscriptions/${subscriptionId}`));
   }
 
+  /** PayPal has no cancel at period end: it cancels at once, and Gitcha keeps the paid plan to the period end itself. */
   async cancel(sub) {
     if (!sub.subscriptionId) return;
     try { await this.call('POST', `/v1/billing/subscriptions/${sub.subscriptionId}/cancel`, { reason: 'Cancelled by the account owner in Gitcha.' }); } catch (err) { if (err.providerStatus !== 404) throw err; } // already gone is as good as cancelled

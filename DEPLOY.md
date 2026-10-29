@@ -244,6 +244,10 @@ Off unless `GITCHA_BILLING=yes`. Then:
   provider. A failed payment keeps the paid limits for seven days from the first failure, and so
   does a paid period that ran out without word from the provider; Gitcha asks the provider about
   those every few minutes (PayPal does not announce renewals).
+- Cancelling in Gitcha stops renewal and keeps the plan to the end of the period already paid for
+  (Stripe is told `cancel_at_period_end`; PayPal can only cancel at once, so Gitcha holds the plan
+  itself). `GET /api/v1/billing` shows the date as `subscription.endsAt`. An account whose last
+  payment failed has no paid period left and ends at once.
 - Every change to an account is written to the audit log of each owner of that account (and of the
   member who acted), saying who or what made it: the member (with the network address), the return
   page, a webhook (with the provider's event id) or the refresh. Owners see the last 25 in

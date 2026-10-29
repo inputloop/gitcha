@@ -132,7 +132,8 @@ test('BIL-15 (M21, M22): cancelling and the portal need a fresh code, and work w
 
     assert.equal((await post(srv, alice.token, '/api/v1/auth/step-up', { code: alice.user.nextCode() })).status, 200);
     assert.match((await post(srv, alice.token, '/api/v1/billing/portal', {})).body.url, /^https:\/\/billing\.stripe\.test\//);
-    assert.equal((await post(srv, alice.token, '/api/v1/billing/cancel', {})).body.plan, 'free');
+    const done = await post(srv, alice.token, '/api/v1/billing/cancel', {});
+    assert.deepEqual([done.status, done.body.subscription.status], [200, 'canceled']);
   } finally { await srv.close(); }
 });
 

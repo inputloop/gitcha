@@ -207,7 +207,7 @@ export class BillingService {
   }
 
   /**
-   * How a subscription stands: 'paid', 'grace' (a failed payment, or a paid period that ran out with no word from the provider;
+   * How a subscription stands: 'paid' (also one its owner cancelled, until the period they paid for ends), 'grace' (a failed payment, or a paid period that ran out with no word from the provider;
    * paid limits stay for seven days from when that began) or 'none'. A record with no period end never runs out by itself.
    */
   standing(s) {
@@ -217,7 +217,8 @@ export class BillingService {
     else if (s.status === 'active') {
       if (s.currentPeriodEnd == null || s.currentPeriodEnd >= now) return 'paid';
       since = s.currentPeriodEnd;
-    } else return 'none';
+    } else if (s.status === 'canceled' && s.keepUntil != null && s.keepUntil >= now) return 'paid'; // cancelled by its owner, the paid period runs on
+    else return 'none';
     return now - since < GRACE_MS ? 'grace' : 'none';
   }
 
@@ -363,7 +364,7 @@ export class BillingService {
     return {
       owner: o.key, enabled: this.enabled, plan, planName: this.plans[plan].name, limits: this.plans[plan].limits, usage: this.countedUsage(o.key),
       ...(pool.length > 1 ? { sharedWith: pool.length - 1 } : {}), ...(over.over.length ? { overQuota: { sites: over.over, limit: over.limit, readOnlyFrom: over.readOnlyFrom } } : {}),
-      subscription: sub ? { provider: sub.provider, plan: sub.plan, status: sub.status === 'active' && this.standing(sub) !== 'paid' ? 'past_due' : sub.status, currentPeriodEnd: sub.currentPeriodEnd ?? null } : null,
+      subscription: sub ? { provider: sub.provider, plan: sub.plan, status: sub.status === 'active' && this.standing(sub) !== 'paid' ? 'past_due' : sub.status, currentPeriodEnd: sub.currentPeriodEnd ?? null, endsAt: sub.status === 'canceled' && this.standing(sub) === 'paid' ? sub.keepUntil : null } : null,
       pendingCheckout: this.accountOf(o.key)?.checkout ? { provider: this.accountOf(o.key).checkout.provider, plan: this.accountOf(o.key).checkout.plan } : null,
       plans: Object.entries(this.plans).map(([id, p]) => ({ id, name: p.name, price: this.priceLabel(p), limits: p.limits, paid: Boolean(p.paid) })),
       providers: Object.keys(this.providers).filter((k) => this.providers[k].canSell),
@@ -478,7 +479,7 @@ export class BillingService {
     if (!s || !this.plans[s.plan]?.paid) return null;
     if (s.status === 'active') return s.currentPeriodEnd == null ? null : s.currentPeriodEnd + GRACE_MS;
     if (s.status === 'past_due') return (s.pastDueSince ?? s.updatedAt) + GRACE_MS;
-    if (s.status === 'canceled' && s.activatedAt !== undefined) return s.canceledAt ?? s.updatedAt;
+    if (s.status === 'canceled' && s.activatedAt !== undefined) return Math.max(s.canceledAt ?? s.updatedAt, s.keepUntil ?? 0);
     return null;
   }
 
@@ -507,8 +508,8 @@ export class BillingService {
     const o = this.account(user, owner, { manage: true });
     if (!this.plans[plan]?.paid) throw new HttpError(400, 'bad_plan', `"${plan}" is not a paid plan.`);
     const current = this.subscription(o.key);
-    const paying = Boolean(current && ['active', 'past_due'].includes(current.status));
-    if (paying && current.plan === plan) {
+    const paying = Boolean(current && (['active', 'past_due'].includes(current.status) || this.standing(current) === 'paid'));
+    if (paying && current.status !== 'canceled' && current.plan === plan) {
       throw new HttpError(409, 'already_subscribed', `${o.key} is already on the ${this.plans[plan].name} plan.`);
     }
     const p = this.provider(provider);
@@ -544,8 +545,10 @@ export class BillingService {
     const o = this.account(user, owner, { manage: true });
     const sub = this.subscription(o.key);
     if (!sub || !['active', 'past_due', 'pending'].includes(sub.status)) throw new HttpError(409, 'no_subscription', 'There is no subscription to cancel.');
-    await this.provider(sub.provider).cancel(sub);
-    this.setSubscription(o.key, { status: 'canceled' }, 'canceled_by_user', { actor: { by: 'user', userId: user.id, username: user.username, ip } });
+    // A paid-up subscription stops renewing and keeps its plan to the end of the period already paid for; one with no paid period left ends now.
+    const keepUntil = sub.status === 'active' && sub.currentPeriodEnd != null && sub.currentPeriodEnd > this.clock() ? sub.currentPeriodEnd : null;
+    await this.provider(sub.provider).cancel(sub, { atPeriodEnd: keepUntil != null });
+    this.setSubscription(o.key, { status: 'canceled', ...(keepUntil != null ? { keepUntil } : {}) }, 'canceled_by_user', { actor: { by: 'user', userId: user.id, username: user.username, ip } });
     return this.view(user, o.key);
   }
 
@@ -592,6 +595,9 @@ export class BillingService {
     for (const k of ['status', 'plan', 'subscriptionId', 'customerId', 'currentPeriodEnd']) if (next[k] !== undefined && (next[k] !== null || (authoritative && k === 'currentPeriodEnd'))) patch[k] = next[k];
     const mark = (outcome) => { if (seen) this.atomically(null, () => {}, seen); return outcome; };
     if (target === 'current') {
+      // A subscription its owner cancelled keeps running at Stripe to the period end; that is not a revival.
+      const cur = this.subscription(key);
+      if (cur.status === 'canceled' && cur.keepUntil != null && cur.subscriptionId === next.subscriptionId && patch.status && patch.status !== 'canceled') delete patch.status;
       if (next.at != null) patch.lastEventAt = Math.max(next.at, this.subscription(key).lastEventAt ?? 0);
       return this.atomically(key, (d) => { this.putSubscription(d, key, { provider: next.provider, ...patch }, event, { actor }); return 'applied'; }, seen);
     }

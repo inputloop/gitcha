@@ -104,9 +104,11 @@ export class StripeProvider {
     };
   }
 
-  async cancel(sub) {
+  /** End the subscription now, or (atPeriodEnd) stop it renewing and let the period already paid for run out. */
+  async cancel(sub, { atPeriodEnd = false } = {}) {
     if (!SUB_ID.test(sub.subscriptionId ?? '')) return;
-    try { await this.call('DELETE', `/v1/subscriptions/${sub.subscriptionId}`); } catch (err) { if (err.providerStatus !== 404) throw err; } // already gone is as good as cancelled
+    const path = `/v1/subscriptions/${sub.subscriptionId}`;
+    try { await (atPeriodEnd ? this.call('POST', path, { cancel_at_period_end: true }) : this.call('DELETE', path)); } catch (err) { if (err.providerStatus !== 404) throw err; } // already gone is as good as cancelled
   }
 
   async portal(customerId, returnUrl) {

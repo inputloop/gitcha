@@ -25,8 +25,11 @@ test('BIL-10: after a cancel the newest sites over the Free limit take no change
   try {
     await sixSitesOnPro(ctx);
     srv.billing.requireWritableSite('user:alice', 'pro-s6'); // Pro: nothing to refuse
-    assert.equal((await post(srv, token, '/api/v1/billing/cancel', {})).body.plan, 'free');
-    const canceledAt = srv.clock();
+    const cancelled = await post(srv, token, '/api/v1/billing/cancel', {});
+    assert.equal(cancelled.body.plan, 'pro', 'a cancel keeps the paid month');
+    const canceledAt = cancelled.body.subscription.endsAt;
+    srv.clock.advance(canceledAt - srv.clock() + 1); // and the month runs out
+    assert.equal((await billingOf(srv, token)).plan, 'free');
 
     const v = await billingOf(srv, token);
     assert.deepEqual(v.overQuota.sites, ['pro-s4', 'pro-s5', 'pro-s6'], 'the oldest three keep their places');
@@ -55,14 +58,16 @@ test('BIL-10: starting a new checkout, or paying again, does not reset or leave 
   const { srv, fake, token } = ctx;
   try {
     await sixSitesOnPro(ctx);
-    await post(srv, token, '/api/v1/billing/cancel', {});
+    const cancelled = await post(srv, token, '/api/v1/billing/cancel', {});
+    srv.clock.advance(cancelled.body.subscription.endsAt - srv.clock() + 1); // the paid month runs out
     srv.clock.advance(5 * DAY);
-    // A checkout that is never paid replaces the cancelled record; the clock that began at the cancel keeps running.
+    // A checkout that is never paid replaces the cancelled record; the clock that began when the paid month ended keeps running.
     assert.equal((await post(srv, token, '/api/v1/billing/checkout', { plan: 'pro', provider: 'stripe' })).status, 200);
     srv.clock.advance(GRACE - 5 * DAY + 1000);
     assert.throws(() => srv.billing.requireWritableSite('user:alice', 'pro-s6'), (e) => e.status === 402);
 
     // Paying again lifts it.
+    fake.st.periodEnd = Math.floor(srv.clock() / 1000) + 30 * 86_400; // a new month, from now
     const again = await subscribe(srv, fake, token, { plan: 'pro' });
     assert.equal(again.confirm.body.plan, 'pro');
     srv.billing.requireWritableSite('user:alice', 'pro-s6');

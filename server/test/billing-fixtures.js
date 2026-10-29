@@ -49,6 +49,10 @@ export function fakeProviders() {
           if (st.failCancel) return reply(500, { error: { message: 'cancel failed' } });
           s.status = 'canceled';
         }
+        if (init.method === 'POST' && new URLSearchParams(init.body).get('cancel_at_period_end') === 'true') {
+          if (st.failCancel) return reply(500, { error: { message: 'cancel failed' } });
+          s.cancel_at_period_end = true; // still active at Stripe until the period ends
+        }
         return reply(200, s);
       }
       if (u.pathname === '/v1/billing_portal/sessions') return reply(200, { url: `https://billing.stripe.test/p/${new URLSearchParams(init.body).get('customer')}` });
@@ -112,6 +116,7 @@ export async function setup({ billing = {}, env = {}, users = ['alice'], plans =
     overrides: { billing: billingOverrides({ ...(plansFile ? { plansFile } : {}), ...billing }), ...(longSessions ? { policy: { sessionIdle: BIG, sessionMaxAge: BIG, stepUpInterval: BIG, sensitiveWindow: BIG, stepUpOnNewNetwork: false } } : {}) },
     appOpts: { fetchImpl: fake.fetchImpl },
   });
+  fake.st.periodEnd = Math.floor(srv.clock() / 1000) + 30 * 86_400; // a paid month that has just begun
   const people = {};
   try {
     for (const name of users) {
