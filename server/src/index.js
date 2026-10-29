@@ -1,11 +1,30 @@
 #!/usr/bin/env node
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-import { loadConfig } from './config.js';
+import { loadConfig, StartupError } from './config.js';
 import { createApp } from './app.js';
+import { installLastResort } from './http.js';
 
-const config = loadConfig(process.env, { trustProxy: /^(1|true)$/i.test(process.env.GITCHA_TRUST_PROXY ?? '') });
-const { server, version } = createApp(config);
+installLastResort();
+
+// A setting or data file the server cannot start with is one line and exit 1, not a stack trace (AUTH-9, DEP-5).
+function startOrExplain() {
+  try {
+    const config = loadConfig(process.env);
+    return { config, ...createApp(config) };
+  } catch (err) {
+    // The last-resort handlers keep a RUNNING server up; a server that never started must exit non-zero, or a
+    // supervisor (systemd Restart=on-failure, a container) would think it finished.
+    console.error(`gitcha: cannot start: ${err instanceof StartupError ? err.message : (err?.stack ?? err)}`);
+    process.exit(1);
+  }
+}
+const { config, server, version } = startOrExplain();
+server.once('error', (err) => {
+  if (server.listening) throw err;
+  console.error(`gitcha: cannot start: could not listen on ${config.host}:${config.port} (${err.code ?? err.message})`);
+  process.exit(1);
+});
 
 server.listen(config.port, config.host, () => {
   const h = (ms) => `${Math.round(ms / 60000)} min`;
@@ -16,6 +35,8 @@ server.listen(config.port, config.host, () => {
   console.log(`  2FA re-check   every ${h(config.policy.stepUpInterval)}; sensitive actions within ${h(config.policy.sensitiveWindow)}`);
   console.log(`  locked checks  ${config.policy.lockedChecks.join(', ') || '(none: users may toggle follow-up checks)'}`);
   console.log(`  registration   ${config.openRegistration ? 'open' : 'closed'}`);
+  const via = config.trustedProxies.hops ? `${config.trustedProxies.hops} proxy hop(s)` : 'the listed proxies';
+  console.log(`  client address ${config.trustProxy ? `from X-Forwarded-For through ${via}` : 'the socket (X-Forwarded-For ignored; set GITCHA_TRUST_PROXY=true behind your own proxy)'}`);
 });
 
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => server.close(() => process.exit(0)));

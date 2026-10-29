@@ -200,7 +200,9 @@ const commands = {
     }
     let res;
     if (Object.keys(changes).length) {
-      res = await withStepUp(client, () => client.setSecurity(changes));
+      // The change spends a code of its own (AUTH-4): --code, or ask for one.
+      const code = flags.code || (await ask(`${bold('Authenticator code')}: `));
+      res = await client.setSecurity(changes, code);
       out(green('✓ Two-factor check settings updated.'));
     } else {
       res = await client.getSecurity();
@@ -212,7 +214,7 @@ const commands = {
     row('Periodic re-verification', 'interval', dim(` every ${Math.round(checks.intervalMs / 3600000)}h`));
     row('New network check       ', 'new_network');
     row('Sensitive action check  ', 'sensitive');
-    out(dim('\nToggle with e.g. `gitcha security --new-network off` (needs a fresh code).'));
+    out(dim('\nToggle with e.g. `gitcha security --new-network off` (asks for a code, or pass --code).'));
   },
 
   async search({ _, flags }) {

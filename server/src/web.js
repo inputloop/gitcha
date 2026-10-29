@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 import QRCode from 'qrcode';
 import { html, redirect, readForm, cookie } from './http.js';
 import { HttpError } from './errors.js';
-import { safeEqual } from './crypto.js';
+import { safeEqual, deriveKey, hmac } from './crypto.js';
 import * as V from './views.js';
 
 const SID = 'gitcha_sid';
@@ -38,25 +38,81 @@ const REASONS = {
   sensitive_action: 'This is a sensitive action and needs a fresh code.',
 };
 
-/** Only allow same-site relative redirects. */
-const safeNext = (n) => (typeof n === 'string' && /^\/(?![/\\])/.test(n) ? n : '/packages');
+/**
+ * Only allow same-site relative redirects. The address is resolved the way a browser resolves a Location header,
+ * against a fixed origin, and must come back to that origin: the URL standard strips tab and newline before it
+ * parses, so a check on the raw text is not enough. Control characters and backslashes are refused up front.
+ */
+export function safeNext(n) {
+  const fallback = '/packages';
+  if (typeof n !== 'string' || n.length > 2048 || !n.startsWith('/') || /[\u0000-\u001f\u007f\\]/.test(n)) return fallback;
+  try {
+    const u = new URL(n, 'http://gitcha.invalid');
+    return u.origin === 'http://gitcha.invalid' ? u.pathname + u.search : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 export function registerWeb(router, { auth, packages, teams, config, billing }) {
-  const secure = config.secureCookies;
+  // Cookies are Secure when the public URL is https, or when a proxy we trust says this request came in over https
+  // (AUTH-16): a registry reachable on both schemes marks the cookies it sets over https as Secure.
+  const secureOf = (ctx) => config.secureCookies
+    || (config.trustProxy && String(ctx.req.headers['x-forwarded-proto'] ?? '').split(',').pop().trim().toLowerCase() === 'https');
+
+  // CSRF token = nonce.HMAC(server key, session cookie | nonce) (AUTH-10). It is bound to the session that was in
+  // the browser when it was issued, so a value planted from a sibling subdomain, or lifted from another session,
+  // fails; a new sign-in changes the session, so the old token stops working at once. Before sign-in the session
+  // part is empty, which binds nothing: the Origin check below is what covers that gap.
+  const csrfKey = deriveKey(config.secretKey, 'csrf v1');
+  const csrfMac = (sid, nonce) => hmac(csrfKey, `${sid}\n${nonce}`);
+  const mintCsrf = (sid) => {
+    const nonce = crypto.randomBytes(18).toString('base64url');
+    return `${nonce}.${csrfMac(sid, nonce)}`;
+  };
+  const csrfValid = (ctx, token) => {
+    if (typeof token !== 'string') return false;
+    const dot = token.indexOf('.');
+    return dot > 0 && safeEqual(token.slice(dot + 1), csrfMac(ctx.cookies[SID] ?? '', token.slice(0, dot)));
+  };
+  const csrfCookie = (ctx, token) => cookie(CSRF, token, { secure: secureOf(ctx), maxAge: 86400_000 });
 
   const csrfToken = (ctx) => {
-    let t = ctx.cookies[CSRF];
-    if (!t || t.length < 20) {
-      t = crypto.randomBytes(24).toString('base64url');
-      ctx.setCookie(cookie(CSRF, t, { secure, maxAge: 86400_000 }));
-      ctx.cookies[CSRF] = t;
-    }
+    const have = ctx.cookies[CSRF];
+    if (csrfValid(ctx, have)) return have;
+    const t = mintCsrf(ctx.cookies[SID] ?? '');
+    ctx.setCookie(csrfCookie(ctx, t));
+    ctx.cookies[CSRF] = t;
     return t;
+  };
+
+  const publicHost = new URL(config.publicUrl).host;
+  /**
+   * A browser says where a write came from. Sec-Fetch-Site is set by the browser and cannot be forged by a page;
+   * when it is absent (older browsers, scripts) the Origin header must name this site. Origin "null" is what our
+   * own Referrer-Policy (no-referrer) makes browsers send on a same-site form post, so it is let through only
+   * when Sec-Fetch-Site is absent, and the token still has to match.
+   */
+  const checkOrigin = (ctx) => {
+    const h = ctx.req.headers;
+    const site = h['sec-fetch-site'];
+    const origin = h.origin;
+    const refuse = () => { throw new HttpError(403, 'csrf', 'This form was not sent from this site. Reload the page and try again.'); };
+    if (site !== undefined) {
+      if (site !== 'same-origin' && site !== 'none') refuse();
+      return;
+    }
+    if (origin === undefined || origin === 'null') return;
+    let host;
+    try { host = new URL(origin).host; } catch { refuse(); }
+    if (host !== publicHost && host !== h.host) refuse();
   };
 
   const form = async (ctx) => {
     const f = await readForm(ctx.req);
-    if (!ctx.cookies[CSRF] || !safeEqual(f._csrf ?? '', ctx.cookies[CSRF])) {
+    checkOrigin(ctx);
+    const have = ctx.cookies[CSRF];
+    if (!have || !safeEqual(f._csrf ?? '', have) || !csrfValid(ctx, have)) {
       throw new HttpError(403, 'csrf', 'Your form expired. Go back, reload the page and try again.');
     }
     return f;
@@ -96,7 +152,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     const f = await form(ctx);
     try {
       const { enrollToken } = auth.register({ username: f.username, password: f.password, confirm: f.confirm ?? '', email: f.email, emailConfirm: f.email_confirm, ip: ctx.ip });
-      redirect(ctx.res, '/setup-2fa', { 'Set-Cookie': [...ctx.outCookies, cookie(ENROLL, enrollToken, { secure, maxAge: 30 * 60_000 })] });
+      redirect(ctx.res, '/setup-2fa', { 'Set-Cookie': [...ctx.outCookies, cookie(ENROLL, enrollToken, { secure: secureOf(ctx), maxAge: 30 * 60_000 })] });
     } catch (err) {
       if (!(err instanceof HttpError)) throw err;
       page(ctx, 'Create account', V.registerPage({ csrf: csrfToken(ctx), error: err.message, username: f.username, email: f.email, emailConfirm: f.email_confirm }), { status: err.status });
@@ -116,7 +172,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     const f = await form(ctx);
     try {
       const { recoveryCodes } = auth.confirmEnrollment({ enrollToken: ctx.cookies[ENROLL], code: String(f.code ?? '').replace(/\s/g, ''), ip: ctx.ip });
-      ctx.setCookie(cookie(ENROLL, '', { secure, maxAge: 0 }));
+      ctx.setCookie(cookie(ENROLL, '', { secure: secureOf(ctx), maxAge: 0 }));
       page(ctx, 'Recovery codes', V.recoveryCodesPage({ codes: recoveryCodes }));
     } catch (err) {
       if (!(err instanceof HttpError) || err.code === 'enrollment_expired') throw err;
@@ -133,9 +189,9 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
   router.post('/login', async (ctx) => {
     const f = await form(ctx);
     try {
-      const { ticket } = auth.beginLogin({ username: f.username, password: f.password, ip: ctx.ip });
+      const { ticket } = await auth.beginLogin({ username: f.username, password: f.password, ip: ctx.ip });
       redirect(ctx.res, `/login/2fa?next=${encodeURIComponent(safeNext(f.next))}`, {
-        'Set-Cookie': [...ctx.outCookies, cookie(TICKET, ticket, { secure, maxAge: config.policy.mfaTicketTtl })],
+        'Set-Cookie': [...ctx.outCookies, cookie(TICKET, ticket, { secure: secureOf(ctx), maxAge: config.policy.mfaTicketTtl })],
       });
     } catch (err) {
       if (!(err instanceof HttpError)) throw err;
@@ -161,7 +217,8 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
         ip: ctx.ip, userAgent: ctx.req.headers['user-agent'],
       });
       redirect(ctx.res, safeNext(f.next), {
-        'Set-Cookie': [...ctx.outCookies, cookie(TICKET, '', { secure, maxAge: 0 }), cookie(SID, token, { secure, maxAge: config.policy.sessionMaxAge })],
+        // A new session gets a new CSRF token; whatever was in the browser before sign-in is replaced, not trusted.
+        'Set-Cookie': [...ctx.outCookies, cookie(TICKET, '', { secure: secureOf(ctx), maxAge: 0 }), cookie(SID, token, { secure: secureOf(ctx), maxAge: config.policy.sessionMaxAge }), csrfCookie(ctx, mintCsrf(token))],
       });
     } catch (err) {
       if (!(err instanceof HttpError)) throw err;
@@ -198,7 +255,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     await form(ctx);
     const a = current(ctx);
     if (a) auth.revoke(a.hash, a.user.username, ctx.ip);
-    redirect(ctx.res, '/login?msg=signed_out', { 'Set-Cookie': [...ctx.outCookies, cookie(SID, '', { secure, maxAge: 0 })] });
+    redirect(ctx.res, '/login?msg=signed_out', { 'Set-Cookie': [...ctx.outCookies, cookie(SID, '', { secure: secureOf(ctx), maxAge: 0 })] });
   });
 
   // ---- packages -----------------------------------------------------------
@@ -283,6 +340,8 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
   });
 
   router.post('/teams/:team/members', teamPost((ctx, a, f) => {
+    // Naming an owner hands over the whole team: it takes a code of its own, not just the open window.
+    if (f.role === 'owner') auth.confirmAction(a, f.code, ctx.ip, 'Making someone an owner');
     teams.setMember(a.user, ctx.params.team, f.username, f.role, ctx.ip);
     redirect(ctx.res, `/teams/${ctx.params.team}?msg=member_saved`);
   }));
@@ -355,12 +414,24 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
 
 
   // ---- account security -----------------------------------------------------
+  /** The three audit lists on the Account page, each 15 rows to a page: ?events=, ?others= and ?downloads= are page numbers. */
+  const PER_PAGE = 15;
+  const activityLists = (ctx, userId) => {
+    const one = (kind, param) => {
+      const total = auth.store.auditCount(userId, kind);
+      const pages = Math.max(1, Math.ceil(total / PER_PAGE));
+      const page = Math.min(pages, Math.max(1, Math.floor(Number(ctx.url.searchParams.get(param))) || 1));
+      return { rows: auth.store.auditFor(userId, PER_PAGE, { kind, skip: (page - 1) * PER_PAGE }), page, pages, param, total };
+    };
+    return { security: one('security', 'events'), others: one('others', 'others'), traffic: one('traffic', 'downloads') };
+  };
+
   const accountView = (ctx, a, { notice, error, status = 200 } = {}) => {
     const sessions = auth.store.sessionsForUser(a.user.id).filter((s) => s.kind !== 'enroll').sort((x, y) => y.lastSeen - x.lastSeen);
     const state = auth.mfaState(a);
     page(ctx, 'Account', V.accountPage({
       csrf: csrfToken(ctx), user: a.user, email: auth.emailOf(a.user), checks: auth.checkSettings(a.user), sessions, currentHash: a.hash,
-      audit: auth.store.auditFor(a.user.id, 15), notice, error, recoveryLeft: a.user.recoveryCodes.length,
+      activity: activityLists(ctx, a.user.id), notice, error, recoveryLeft: a.user.recoveryCodes.length,
       mfaState: { verifiedAt: a.session.mfaAt, nextCheckAt: state.nextCheckAt },
     }), { user: a.user, status, wide: true });
   };
@@ -373,9 +444,14 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
   router.post('/account/checks', async (ctx) => {
     const f = await form(ctx);
     const a = requireWeb(ctx);
-    if (!a || !requireFresh(ctx, a, '/account?msg=confirm_again', true)) return;
+    if (!a) return;
+    // The code travels with the form and is used up by it. A locked box is shown disabled, so a browser never
+    // sends it: leave locked keys out of the change instead of reading their absence as "off" (AUTH-8).
+    const locked = auth.checkSettings(a.user).locked;
+    const changes = {};
+    for (const key of ['interval', 'new_network', 'sensitive']) if (!locked.includes(key)) changes[key] = f[key] === 'on';
     try {
-      auth.updateCheckSettings(a.user, { interval: f.interval === 'on', new_network: f.new_network === 'on', sensitive: f.sensitive === 'on' }, ctx.ip);
+      auth.changeChecks(a, { changes, code: f.code }, ctx.ip);
       redirect(ctx.res, '/account?msg=checks_saved');
     } catch (err) {
       if (!(err instanceof HttpError)) throw err;
@@ -412,7 +488,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     redirect(ctx.res, '/account?msg=revoked');
   });
 
-  return { page, form, csrfToken, current, requireWeb, requireFresh, NOTICES };
+  return { page, form, csrfToken, csrfValid, current, requireWeb, requireFresh, NOTICES };
 }
 
 function browserName(ua = '') {

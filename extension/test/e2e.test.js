@@ -144,7 +144,9 @@ test('Claude extension: search/install, 2FA check via gitcha_verify_2fa, securit
     assert.match(ok.text, /Two-factor verified/);
     assert.equal((await m.tool('gitcha_search')).isError, false);
 
-    const off = await m.tool('gitcha_security_settings', { new_network: false });
+    // Without the code the change is refused by the extension itself; with it, the server spends the code (AUTH-4).
+    assert.equal((await m.tool('gitcha_security_settings', { new_network: false })).isError, true);
+    const off = await m.tool('gitcha_security_settings', { new_network: false, code: user.nextCode() });
     assert.match(off.text, /new_network: OFF/);
     const view = await m.tool('gitcha_security_settings');
     assert.match(view.text, /interval .*: ON/);

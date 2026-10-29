@@ -3,14 +3,32 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { parseTrustedProxies } from './http.js';
 
 const HOUR = 3600_000;
 const MINUTE = 60_000;
 
+/** A setting or file the server cannot start with: index.js prints the message as one line and exits 1. */
+export class StartupError extends Error {
+  constructor(message) { super(message); this.name = 'StartupError'; }
+}
+
+export const CHECK_NAMES = ['interval', 'new_network', 'sensitive'];
+
+/** GITCHA_LOCKED_CHECKS: a typo must stop the server, not quietly lock nothing while /health says it is locked (AUTH-9). */
+export function parseLockedChecks(value) {
+  const names = String(value ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+  const unknown = names.filter((n) => !CHECK_NAMES.includes(n));
+  if (unknown.length) {
+    throw new StartupError(`GITCHA_LOCKED_CHECKS names unknown check(s): ${unknown.join(', ')}. Valid names: ${CHECK_NAMES.join(', ')}.`);
+  }
+  return [...new Set(names)];
+}
+
 function duration(value, fallback) {
   if (value === undefined || value === '') return fallback;
   const m = /^(\d+)\s*(ms|s|m|h|d)?$/.exec(String(value).trim());
-  if (!m) throw new Error(`invalid duration: ${value}`);
+  if (!m) throw new StartupError(`invalid duration: ${value} (use a number with ms, s, m, h or d, for example 12h)`);
   const mult = { ms: 1, s: 1000, m: MINUTE, h: HOUR, d: 24 * HOUR }[m[2] || 's'];
   return Number(m[1]) * mult;
 }
@@ -24,14 +42,54 @@ function bool(value, fallback) {
   return /^(1|true|yes|on)$/i.test(value);
 }
 
+/** A key is 32 bytes in base64; anything else (an empty or half-written file, a typo) must stop the server, not run it. */
+function checkKey(key, where) {
+  if (Buffer.from(String(key), 'base64').length !== 32) {
+    throw new StartupError(`${where} is not a 32-byte key in base64. Restore the key you backed up, or (only for a brand-new install) delete it so a new one is made.`);
+  }
+  return key;
+}
+
+/**
+ * A new key over a database that already holds accounts would make every one of them unreadable (sealed passwords
+ * and authenticator secrets, 500s for known users and 401s for unknown ones). So with accounts, or with a db.json
+ * that cannot be read to find out, no key is made: the operator restores the one that belongs to it (AUTH-14).
+ */
+function refuseIfAccounts(dataDir, file) {
+  const dbFile = path.join(dataDir, 'db.json');
+  if (!fs.existsSync(dbFile)) return;
+  let users;
+  try {
+    users = Object.keys(JSON.parse(fs.readFileSync(dbFile, 'utf8')).users ?? {}).length;
+  } catch (err) {
+    throw new StartupError(`${dbFile} exists but cannot be read (${err.message}), and there is no ${file}. Not making a new key over it: restore db.json and its key from the same backup.`);
+  }
+  if (users > 0) {
+    throw new StartupError(`${dbFile} holds ${users} account(s) but there is no ${file} and GITCHA_SECRET_KEY is not set. A new key would lock every account out. Restore the key that goes with this database (set GITCHA_SECRET_KEY or put it in ${file}).`);
+  }
+}
+
 /** Load (or create) the 32-byte key used to encrypt TOTP secrets at rest. */
 function loadSecretKey(dataDir, envKey) {
-  if (envKey) return envKey;
+  if (envKey) return checkKey(envKey, 'GITCHA_SECRET_KEY');
   const file = path.join(dataDir, 'secret.key');
-  if (fs.existsSync(file)) return fs.readFileSync(file, 'utf8').trim();
+  const read = () => checkKey(fs.readFileSync(file, 'utf8').trim(), file);
+  if (fs.existsSync(file)) return read();
+  refuseIfAccounts(dataDir, file);
+  // Written whole under a temporary name and then linked into place: link fails if another start got there first, and
+  // nobody can ever read a half-written key (a second start that read an empty file would have run with no key).
   const key = crypto.randomBytes(32).toString('base64');
-  fs.writeFileSync(file, key + '\n', { mode: 0o600 });
-  return key;
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, key + '\n', { mode: 0o600, flag: 'w' });
+  try {
+    fs.linkSync(tmp, file);
+    return key;
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+    return read();
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
 }
 
 export function loadConfig(env = process.env, overrides = {}) {
@@ -43,6 +101,9 @@ export function loadConfig(env = process.env, overrides = {}) {
     port: Number(env.GITCHA_PORT ?? 4873),
     publicUrl,
     secureCookies: publicUrl.startsWith('https://'),
+    // Behind your own reverse proxy only. GITCHA_TRUSTED_PROXIES says which proxies (a hop count, default 1, or addresses).
+    trustProxy: bool(env.GITCHA_TRUST_PROXY, false),
+    trustedProxies: parseTrustedProxies(env.GITCHA_TRUSTED_PROXIES),
     dataDir,
     secretKey: loadSecretKey(dataDir, env.GITCHA_SECRET_KEY),
     issuer: env.GITCHA_ISSUER ?? 'Gitcha',
@@ -62,7 +123,7 @@ export function loadConfig(env = process.env, overrides = {}) {
       sessionIdle: duration(env.GITCHA_SESSION_IDLE, 7 * 24 * HOUR),
       mfaTicketTtl: 5 * MINUTE,
       // Checks users may NOT switch off (comma list of: interval,new_network,sensitive).
-      lockedChecks: String(env.GITCHA_LOCKED_CHECKS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+      lockedChecks: parseLockedChecks(env.GITCHA_LOCKED_CHECKS),
     },
     hosting: {
       // Domains this instance hands out subdomains on, e.g. "pages.example.net,apps.example.org".

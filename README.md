@@ -118,15 +118,20 @@ server; what remains is how the machines around it are set up.
   `127.0.0.1:4873`; only Caddy (or your proxy) is open, on 443 and 80.
   Firewall everything else, Gitcha's own port included.
 - [ ] **Proxy settings match reality.** Set `GITCHA_PUBLIC_URL=https://…`
-  and `GITCHA_TRUST_PROXY=true` only when a proxy you control is in front;
-  otherwise clients could fake their address past the rate limits and the
-  new-network check.
+  and `GITCHA_TRUST_PROXY=true` only when a proxy you control is in front,
+  and make that proxy set `X-Forwarded-For` (snippets under "Production
+  checklist" below); otherwise clients could fake their address past the
+  rate limits and the new-network check.
 - [ ] **Hosting domains are separate registrable domains** from the UI's
   (`pages.example.net`, not `pages.gitcha.example.org`), so a hosted site
   cannot set cookies for Gitcha.
 - [ ] **`secret.key` is backed up apart from the database**, ideally
   offline. With both, a thief can undo the encryption; without the key, no
-  one can sign in.
+  one can sign in. Restore the key that goes with the database: the server
+  will not start on accounts without it, and never makes a replacement.
+- [ ] **One server per data directory.** A second server on the same
+  `GITCHA_DATA_DIR` is refused (`db.lock`); do not run two against one volume,
+  and do not put a second copy on a network filesystem that ignores locks.
 - [ ] **Payment keys live only in the environment** file
   (`/etc/inputloop/gitcha/gitcha.env`, mode 640, root and group `gitcha`),
   never in a repository. Use Stripe and PayPal test keys first.
@@ -221,8 +226,8 @@ only to `/var/lib/gitcha`.
   and admins can lock checks on with `GITCHA_LOCKED_CHECKS`.
 - 🔒 **Secrets encrypted at rest.** Passwords are hashed with scrypt *and then*
   sealed with AES-256-GCM. TOTP secrets are AES-256-GCM encrypted. Session,
-  device, console, runner and agent tokens and recovery codes are stored only
-  as hashes.
+  device, console, runner and agent tokens are stored only as hashes; recovery
+  codes only as keyed hashes (HMAC with the server key).
 
 **The forge**
 
@@ -411,7 +416,7 @@ The CLI prompts for a code, and the Claude extension asks you for one.
 
 The **Account** page lets you switch the follow-up checks on or off, see every
 signed-in browser and device (and revoke them), regenerate recovery codes, and
-read your security activity log. Changing a switch needs a fresh code. Checks
+read your security activity log. Saving the switches takes a code typed with the form, used up by it. Checks
 your administrator has locked show as "required by admin" and can't be turned
 off.
 
@@ -447,8 +452,8 @@ can't be squatted.
 
 Teams always keep at least one owner. Members can leave on their own. Adding,
 removing or re-roling members needs a fresh 2FA code (the sensitive-action
-check), and every change appears in the audit log of both the owner and the
-affected user.
+check), naming an owner takes a code sent with that change, and every change
+appears in the audit log of both the owner and the affected user.
 
 There are three ways to share a package with a team:
 
@@ -847,7 +852,7 @@ Or add the server to `claude_desktop_config.json` by hand:
 | `gitcha_team_member` | Add, re-role or remove a member, or leave | **Fresh code** (sensitive) |
 | `gitcha_share_package` | Move a package into a team and/or make it team-only | **Fresh code** (sensitive) |
 | `gitcha_verify_2fa` | Complete a check with the 6-digit authenticator code the user typed (a recovery code is refused; it stays in the terminal) | n/a |
-| `gitcha_security_settings` | View or toggle follow-up checks | **Fresh code** to change |
+| `gitcha_security_settings` | View or toggle follow-up checks | **A code sent with the change** (used up by it) |
 | `gitcha_review_pool` | Review tasks one of your agents may take | Periodic / new-network checks |
 | `gitcha_claim_task` | Claim a task for an agent | Periodic / new-network checks |
 | `gitcha_submit_review` | Submit a Second Reader verdict, summary and findings | Periodic / new-network checks |
@@ -866,7 +871,7 @@ password.
 gitcha login [--server URL] [--device NAME]   sign in with password + authenticator code
 gitcha status                                 who you are and when the next 2FA check is due
 gitcha verify [CODE]                          re-confirm 2FA now
-gitcha security [--interval on|off] [--new-network on|off] [--sensitive on|off]
+gitcha security [--interval on|off] [--new-network on|off] [--sensitive on|off] [--code NNNNNN]
 gitcha search [query]
 gitcha info <name>
 gitcha install [name[@version]] [--dir DIR] [--allow-yanked]   one package, or everything in gitcha.json
@@ -965,17 +970,18 @@ All settings are environment variables. In the Debian package they live in
 | `GITCHA_PORT` / `GITCHA_HOST` | `4873` / `127.0.0.1` | Listen address |
 | `GITCHA_PUBLIC_URL` | `http://localhost:4873` | External URL. Use `https://…` in production (enables `Secure` cookies) |
 | `GITCHA_DATA_DIR` | `./gitcha-data` | Database, git repositories, sites, blobs and `secret.key` |
-| `GITCHA_SECRET_KEY` | generated into `secret.key` | 32-byte base64 key for encrypting passwords and TOTP secrets at rest |
+| `GITCHA_SECRET_KEY` | generated into `secret.key` on a first start only | 32-byte base64 key for encrypting passwords and TOTP secrets at rest. With no key and a `db.json` that holds accounts the server refuses to start rather than make a new one |
 | `GITCHA_ISSUER` | `Gitcha` | Name shown in authenticator apps |
 | `GITCHA_OPEN_REGISTRATION` | `true` | `false` lets only the first (admin) account register |
 | `GITCHA_PUBLIC_READ` | `false` | Allow anonymous browsing and installs |
 | `GITCHA_STEPUP_INTERVAL` | `12h` | Periodic re-verification interval (`30m`, `4h`, `7d`…) |
 | `GITCHA_SENSITIVE_WINDOW` | `10m` | Maximum age of the last code for sensitive actions |
 | `GITCHA_STEPUP_ON_NEW_NETWORK` | `true` | Default for the new-network check |
-| `GITCHA_LOCKED_CHECKS` | *(empty)* | Comma list of `interval`, `new_network`, `sensitive` that users can't turn off |
+| `GITCHA_LOCKED_CHECKS` | *(empty)* | Comma list of `interval`, `new_network`, `sensitive` that users can't turn off; any other name stops the server at start |
 | `GITCHA_SESSION_MAX_AGE` / `GITCHA_SESSION_IDLE` | `30d` / `7d` | Hard and idle lifetime of sessions and device tokens |
 | `GITCHA_MAX_PACKAGE_BYTES` / `GITCHA_MAX_MEDIA_BYTES` | 25 MiB / 50 MiB | Maximum package tarball and media upload |
-| `GITCHA_TRUST_PROXY` | `false` | Use `X-Forwarded-For` for client IPs (only behind your own proxy) |
+| `GITCHA_TRUST_PROXY` | `false` | Use `X-Forwarded-For` for client IPs (only behind your own proxy; `true`, `yes`, `on` or `1`) |
+| `GITCHA_TRUSTED_PROXIES` | `1` | With the above: how many proxies are in front (a number), or the proxies' addresses (`10.0.0.0/8,203.0.113.7`) |
 
 **Git, hosting and compute**
 
@@ -1013,6 +1019,29 @@ repository.
 `GITCHA_DATA_DIR`, and store `secret.key` separately from database backups.
 If you lose the key, no one can sign in.
 
+With `GITCHA_TRUST_PROXY=true` Gitcha takes the client's address from
+`X-Forwarded-For`: the entry the nearest trusted proxy added, never anything
+the client typed to the left of it. The default trusts one proxy (the last
+entry); `GITCHA_TRUSTED_PROXIES=2` counts two (a CDN, then yours), and
+`GITCHA_TRUSTED_PROXIES=10.0.0.0/8,203.0.113.7` names the proxies by address.
+Anything that is not an address is ignored. Make your proxy put the client's
+address last:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:4873;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;   # not the client's own header
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+```caddy
+gitcha.example.org {
+    reverse_proxy 127.0.0.1:4873   # Caddy replaces X-Forwarded-For by default
+}
+```
+
 The JSON-file store is built for small and medium communities. The `Store`
 class in `server/src/store.js` is the only place that touches the database
 file if you want to swap in a database.
@@ -1034,7 +1063,7 @@ GraphQL (above) covers the social, task, key, ticket and change parts.
 | `POST` | `/auth/step-up` | `{code}`: completes an intermittent check |
 | `GET` | `/auth/whoami` | Always allowed; reports whether a check is due |
 | `POST` | `/auth/logout` | Revokes the token |
-| `GET` / `PUT` | `/security` | `{checks: {interval, new_network, sensitive}}`; `PUT` needs a fresh code |
+| `GET` / `PUT` | `/security` | `{checks: {interval, new_network, sensitive}}`; `PUT` also takes `code`, a code used up by the change |
 | `GET` | `/packages?q=` | Search |
 | `GET` | `/packages/:name` | Details and versions |
 | `GET` | `/packages/:name/:version/tarball` | `version` may be `latest`; sends `X-Gitcha-Integrity` |
@@ -1044,7 +1073,7 @@ GraphQL (above) covers the social, task, key, ticket and change parts.
 | `POST` | `/packages/:name/visibility` | `{private: true\|false}` for team packages; sensitive |
 | `GET` / `POST` | `/teams` | List your teams / create `{name, description}` |
 | `GET` | `/teams/:team` | Members, roles and packages (members only) |
-| `PUT` / `DELETE` | `/teams/:team/members/:username` | Add, re-role or remove; sensitive |
+| `PUT` / `DELETE` | `/teams/:team/members/:username` | Add, re-role or remove; sensitive; `PUT` with `role: owner` also takes `code` |
 | `DELETE` | `/teams/:team` | Delete an empty team; owners; sensitive |
 | `POST` | `/media` | Upload an image, video or audio file for a post |
 
@@ -1088,7 +1117,9 @@ See [SECURITY.md](SECURITY.md) for the full model. In short:
   `AES-256-GCM(scrypt(password))`. Clients never write them to disk.
 - **TOTP secrets:** AES-256-GCM encrypted. Codes are single-use and
   rate-limited.
-- **Tokens and recovery codes:** stored only as SHA-256 hashes.
+- **Tokens:** stored only as SHA-256 hashes. **Recovery codes** (80 bits each) are
+  stored as HMAC-SHA-256 under a key derived from the server key; codes issued
+  before that (40 bits, plain SHA-256) still work until you generate a new set.
 - **2FA:** required to sign in on the web and in the CLI, and to set up any
   device, including the Claude extension's and C4OK's. Follow-up checks are
   server-enforced, user-toggleable with a fresh code, and admin-lockable.

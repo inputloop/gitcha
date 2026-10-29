@@ -14,9 +14,9 @@ Gitcha server**.
 | Account password | server `db.json` | scrypt (N=2¹⁵, r=8, p=1, 16-byte salt), **then encrypted** with AES-256-GCM using the server key. The plaintext password is never stored anywhere. |
 | TOTP (authenticator) secret | server `db.json` | AES-256-GCM with the server key. |
 | Email address (optional) | server `db.json` | AES-256-GCM with the server key. Shown only to its owner; changing it needs a fresh code. |
-| Recovery codes | server `db.json` | SHA-256 hashes; each is deleted when used. |
+| Recovery codes | server `db.json` | HMAC-SHA-256 under a key derived from the server key (80-bit codes); each is deleted when used. Codes issued before 40-bit/SHA-256 still work until regenerated. |
 | Web sessions / device tokens | server `db.json` | Only SHA-256 hashes of the 256-bit tokens. |
-| Server key | `$GITCHA_DATA_DIR/secret.key` (0600) or `GITCHA_SECRET_KEY` | Keep it **separate from backups of `db.json`**. Losing it locks every account. |
+| Server key | `$GITCHA_DATA_DIR/secret.key` (0600) or `GITCHA_SECRET_KEY` | Keep it **separate from backups of `db.json`**. Losing it locks every account; the server refuses to start on a database with accounts and no key instead of making a new one. |
 | Console keys, runner tokens, agent API keys | server `db.json` | Only SHA-256 hashes. Shown once at creation. |
 | SSH and GPG public keys | server `db.json` | Public material only; GPG checks run in a throwaway keyring. |
 | Internal key for the SSH helpers | `$GITCHA_DATA_DIR/internal.key` | Used only on loopback between OpenSSH's helpers and the server. |
@@ -42,27 +42,56 @@ Gitcha server**.
      `GITCHA_SENSITIVE_WINDOW` (default 10 min).
 4. **Toggling checks**: each user can switch the three follow-up checks on or
    off (web Account page, `gitcha security`, or the `gitcha_security_settings`
-   tool). Changing them **always** needs a fresh code, so a stolen token or a
-   prompt-injected assistant cannot quietly disable them. Administrators can
-   lock checks on with `GITCHA_LOCKED_CHECKS=interval,new_network,sensitive`.
+   tool). Changing them **always** takes a code sent with that very change
+   and used up by it; a code you gave for a publish or a step-up does not
+   count, so a stolen token or a prompt-injected assistant cannot quietly
+   disable them. Naming a team owner works the same way. Every other sensitive
+   action uses the window above: any code typed for a step-up opens it for
+   `GITCHA_SENSITIVE_WINDOW`. Administrators can lock checks on with
+   `GITCHA_LOCKED_CHECKS=interval,new_network,sensitive`.
 
 ## Other protections
 
 - TOTP codes are single-use (the last accepted time step is stored) and valid
   for ±1 step (about 90 s).
-- Rate limits: 10 password attempts per IP+user and 6 second-factor attempts
-  per user per 15 minutes; an MFA ticket dies after 5 wrong codes.
+- Rate limits, per 15 minutes, counting wrong guesses only: 10 wrong passwords per
+  address and username, and 30 per address whatever the username (both checked
+  before any password hashing is done); 6 wrong second-factor codes per user and
+  network (/24 for IPv4), so a stranger's guesses lock the stranger's network and
+  not the account's owner. An MFA ticket dies after 5 wrong codes. A lockout leaves
+  one `login.rate_limited` row in the account's security log, not one per refusal.
+  Passwords are hashed off the main thread, so a burst of sign-ins does not stall
+  the server.
 - Unknown usernames take the same scrypt time as real ones.
-- Web: `HttpOnly`, `SameSite=Lax`, `Secure` (on https) cookies; CSRF tokens on
-  every form; strict CSP with no inline script; `frame-ancestors 'none'`;
-  same-site-only redirects.
+- A sign-up that is not finished (authenticator confirmed) within 30 minutes is removed
+  with its enrolment link, by the sweeper and before any new sign-up is judged; until
+  then nobody else can register that name, and a new record never inherits the old one's
+  id or role. Sessions past their life or idle limit are deleted, not just refused.
+- Web: `HttpOnly`, `SameSite=Lax`, `Secure` (when the public URL is https, or when a trusted proxy reports https in `X-Forwarded-Proto`) cookies; strict CSP with no
+  inline script; `frame-ancestors 'none'`; same-site-only redirects.
+- Web writes: every form carries a CSRF token that is an HMAC (keyed from the
+  server key) of the session cookie it was issued with, so a value planted from a
+  sibling subdomain or lifted from another session is refused, and a new sign-in
+  replaces the token. Before sign-in the token binds to no session; there the
+  `Sec-Fetch-Site` header (must be `same-origin` or `none`) or, when a browser does
+  not send it, the `Origin` header (must be this site) decides. `Origin: null` is
+  accepted only when `Sec-Fetch-Site` is absent, because our own
+  `Referrer-Policy: no-referrer` makes browsers send it on a same-site form post.
+  The GraphQL endpoint still uses the older cookie-equals-header check.
 - API: refuses `Sec-Fetch-Site: cross-site` requests; bearer tokens only.
 - Packages: SHA-256 integrity checked on upload, on download, and against
   `gitcha-lock.json`; versions are immutable; tarballs containing links,
-  absolute paths or `..` are rejected on both server and client.
+  absolute paths or `..` are rejected on both server and client. A stored tarball
+  is written whole (temporary name, sync, rename) and is hashed again the first time
+  this process serves it; a damaged one is refused (500 `blob_damaged`), not served.
 - The client refuses plain `http://` for anything but localhost.
 - Every security-relevant event is written to a per-user audit log shown on
-  the Account page.
+  the Account page. The log is kept per user (1,000 security rows, 200 rows of
+  what other people did to you, 200 package downloads, oldest dropped first),
+  so one user's activity cannot push another's rows out; the page lists
+  security activity apart from downloads and from changes others made, 15 to
+  a page. A row about something another person did never carries their
+  address.
 
 ## Teams
 

@@ -3,40 +3,70 @@
 // Accounts, two-factor enrollment, login, sessions/device tokens and the
 // intermittent ("step-up") 2FA policy. Pure logic: no HTTP in here.
 import crypto from 'node:crypto';
-import { hashPassword, verifyPassword, DUMMY_HASH, randomToken, sha256, createSecretBox, generateRecoveryCodes } from './crypto.js';
+import { hashPassword, verifyPasswordAsync, DUMMY_HASH, randomToken, sha256, createSecretBox, generateRecoveryCodes, normalizeRecoveryCode, deriveKey, hmac } from './crypto.js';
 import { generateSecret, verifyTotp, otpauthUrl } from './totp.js';
 import { HttpError, mfaRequired } from './errors.js';
+import { parseIp } from './http.js';
 
 const USERNAME_RE = /^[a-z0-9][a-z0-9_-]{2,31}$/i;
 const ENROLL_TTL = 30 * 60_000;
 
-/** Fixed-window limiter: at most `max` hits per key within `windowMs`. */
+/**
+ * Fixed-window limiter: at most `max` hits per key within `windowMs`. When it holds more than `maxKeys` keys it
+ * lets go of expired keys and keys that are not blocked, oldest first, and only then of blocked ones: a flood of
+ * new keys must not wipe the counters that are doing their job.
+ */
 export class RateLimiter {
-  constructor({ max, windowMs, clock = Date.now }) {
-    Object.assign(this, { max, windowMs, clock, hits: new Map() });
+  constructor({ max, windowMs, clock = Date.now, maxKeys = 50_000 }) {
+    Object.assign(this, { max, windowMs, clock, maxKeys, hits: new Map() });
   }
   hit(key) {
     const now = this.clock();
     let e = this.hits.get(key);
     if (!e || now - e.start > this.windowMs) e = { start: now, count: 0 };
     e.count++;
+    this.hits.delete(key); // re-insert, so the Map stays in order of last use
     this.hits.set(key, e);
-    if (this.hits.size > 50_000) this.hits.clear();
+    if (this.hits.size > this.maxKeys) this.evict(now);
     return e.count <= this.max;
+  }
+  evict(now) {
+    const target = Math.floor(this.maxKeys * 0.9);
+    for (const [k, e] of this.hits) {
+      if (this.hits.size <= target) return;
+      if (now - e.start > this.windowMs || e.count < this.max) this.hits.delete(k);
+    }
+    for (const k of this.hits.keys()) { // still too many, all of them blocked: the oldest go
+      if (this.hits.size <= target) return;
+      this.hits.delete(k);
+    }
   }
   check(key) {
     const e = this.hits.get(key);
     return !e || this.clock() - e.start > this.windowMs || e.count < this.max;
   }
+  /** Take back one hit (an attempt that turned out to be fine). */
+  refund(key) {
+    const e = this.hits.get(key);
+    if (e && e.count > 0) e.count--;
+  }
   reset(key) { this.hits.delete(key); }
 }
 
-/** Coarse network identity: IPv4 /24 or IPv6 /48. */
+/** A limiter key for an address: an IPv4 address as it is, an IPv6 one by its /64 (one household or one rented host). */
+function addressKey(ip) {
+  const p = parseIp(ip);
+  if (!p) return String(ip ?? 'unknown');
+  return p.v4 ? p.text : Array.from(p.bytes.slice(0, 8)).map((b) => b.toString(16).padStart(2, '0')).join('') + '/64';
+}
+
+/** Coarse network identity: IPv4 /24 or IPv6 /48, from the parsed address so every spelling of one network agrees (AUTH-17). */
 export function networkOf(ip = '') {
-  ip = ip.replace(/^::ffff:/, '');
-  if (ip.includes('.')) return ip.split('.').slice(0, 3).join('.') + '.0/24';
-  if (ip.includes(':')) return ip.split(':').slice(0, 3).join(':') + '::/48';
-  return ip || 'unknown';
+  const p = parseIp(ip);
+  if (!p) return String(ip || 'unknown');
+  if (p.v4) return p.text.split('.').slice(0, 3).join('.') + '.0/24';
+  const groups = [0, 1, 2].map((i) => ((p.bytes[i * 2] << 8) | p.bytes[i * 2 + 1]).toString(16));
+  return `${groups.join(':')}::/48`;
 }
 
 export class AuthService {
@@ -45,16 +75,41 @@ export class AuthService {
     this.config = config;
     this.clock = clock;
     this.box = createSecretBox(config.secretKey);
+    this.recoveryKey = deriveKey(config.secretKey, 'recovery codes v1');
     this.tickets = new Map(); // password-ok, awaiting second factor
     const lim = (max, mins) => new RateLimiter({ max, windowMs: mins * 60_000, clock });
-    this.loginLimiter = lim(10, 15);
-    this.mfaLimiter = lim(6, 15);
+    this.loginLimiter = lim(10, 15); // wrong passwords per address and username
+    this.ipLimiter = lim(30, 15); // wrong passwords per address, whatever the username: checked before any scrypt
+    this.mfaLimiter = lim(6, 15); // wrong second-factor guesses per user and network
+    this.noted = lim(1, 15); // one 'rate limited' audit row per user per window, so a flood cannot refill the log
     this.registerLimiter = lim(5, 60);
   }
 
   // ---- registration & enrollment -----------------------------------------
 
+  /**
+   * Remove sign-ups that never finished (older than the enrolment window) together with their enrolment sessions,
+   * and sessions that are past their life or idle limit (AUTH-15, AUTH-19). Called before a sign-up is judged and by
+   * the server's sweeper; it writes only when there is something to remove.
+   */
+  sweep() {
+    const now = this.clock();
+    const { users, sessions } = this.store.data;
+    const staleUsers = Object.values(users).filter((u) => u.status === 'pending_mfa' && now - u.createdAt > ENROLL_TTL).map((u) => u.id);
+    const staleSessions = Object.entries(sessions)
+      .filter(([, s]) => staleUsers.includes(s.userId) || s.expiresAt < now || (s.kind !== 'enroll' && now - s.lastSeen > this.config.policy.sessionIdle))
+      .map(([hash]) => hash);
+    if (!staleUsers.length && !staleSessions.length) return 0;
+    this.store.tx((d) => {
+      for (const id of staleUsers) delete d.users[id];
+      for (const hash of staleSessions) delete d.sessions[hash];
+    });
+    return staleUsers.length + staleSessions.length;
+  }
+
   register({ username, password, confirm, email, emailConfirm, ip }) {
+    this.sweep();
+    // An unfinished first sign-up no longer strands a closed server: once it has expired it is gone (PROD-3).
     if (!this.config.openRegistration && this.store.userCount() > 0) {
       throw new HttpError(403, 'registration_closed', 'Registration is closed on this server.');
     }
@@ -72,13 +127,16 @@ export class AuthService {
     if (confirm !== undefined && confirm !== password) throw new HttpError(400, 'password_mismatch', 'The passwords do not match.');
     const sealedEmail = this.sealEmail(email, emailConfirm);
     if (this.store.team(username.toLowerCase()) || this.store.data.agents?.[username.toLowerCase()]) throw new HttpError(409, 'username_taken', 'That name belongs to a team or an agent.');
+    // A name with an unfinished sign-up is not taken over (AUTH-15): the person who started it can still finish in the
+    // browser that holds the enrolment link, and anyone else waits for it to expire (a keepers' choice: refuse, not replace).
     const existing = this.store.userByName(username);
     if (existing && existing.status === 'active') throw new HttpError(409, 'username_taken', 'That username is taken.');
+    if (existing) throw new HttpError(409, 'username_pending', 'That username has a sign-up that is not finished. Finish it in the browser where you started, or try again in 30 minutes.');
 
     const secret = generateSecret();
     const now = this.clock();
     const user = {
-      id: existing?.id ?? crypto.randomUUID(),
+      id: crypto.randomUUID(),
       username,
       // scrypt hash, then sealed with AES-256-GCM: the DB alone is useless to an attacker.
       passwordHash: this.box.seal(hashPassword(password)),
@@ -87,7 +145,7 @@ export class AuthService {
       email: sealedEmail,
       totpLastStep: -1,
       status: 'pending_mfa',
-      role: this.store.userCount() === 0 || existing?.role === 'admin' ? 'admin' : 'user',
+      role: this.store.userCount() === 0 ? 'admin' : 'user', // the first person on a server; never inherited from an earlier record of the same name
       recoveryCodes: [],
       createdAt: now,
     };
@@ -138,67 +196,97 @@ export class AuthService {
     const enrollment = this.enrollmentFor(enrollToken);
     if (!enrollment) throw new HttpError(400, 'enrollment_expired', 'This enrollment link has expired. Please register again.');
     const { user, secret } = enrollment;
-    if (!this.mfaLimiter.hit(`mfa:${user.id}`)) throw new HttpError(429, 'rate_limited', 'Too many attempts. Wait 15 minutes.');
+    const lockKey = this.mfaKey(user, ip);
+    if (!this.mfaLimiter.check(lockKey)) throw new HttpError(429, 'rate_limited', 'Too many attempts. Wait 15 minutes.');
     const step = verifyTotp(secret, code, { now: this.clock(), lastStep: user.totpLastStep });
-    if (step === null) throw new HttpError(400, 'bad_code', 'That code is not valid. Check the time on your phone and try again.');
+    if (step === null) {
+      this.mfaLimiter.hit(lockKey); // only wrong guesses count
+      throw new HttpError(400, 'bad_code', 'That code is not valid. Check the time on your phone and try again.');
+    }
     const codes = generateRecoveryCodes();
     this.store.tx((d) => {
-      Object.assign(d.users[user.id], { status: 'active', totpLastStep: step, recoveryCodes: codes.map((c) => sha256(c)), activatedAt: this.clock() });
+      Object.assign(d.users[user.id], { status: 'active', totpLastStep: step, recoveryCodes: codes.map((c) => this.recoveryHash(c)), activatedAt: this.clock() });
       delete d.sessions[sha256(enrollToken)];
       this.store.audit({ userId: user.id, event: 'account.activated', ip });
     });
-    this.mfaLimiter.reset(`mfa:${user.id}`);
+    this.mfaLimiter.reset(lockKey);
     return { user: this.store.userById(user.id), recoveryCodes: codes };
   }
 
   // ---- second-factor verification ----------------------------------------
 
+  recoveryHash(normalized) { return `hm1.${hmac(this.recoveryKey, normalized)}`; }
+
+  /** The second-factor lock is per user and per network (AUTH-6): a stranger's guesses lock the stranger, not the owner. */
+  mfaKey(user, ip) { return `mfa:${user.id}:${networkOf(ip)}`; }
+
   /** Verify a TOTP code (replay-protected) or consume a recovery code. */
   verifySecondFactor(user, code, ip) {
-    if (!this.mfaLimiter.hit(`mfa:${user.id}`)) {
-      throw new HttpError(429, 'rate_limited', 'Too many two-factor attempts. Wait 15 minutes.');
+    // Checked before the guess is looked at: a locked network gets no answer, right or wrong. Only wrong guesses count.
+    const lockKey = this.mfaKey(user, ip);
+    if (!this.mfaLimiter.check(lockKey)) {
+      this.noteRateLimited(user, ip, 'mfa');
+      throw new HttpError(429, 'rate_limited', 'Too many two-factor attempts from this network. Wait 15 minutes.');
     }
     code = String(code ?? '').trim().toLowerCase().replace(/\s/g, '');
     if (/^\d{6}$/.test(code)) {
       const step = verifyTotp(this.box.open(user.totpSecret), code, { now: this.clock(), lastStep: user.totpLastStep });
       if (step !== null) {
         this.store.tx((d) => { d.users[user.id].totpLastStep = step; });
-        this.mfaLimiter.reset(`mfa:${user.id}`);
+        this.mfaLimiter.reset(lockKey);
         return 'totp';
       }
-    } else if (/^[a-f0-9]{5}-?[a-f0-9]{5}$/.test(code)) {
-      const normalized = code.includes('-') ? code : `${code.slice(0, 5)}-${code.slice(5)}`;
-      const h = sha256(normalized);
-      if (user.recoveryCodes.includes(h)) {
+    } else if (normalizeRecoveryCode(code)) {
+      // Stored as a keyed hash (the server key); the 40-bit codes issued before are plain SHA-256 and work until regenerated.
+      const normalized = normalizeRecoveryCode(code);
+      const h = [this.recoveryHash(normalized), sha256(normalized)].find((x) => user.recoveryCodes.includes(x));
+      if (h) {
         this.store.tx((d) => {
           d.users[user.id].recoveryCodes = d.users[user.id].recoveryCodes.filter((x) => x !== h);
           this.store.audit({ userId: user.id, event: 'mfa.recovery_code_used', ip, remaining: d.users[user.id].recoveryCodes.length });
         });
-        this.mfaLimiter.reset(`mfa:${user.id}`);
+        this.mfaLimiter.reset(lockKey);
         return 'recovery';
       }
     }
+    this.mfaLimiter.hit(lockKey);
     this.store.tx(() => this.store.audit({ userId: user.id, event: 'mfa.failed', ip }));
     throw new HttpError(401, 'bad_code', 'That two-factor code is not valid.');
+  }
+
+  /** One 'rate limited' row per user per window (AUTH-19): the refusals themselves must not refill the log. */
+  noteRateLimited(user, ip, what) {
+    if (!user || !this.noted.hit(`${what}:${user.id}`)) return;
+    this.store.tx(() => this.store.audit({ userId: user.id, event: 'login.rate_limited', ip, what }));
   }
 
   // ---- login --------------------------------------------------------------
 
   /** Step 1: password. Returns a short-lived ticket for the second factor. */
-  beginLogin({ username, password, ip }) {
-    const key = `login:${ip}:${String(username).toLowerCase()}`;
-    if (!this.loginLimiter.check(key)) throw new HttpError(429, 'rate_limited', 'Too many login attempts. Wait 15 minutes.');
+  async beginLogin({ username, password, ip }) {
+    const who = String(username ?? '').toLowerCase();
+    const key = `login:${ip}:${who}`;
+    const ipKey = `ip:${addressKey(ip)}`;
+    // Both caps are looked at before any scrypt runs (AUTH-7): a refused attempt costs the server nothing.
+    if (!this.loginLimiter.check(key) || !this.ipLimiter.check(ipKey)) {
+      this.noteRateLimited(this.store.userByName(username ?? ''), ip, 'password');
+      throw new HttpError(429, 'rate_limited', 'Too many login attempts. Wait 15 minutes.');
+    }
+    // The attempt is counted before the await, so a burst of parallel requests cannot all slip under the cap; a
+    // correct password takes the count back below.
+    this.loginLimiter.hit(key);
+    this.ipLimiter.hit(ipKey);
     const user = this.store.userByName(username ?? '');
-    const ok = verifyPassword(String(password ?? ''), user ? this.box.open(user.passwordHash) : DUMMY_HASH);
+    const ok = await verifyPasswordAsync(String(password ?? ''), user ? this.box.open(user.passwordHash) : DUMMY_HASH);
     if (!user || !ok) {
-      this.loginLimiter.hit(key);
       if (user) this.store.tx(() => this.store.audit({ userId: user.id, event: 'login.bad_password', ip }));
       throw new HttpError(401, 'bad_credentials', 'Incorrect username or password.');
     }
-    if (user.status !== 'active') {
-      throw new HttpError(403, 'mfa_not_enrolled', 'This account has not finished two-factor setup. Register again to restart setup.');
-    }
     this.loginLimiter.reset(key);
+    this.ipLimiter.refund(ipKey);
+    if (user.status !== 'active') {
+      throw new HttpError(403, 'mfa_not_enrolled', 'This account has not finished two-factor setup. Finish it in the browser where you started, or register again once it has expired (30 minutes).');
+    }
     const ticket = randomToken('gtt_');
     this.pruneTickets();
     this.tickets.set(sha256(ticket), { userId: user.id, expiresAt: this.clock() + this.config.policy.mfaTicketTtl, attempts: 0 });
@@ -278,8 +366,8 @@ export class AuthService {
     return { ...s, locked: [...policy.lockedChecks], intervalMs: policy.stepUpInterval };
   }
 
-  /** Toggle follow-up checks. Requires a fresh code (enforced by the caller). */
-  updateCheckSettings(user, changes, ip) {
+  /** Validate a requested change to the follow-up checks; returns what the user's settings would become. */
+  planCheckChanges(user, changes) {
     const allowed = ['interval', 'new_network', 'sensitive'];
     const next = { ...(user.mfaChecks ?? {}) };
     for (const [k, v] of Object.entries(changes ?? {})) {
@@ -290,11 +378,36 @@ export class AuthService {
       }
       next[k] = v;
     }
+    return next;
+  }
+
+  /** Toggle follow-up checks. The caller must have spent a code for it: see changeChecks. */
+  updateCheckSettings(user, changes, ip) {
+    const next = this.planCheckChanges(user, changes);
     this.store.tx((d) => {
       d.users[user.id].mfaChecks = next;
       this.store.audit({ userId: user.id, event: 'mfa.checks_updated', ip, checks: next });
     });
     return this.checkSettings(this.store.userById(user.id));
+  }
+
+  /**
+   * A code sent with ONE request: asked for, checked and used up there. Unlike a step-up it opens no window for
+   * other work, so a code typed for some other reason cannot be spent on this (AUTH-4 / EXT-3).
+   */
+  confirmAction(auth, code, ip, what) {
+    if (String(code ?? '').trim() === '') {
+      throw mfaRequired('sensitive_action', `${what} needs a code from your authenticator app, sent with this request.`);
+    }
+    this.verifySecondFactor(auth.user, code, ip);
+  }
+
+  /** Change the follow-up checks: the code must be in the request; a bad request spends none. */
+  changeChecks(auth, { changes, code }, ip) {
+    if (String(code ?? '').trim() === '') this.confirmAction(auth, code, ip, 'Changing security settings');
+    this.planCheckChanges(auth.user, changes);
+    this.confirmAction(auth, code, ip, 'Changing security settings');
+    return this.updateCheckSettings(auth.user, changes, ip);
   }
 
   /**
@@ -358,7 +471,7 @@ export class AuthService {
   regenerateRecoveryCodes(user, ip) {
     const codes = generateRecoveryCodes();
     this.store.tx((d) => {
-      d.users[user.id].recoveryCodes = codes.map((c) => sha256(c));
+      d.users[user.id].recoveryCodes = codes.map((c) => this.recoveryHash(c));
       this.store.audit({ userId: user.id, event: 'mfa.recovery_codes_regenerated', ip });
     });
     return codes;

@@ -81,6 +81,11 @@ certificates. Caddy asks `GET /api/v1/hosting/tls-allowed?domain=NAME` first, an
 yes only for its own name, sites' subdomains on a hosting domain, and custom domains whose DNS
 check passed.
 
+`gitcha.env` sets `GITCHA_TRUST_PROXY=true`, which is right for this Caddyfile: Caddy replaces
+`X-Forwarded-For` with the client's address and Gitcha trusts one proxy hop. With nginx instead,
+set `proxy_set_header X-Forwarded-For $remote_addr;` (the README has the whole block); if another
+proxy sits in front of yours, say how many with `GITCHA_TRUSTED_PROXIES`.
+
 DNS records to create:
 
 | Record | Points at | Why |
@@ -119,6 +124,20 @@ written on had none).
 Back up `/var/lib/gitcha`. Keep `secret.key` apart from the database backups: passwords
 (as AES-256-GCM-sealed scrypt hashes) and authenticator secrets are encrypted with it, so the
 database alone is useless to a thief, and the database without the key is useless to you.
+
+To restore, put back `db.json` **and the `secret.key` that was current when it was saved** (or set
+`GITCHA_SECRET_KEY` to it). The server will not start on a `db.json` that holds accounts when it has no key:
+it prints `gitcha: cannot start: ...` and exits 1 instead of making a new key, which would lock every
+account out. It also refuses a `db.json` it cannot read and a key file that is empty or not 32 bytes in
+base64. A new key is made only on a first start, or when `db.json` holds no accounts.
+
+Run **one server per data directory**. The server takes `db.lock` (its process id) when it starts and a
+second server on the same directory exits with `another process (pid N) is already using ...`; a lock left
+by a crashed or killed server is recognised as dead and taken over. If a different, unrelated process now
+has that pid and the message is wrong, delete `db.lock`. `db.json` is replaced atomically and synced to
+disk on every change, so copying it while the server runs gives a consistent file; leftover `*.tmp`
+files from a crash are removed at start, and a `db.json` that is not valid JSON stops the start with the
+file's name rather than being overwritten.
 
 ## Runners
 

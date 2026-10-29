@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 import crypto from 'node:crypto';
+import { promisify } from 'node:util';
+
+const scryptAsync = promisify(crypto.scrypt);
 
 const SCRYPT = { N: 2 ** 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 
@@ -20,6 +23,17 @@ export function verifyPassword(password, stored) {
   return crypto.timingSafeEqual(expected, actual);
 }
 
+/** The same check on the thread pool, so a sign-in does not stop the server for the length of a scrypt run. */
+export async function verifyPasswordAsync(password, stored) {
+  const [scheme, N, r, p, salt, hash] = String(stored).split('$');
+  if (scheme !== 'scrypt') return false;
+  const expected = Buffer.from(hash, 'base64');
+  const actual = await scryptAsync(password, Buffer.from(salt, 'base64'), expected.length, {
+    N: Number(N), r: Number(r), p: Number(p), maxmem: SCRYPT.maxmem,
+  });
+  return crypto.timingSafeEqual(expected, actual);
+}
+
 // A password hash used to keep timing uniform when the username is unknown.
 export const DUMMY_HASH = hashPassword(crypto.randomBytes(16).toString('hex'));
 
@@ -29,6 +43,15 @@ export function randomToken(prefix = '') {
 
 export function sha256(data) {
   return crypto.createHash('sha256').update(data).digest('hex');
+}
+
+/** A purpose-bound key derived from the server key (HMAC, so a leak of one purpose's output tells nothing of another). */
+export function deriveKey(keyB64, purpose) {
+  return crypto.createHmac('sha256', Buffer.from(keyB64, 'base64')).update(`gitcha:${purpose}`).digest();
+}
+
+export function hmac(key, data) {
+  return crypto.createHmac('sha256', key).update(data).digest('base64url');
 }
 
 export function safeEqual(a, b) {
@@ -59,8 +82,18 @@ export function createSecretBox(keyB64) {
 }
 
 export function generateRecoveryCodes(n = 10) {
+  // 80 bits each (AUTH-12): four groups of five hex digits. Codes of the old 40-bit shape are still accepted until
+  // their owner regenerates them.
   return Array.from({ length: n }, () => {
-    const raw = crypto.randomBytes(5).toString('hex');
-    return `${raw.slice(0, 5)}-${raw.slice(5)}`;
+    const raw = crypto.randomBytes(10).toString('hex');
+    return [0, 5, 10, 15].map((k) => raw.slice(k, k + 5)).join('-');
   });
+}
+
+/** What a typed recovery code means: lower case, no spaces or dashes, in its dashed form; null when it is not one. */
+export function normalizeRecoveryCode(input) {
+  const bare = String(input ?? '').toLowerCase().replace(/[\s-]/g, '');
+  if (/^[a-f0-9]{10}$/.test(bare)) return `${bare.slice(0, 5)}-${bare.slice(5)}`;
+  if (/^[a-f0-9]{20}$/.test(bare)) return [0, 5, 10, 15].map((k) => bare.slice(k, k + 5)).join('-');
+  return null;
 }

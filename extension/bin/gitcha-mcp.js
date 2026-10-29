@@ -332,15 +332,21 @@ const tools = [
   {
     name: 'gitcha_security_settings',
     title: 'Gitcha 2FA check settings',
-    description: 'View, or toggle, the follow-up two-factor checks for this account: "interval" (periodic re-verification), "new_network" (re-verify on a new network) and "sensitive" (fresh code before publish/yank). Sign-in always needs 2FA. Changing a setting needs a fresh code from the user; only change settings when the user explicitly asks.',
+    description: 'View, or toggle, the follow-up two-factor checks for this account: "interval" (periodic re-verification), "new_network" (re-verify on a new network) and "sensitive" (fresh code before publish/yank). Sign-in always needs 2FA. Changing a setting needs the 6-digit code the USER just typed, sent as `code` in the same call (it is used up by the change); only change settings when the user explicitly asks.',
     inputSchema: {
       type: 'object',
-      properties: { interval: { type: 'boolean' }, new_network: { type: 'boolean' }, sensitive: { type: 'boolean' } },
+      properties: {
+        interval: { type: 'boolean' },
+        new_network: { type: 'boolean' },
+        sensitive: { type: 'boolean' },
+        code: { type: 'string', pattern: '^[0-9]{6}$', description: '6-digit authenticator code, as typed by the user; required to change a setting' },
+      },
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: false },
-    handler: (changes) => call(async (c) => {
-      const { checks } = Object.keys(changes).length ? await c.setSecurity(changes) : await c.getSecurity();
+    handler: ({ code, ...changes }) => call(async (c) => {
+      if (Object.keys(changes).length && !code) throw new Error('Changing a check needs the 6-digit code the user just typed, sent as `code` with the change.');
+      const { checks } = Object.keys(changes).length ? await c.setSecurity(changes, code) : await c.getSecurity();
       const f = (k) => `${checks[k] ? 'ON ' : 'OFF'}${checks.locked.includes(k) ? ' (required by admin)' : ''}`;
       return text(`Follow-up 2FA checks (sign-in always requires a code):\n- interval (every ${Math.round(checks.intervalMs / 3600000)}h): ${f('interval')}\n- new_network: ${f('new_network')}\n- sensitive: ${f('sensitive')}`);
     }),

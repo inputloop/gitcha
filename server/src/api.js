@@ -58,7 +58,7 @@ export function registerApi(router, { auth: authSvc, packages, teams, config, ve
   // ---- authentication ------------------------------------------------------
   router.post('/api/v1/auth/login', async (ctx) => {
     const { username, password } = await readJson(ctx.req);
-    const { ticket } = authSvc.beginLogin({ username, password, ip: ctx.ip });
+    const { ticket } = await authSvc.beginLogin({ username, password, ip: ctx.ip });
     json(ctx.res, 200, { mfa_ticket: ticket, expires_in_ms: config.policy.mfaTicketTtl, next: 'POST /api/v1/auth/login/mfa' });
   });
 
@@ -97,11 +97,11 @@ export function registerApi(router, { auth: authSvc, packages, teams, config, ve
     json(ctx.res, 200, { checks: authSvc.checkSettings(a.user) });
   });
 
+  // Toggling checks needs a code sent in this request (single use), on top of the interval and new-network checks.
   router.put('/api/v1/security', async (ctx) => {
-    const a = authed(ctx);
-    authSvc.requireFreshMfa(a); // toggling checks always needs a fresh code
-    const { checks } = await readJson(ctx.req);
-    json(ctx.res, 200, { checks: authSvc.updateCheckSettings(a.user, checks, ctx.ip) });
+    const a = verified(ctx);
+    const { checks, code } = await readJson(ctx.req);
+    json(ctx.res, 200, { checks: authSvc.changeChecks(a, { changes: checks, code }, ctx.ip) });
   });
 
   // ---- packages -------------------------------------------------------------
@@ -176,7 +176,9 @@ export function registerApi(router, { auth: authSvc, packages, teams, config, ve
 
   router.put('/api/v1/teams/:team/members/:username', async (ctx) => {
     const a = verified(ctx, { sensitive: true });
-    const { role = 'member' } = await readJson(ctx.req);
+    const { role = 'member', code } = await readJson(ctx.req);
+    // Naming an owner hands over the whole team: it takes a code of its own, not just the open window.
+    if (role === 'owner') authSvc.confirmAction(a, code, ctx.ip, 'Making someone an owner');
     json(ctx.res, 200, teams.setMember(a.user, ctx.params.team, ctx.params.username, role, ctx.ip));
   });
 

@@ -4,7 +4,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Router, json, html, send, parseCookies, clientIp } from './http.js';
+import { Router, json, html, send, parseCookies, clientIp, requestUrl } from './http.js';
 import { HttpError } from './errors.js';
 import { Store } from './store.js';
 import { AuthService } from './auth.js';
@@ -100,18 +100,20 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
   });
 
   async function handle(req, res) {
-    const url = new URL(req.url, 'http://localhost');
-    const isApi = url.pathname.startsWith('/api/');
-    const ctx = {
-      req, res, url, ip: clientIp(req, config.trustProxy), cookies: parseCookies(req.headers.cookie), params: {}, outCookies: [],
-    };
-    ctx.setCookie = (c) => ctx.outCookies.push(c);
-    const writeHead = res.writeHead.bind(res);
-    res.writeHead = (status, headers = {}) => {
-      if (ctx.outCookies.length && !headers['Set-Cookie']) headers = { ...headers, 'Set-Cookie': ctx.outCookies };
-      return writeHead(status, headers);
-    };
+    let isApi = String(req.url ?? '').startsWith('/api/');
     try {
+      // Everything a stranger controls is parsed inside the try, so a bad request is a 400, never a dead process.
+      const url = requestUrl(req);
+      isApi = url.pathname.startsWith('/api/');
+      const ctx = {
+        req, res, url, ip: clientIp(req, config.trustProxy, config.trustedProxies), cookies: parseCookies(req.headers.cookie), params: {}, outCookies: [],
+      };
+      ctx.setCookie = (c) => ctx.outCookies.push(c);
+      const writeHead = res.writeHead.bind(res);
+      res.writeHead = (status, headers = {}) => {
+        if (ctx.outCookies.length && !headers['Set-Cookie']) headers = { ...headers, 'Set-Cookie': ctx.outCookies };
+        return writeHead(status, headers);
+      };
       // Hosted sites are served on their own hostnames and never reach the UI or API.
       if (await serveHosted(ctx, services)) return;
       // Cross-site browser requests to the JSON API are refused outright.
@@ -129,9 +131,12 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
     }
   }
 
-  const server = http.createServer(handle);
-  const sweeper = setInterval(() => services.jobs.sweep(), 30_000);
+  // Belt and braces: even if the catch above itself fails, the request ends and the process stays up.
+  const server = http.createServer((req, res) => {
+    handle(req, res).catch((err) => { console.error(err); res.destroy(); });
+  });
+  const sweeper = setInterval(() => { services.jobs.sweep(); auth.sweep(); }, 30_000);
   sweeper.unref();
-  server.on('close', () => { clearInterval(sweeper); services.jobs.cancelWaiters(); });
+  server.on('close', () => { clearInterval(sweeper); services.jobs.cancelWaiters(); store.close(); });
   return { server, ...services, router, version: VERSION };
 }
