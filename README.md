@@ -373,7 +373,8 @@ authenticator app.
 
 Nothing can be installed until this machine has signed in with a password and
 a 2FA code. `gitcha login` saves a revocable **device token** with file
-mode 600. It never saves your password. `gitcha status` shows when the next
+mode 600 (it reads the mode back and warns you where the platform cannot set it).
+It never saves your password. `gitcha status` shows when the next
 periodic check is due.
 
 ![gitcha login and status](docs/screenshots/11-cli-login.png)
@@ -799,7 +800,7 @@ Set `GITCHA_SERVER` in your environment if your registry isn't on
 | Skill `gitcha` | Teaches Claude the first-run and 2FA rules |
 | `/gitcha:gitcha-status` | Shows sign-in and 2FA status |
 | `/gitcha:gitcha-publish [dir]` | Guided, confirmed publish |
-| SessionStart hook | Tells Claude whether Gitcha is signed in and when the next 2FA check is due |
+| SessionStart hook | Tells Claude, in fixed words (never the registry's text), whether Gitcha is signed in and whether a 2FA check is due; it waits at most 5 seconds for the registry |
 
 ### Option B: add only the MCP server to Claude Code
 
@@ -839,13 +840,13 @@ Or add the server to `claude_desktop_config.json` by hand:
 | `gitcha_search` | Search packages | Periodic / new-network checks |
 | `gitcha_package_info` | Versions, integrity, README | Periodic / new-network checks |
 | `gitcha_install` | Download, verify, extract and lock (or install all from `gitcha.json`) | Periodic / new-network checks |
-| `gitcha_publish` | Pack and publish a directory | **Fresh code** (sensitive) |
+| `gitcha_publish` | Pack and publish a directory (`dry_run` lists the files first) | **Fresh code** (sensitive) |
 | `gitcha_yank` | Yank or restore a version | **Fresh code** (sensitive) |
 | `gitcha_teams` | List your teams, or show a team's members and shared packages | Periodic / new-network checks |
 | `gitcha_team_create` | Start a team (you become owner) | Periodic / new-network checks |
 | `gitcha_team_member` | Add, re-role or remove a member, or leave | **Fresh code** (sensitive) |
 | `gitcha_share_package` | Move a package into a team and/or make it team-only | **Fresh code** (sensitive) |
-| `gitcha_verify_2fa` | Complete a check with a code the user typed | n/a |
+| `gitcha_verify_2fa` | Complete a check with the 6-digit authenticator code the user typed (a recovery code is refused; it stays in the terminal) | n/a |
 | `gitcha_security_settings` | View or toggle follow-up checks | **Fresh code** to change |
 | `gitcha_review_pool` | Review tasks one of your agents may take | Periodic / new-network checks |
 | `gitcha_claim_task` | Claim a task for an agent | Periodic / new-network checks |
@@ -868,8 +869,8 @@ gitcha verify [CODE]                          re-confirm 2FA now
 gitcha security [--interval on|off] [--new-network on|off] [--sensitive on|off]
 gitcha search [query]
 gitcha info <name>
-gitcha install [name[@version]] [--dir DIR]   one package, or everything in gitcha.json
-gitcha publish [DIR] [--team T] [--private]
+gitcha install [name[@version]] [--dir DIR] [--allow-yanked]   one package, or everything in gitcha.json
+gitcha publish [DIR] [--team T] [--private] [--dry-run]
 gitcha yank <name@version> [--undo]
 gitcha transfer <name> <team>                 move a package into a team to share it
 gitcha access <name> team-only|public
@@ -879,13 +880,16 @@ gitcha team info <name>
 gitcha team add <team> <user> [--role member|maintainer|owner]
 gitcha team remove <team> <user>              remove a member, or yourself to leave
 gitcha team delete <name>
-gitcha logout                                 revoke this device's token
+gitcha logout [--local-only]                  revoke this device's token (--local-only: just forget it here)
 gitcha mcp                                    run the Claude extension on stdio
 ```
 
 Global options: `--server URL` (or `GITCHA_SERVER`), `--json`. Credentials are
 stored in `$GITCHA_CONFIG_DIR`, `$XDG_CONFIG_HOME/gitcha`, `~/.config/gitcha`
-or `%APPDATA%\gitcha`.
+or `%APPDATA%\gitcha`. `gitcha logout` removes the local token only after the
+registry has confirmed the revoke (or said the token was already dead); if the
+registry cannot be reached the token stays so you can try again, and
+`--local-only` forgets it on this machine without asking.
 
 When a periodic or sensitive-action check is due in an interactive terminal,
 the CLI asks for a code and retries automatically. In scripts it exits with a
@@ -922,15 +926,28 @@ A package is any directory with a `gitcha.json`:
 - `private` (optional, team packages only): `true` makes it visible to team
   members only.
 - `version`: semantic version. Published versions are immutable; yank a bad
-  one instead of overwriting it.
-- `files` (optional): globs to include. `gitcha.json`, README and LICENSE are
-  always included.
-- `.gitchaignore` (optional): globs to exclude. `.git`, `node_modules`,
-  `gitcha_modules`, `.env*`, `*.pem`, SSH keys and `*.tgz` are never shipped.
+  one instead of overwriting it. `latest` skips yanked versions; installing
+  one by name (or from a lockfile that pins it) needs `--allow-yanked` and
+  prints a warning.
+- `files` (optional): globs naming what to ship, relative to the project;
+  the default is `src/`, `lib/` and `bin/`. `gitcha.json`, `README*` and
+  `LICENSE*` always ship. A name that starts with a dot ships only when
+  `files` names it, and `*` never matches one.
+- `.gitchaignore` (optional): globs to exclude. A pattern with no slash
+  matches at any depth, as in `.gitignore`; the file itself is not shipped.
+  Whatever `files` says, `.git`, `node_modules`, `gitcha_modules`, `.env*`,
+  `id_*`, `*.key`, `*.pem`, `*.p12`, `*.pfx`, `*.jks`, `.npmrc`, `.netrc`,
+  `.aws`, `.ssh`, `.gnupg`, `.docker`, `gitcha-data`, `db.json` and `*.tgz`
+  are never shipped.
+- Versions cannot be deleted, so look first: `gitcha publish --dry-run`
+  lists the files and sizes and uploads nothing.
 
 `gitcha install` extracts into `gitcha_modules/<name>/` and writes
 `gitcha-lock.json` with the exact version and SHA-256 hash. Commit the
-lockfile. A later install fails loudly if the bytes don't match.
+lockfile. A later install asks the registry for exactly the locked version
+and fails loudly if it answers another one or the bytes don't match. The
+ranges under `dependencies` are recorded but not resolved: only the lockfile
+pins versions.
 
 Working examples are in [`examples/`](examples).
 

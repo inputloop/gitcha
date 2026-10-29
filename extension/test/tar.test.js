@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import zlib from 'node:zlib';
+import { END, gz, header } from './tarbuild.js';
 import { packFiles, unpackFiles, extractTo } from '../lib/tar.js';
 import { collectFiles } from '../lib/pack.js';
 import { parseSpec } from '../lib/installer.js';
@@ -24,14 +24,10 @@ test('pack/unpack round-trips, including long paths, and is reproducible', () =>
 });
 
 test('unpack refuses path traversal and links', () => {
-  const entry = (name, type = '0') => {
-    const b = Buffer.alloc(1536);
-    b.write(name, 0); b.write('0000644\0', 100); b.write('00000000000\0', 124); b.write(type, 156); b.write('ustar\0', 257);
-    return zlib.gzipSync(b);
-  };
-  assert.throws(() => unpackFiles(entry('package/../../x')), /unsafe path/);
-  assert.throws(() => unpackFiles(entry('/etc/passwd')), /outside package/);
-  assert.throws(() => unpackFiles(entry('package/link', '2')), /links are not allowed/);
+  const one = (name, type = '0') => gz(header(name, { type }), END);
+  assert.throws(() => unpackFiles(one('package/../../x')), /unsafe path/);
+  assert.throws(() => unpackFiles(one('/etc/passwd')), /outside package/);
+  assert.throws(() => unpackFiles(one('package/link', '2')), /links are not allowed/);
   assert.throws(() => extractTo([{ path: '../escape', data: Buffer.from('') }], tmp()), /refusing/);
 });
 
@@ -47,7 +43,7 @@ test('collectFiles honours "files", .gitchaignore and never ships secrets', () =
   fs.mkdirSync(path.join(dir, 'node_modules'));
   fs.writeFileSync(path.join(dir, 'node_modules', 'x.js'), '');
   const { files } = collectFiles(dir);
-  assert.deepEqual(files.map((f) => f.path).sort(), ['.gitchaignore', 'README.md', 'gitcha.json', 'src/index.js']);
+  assert.deepEqual(files.map((f) => f.path).sort(), ['README.md', 'gitcha.json', 'src/index.js']);
 });
 
 test('manifest helpers', () => {

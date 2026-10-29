@@ -128,3 +128,83 @@ test('owner safeguards: last owner, leaving, deletion, sensitive checks', async 
     assert.ok(audit.includes('team.member_added'), 'the added user sees it in their audit log');
   } finally { await srv.close(); }
 });
+
+test('a publish cannot change who sees a team package; the visibility route does, and audits it (PKG-F8)', async () => {
+  const { srv, tok } = await setup();
+  try {
+    await api(srv.url, 'POST', '/api/v1/teams', { token: tok.alice, body: { name: 'acme' } });
+    await api(srv.url, 'PUT', '/api/v1/teams/acme/members/bob', { token: tok.alice, body: { role: 'maintainer' } });
+    const first = await publish(srv, tok.bob, { name: 'acme-secret', version: '1.0.0', team: 'acme', private: true });
+    assert.equal(first.body.visibility, 'team');
+
+    // one stray "private": false in a manifest used to publish every earlier version to the whole registry
+    const flip = await publish(srv, tok.bob, { name: 'acme-secret', version: '1.0.1', private: false });
+    assert.equal(flip.status, 409, JSON.stringify(flip.body));
+    assert.equal(flip.body.error, 'visibility_change');
+    assert.match(flip.body.message, /gitcha access acme-secret public/);
+    assert.equal((await publish(srv, tok.bob, { name: 'acme-secret', version: '1.0.1' }, { private: false })).status, 409, 'the request flag is no different');
+    assert.equal((await api(srv.url, 'GET', '/api/v1/packages/acme-secret/1.0.0/tarball', { token: tok.dave })).status, 404, 'still hidden from outsiders');
+
+    // saying what is already so, or nothing, is fine and changes nothing
+    assert.equal((await publish(srv, tok.bob, { name: 'acme-secret', version: '1.0.1', team: 'acme', private: true })).body.visibility, 'team');
+    assert.equal((await publish(srv, tok.bob, { name: 'acme-secret', version: '1.0.2' })).body.visibility, 'team');
+
+    // making a public team package private by publishing is the same kind of change
+    await publish(srv, tok.bob, { name: 'acme-open', version: '1.0.0', team: 'acme' });
+    assert.equal((await publish(srv, tok.bob, { name: 'acme-open', version: '1.0.1', team: 'acme', private: true })).body.error, 'visibility_change');
+
+    // the route that is meant for it works and leaves the event
+    const route = await api(srv.url, 'POST', '/api/v1/packages/acme-secret/visibility', { token: tok.bob, body: { private: false } });
+    assert.equal(route.status, 200);
+    const events = srv.store.auditFor(srv.store.userByName('bob').id).map((e) => e.event);
+    assert.ok(events.includes('package.visibility'));
+  } finally { await srv.close(); }
+});
+
+test('moving a package out of a team is for that team\'s owners, and every owner of both teams is told (PKG-F9)', async () => {
+  const { srv, tok } = await setup();
+  try {
+    const id = (n) => srv.store.userByName(n).id;
+    const events = (n) => srv.store.auditFor(id(n)).filter((e) => e.event === 'package.transferred');
+    await api(srv.url, 'POST', '/api/v1/teams', { token: tok.alice, body: { name: 'acme' } });
+    await api(srv.url, 'PUT', '/api/v1/teams/acme/members/bob', { token: tok.alice, body: { role: 'maintainer' } });
+    await api(srv.url, 'PUT', '/api/v1/teams/acme/members/carol', { token: tok.alice, body: { role: 'owner' } });
+    await api(srv.url, 'POST', '/api/v1/teams', { token: tok.bob, body: { name: 'bobs' } });
+    await api(srv.url, 'PUT', '/api/v1/teams/bobs/members/dave', { token: tok.bob, body: { role: 'owner' } });
+    await publish(srv, tok.alice, { name: 'acme-pub', version: '1.0.0', team: 'acme' });
+
+    // a maintainer of acme who owns another team used to be able to walk off with it, unseen
+    const grab = await api(srv.url, 'POST', '/api/v1/packages/acme-pub/transfer', { token: tok.bob, body: { team: 'bobs' } });
+    assert.equal(grab.status, 403, JSON.stringify(grab.body));
+    assert.equal(grab.body.error, 'team_forbidden');
+    assert.match(grab.body.message, /owner of team "acme"/);
+    assert.equal((await publish(srv, tok.alice, { name: 'acme-pub', version: '1.0.1' })).status, 201, 'it is still acme\'s');
+    assert.deepEqual([events('alice').length, events('bob').length], [0, 0]);
+
+    // an owner of acme who may take it in (a maintainer of the target) can move it, and the owners are told
+    await api(srv.url, 'PUT', '/api/v1/teams/bobs/members/alice', { token: tok.bob, body: { role: 'maintainer' } });
+    const moved = await api(srv.url, 'POST', '/api/v1/packages/acme-pub/transfer', { token: tok.alice, body: { team: 'bobs' } });
+    assert.equal(moved.status, 200, JSON.stringify(moved.body));
+    for (const who of ['alice', 'carol', 'bob', 'dave']) assert.equal(events(who).length, 1, `${who} has a package.transferred row`);
+    assert.equal(events('alice')[0].ip !== undefined, true, 'the actor\'s own row keeps the address');
+    for (const who of ['carol', 'bob', 'dave']) {
+      const e = events(who)[0];
+      assert.deepEqual([e.package, e.from, e.to, e.by], ['acme-pub', 'acme', 'bobs', 'alice']);
+      assert.equal(e.ip, undefined, `${who}'s row does not carry alice's address`);
+    }
+    assert.equal(events('carol')[0].event, 'package.transferred');
+  } finally { await srv.close(); }
+});
+
+test('a personal package moved into a team is told to that team\'s owners (PKG-F9)', async () => {
+  const { srv, tok } = await setup();
+  try {
+    await publish(srv, tok.bob, { name: 'bob-utils', version: '1.0.0' });
+    await api(srv.url, 'POST', '/api/v1/teams', { token: tok.alice, body: { name: 'acme' } });
+    await api(srv.url, 'PUT', '/api/v1/teams/acme/members/bob', { token: tok.alice, body: { role: 'maintainer' } });
+    assert.equal((await api(srv.url, 'POST', '/api/v1/packages/bob-utils/transfer', { token: tok.bob, body: { team: 'acme' } })).status, 200);
+    const seen = srv.store.auditFor(srv.store.userByName('alice').id).filter((e) => e.event === 'package.transferred');
+    assert.equal(seen.length, 1);
+    assert.deepEqual([seen[0].package, seen[0].to, seen[0].by], ['bob-utils', 'acme', 'bob']);
+  } finally { await srv.close(); }
+});

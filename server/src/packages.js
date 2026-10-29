@@ -7,13 +7,18 @@
 import { sha256 } from './crypto.js';
 import { HttpError } from './errors.js';
 import { unpackFiles } from '../../extension/lib/tar.js';
-import { MANIFEST_FILE, NAME_RE, validateManifest, latestVersion, compareVersions } from '../../extension/lib/manifest.js';
+import { MANIFEST_FILE, VERSION_RE, isPackageName, validateManifest, latestVersion, compareVersions } from '../../extension/lib/manifest.js';
 
 const README_LIMIT = 64 * 1024;
 
 export class PackageService {
   constructor({ store, config, teams, clock = Date.now }) {
     Object.assign(this, { store, config, teams, clock });
+  }
+
+  /** The stored package, or null; never something every object inherits. */
+  own(name) {
+    return Object.hasOwn(this.store.data.packages, name) ? this.store.pkg(name) : null;
   }
 
   // ---- permissions -----------------------------------------------------------
@@ -49,7 +54,8 @@ export class PackageService {
     }
     let files;
     try {
-      files = unpackFiles(tarball);
+      // Expanded size capped at 4 x the compressed limit (a conservative default, keepers may tune); strict = the package rules.
+      files = unpackFiles(tarball, { maxBytes: this.config.maxPackageBytes * 4, strict: true });
     } catch (err) {
       throw new HttpError(400, 'bad_tarball', `Invalid package tarball: ${err.message}`);
     }
@@ -65,13 +71,18 @@ export class PackageService {
     if (priv && !teamName) throw new HttpError(400, 'private_needs_team', 'Private packages must belong to a team.');
     const team = teamName ? this.teams.get(teamName) : null;
 
-    const existing = this.store.pkg(manifest.name);
+    const existing = this.own(manifest.name);
     if (existing) {
       // Don't reveal who owns a package the publisher can't even see.
       if (!this.canRead(user, existing)) throw new HttpError(409, 'name_unavailable', `The package name "${manifest.name}" is not available.`);
       this.requireWrite(user, existing);
       if (teamName && existing.team !== team.name) {
         throw new HttpError(409, 'owner_mismatch', `"${manifest.name}" is not owned by team "${team.name}". Use \`gitcha transfer\` to move it.`);
+      }
+      // Who can see a team package is changed on purpose, through the visibility route, which writes the audit event;
+      // a publish only repeats what is already so.
+      if (existing.team && priv !== undefined && (priv ? 'team' : 'registry') !== (existing.visibility ?? 'registry')) {
+        throw new HttpError(409, 'visibility_change', `"${manifest.name}" is ${existing.visibility === 'team' ? 'visible to team members only' : 'visible to every registry user'}; a publish cannot change that. Use \`gitcha access ${manifest.name} ${priv ? 'team-only' : 'public'}\`.`);
       }
       if (existing.versions[manifest.version]) {
         throw new HttpError(409, 'version_exists', `${manifest.name}@${manifest.version} already exists. Versions are immutable: bump the version.`);
@@ -95,14 +106,14 @@ export class PackageService {
     };
     this.store.writeBlob(digest, tarball);
     this.store.tx((d) => {
-      const pkg = d.packages[manifest.name] ?? {
+      const pkg = (Object.hasOwn(d.packages, manifest.name) ? d.packages[manifest.name] : null) ?? {
         name: manifest.name, createdAt: now, maintainers: [user.id], versions: {}, downloads: 0,
         owner: team ? team.name : user.username, team: team ? team.name : null, visibility: 'registry',
       };
       pkg.versions[manifest.version] = record;
       pkg.description = record.description;
       pkg.license = record.license;
-      if (pkg.team && priv !== undefined) pkg.visibility = priv ? 'team' : 'registry';
+      if (pkg.team && priv !== undefined && !existing) pkg.visibility = priv ? 'team' : 'registry'; // set once, when the package is created
       pkg.homepage = typeof manifest.homepage === 'string' ? manifest.homepage.slice(0, 300) : pkg.homepage;
       if (readme) pkg.readme = readme.data.toString('utf8').slice(0, README_LIMIT);
       pkg.updatedAt = now;
@@ -143,16 +154,17 @@ export class PackageService {
 
   /** Fetch a package the user may read. Hidden packages look like missing ones. */
   get(name, user = null) {
-    if (!NAME_RE.test(name)) throw new HttpError(400, 'bad_name', 'Invalid package name.');
-    const pkg = this.store.pkg(name);
+    if (!isPackageName(name)) throw new HttpError(400, 'bad_name', 'Invalid package name.');
+    const pkg = this.own(name);
     if (!pkg || !this.canRead(user, pkg)) throw new HttpError(404, 'not_found', `No package named "${name}".`);
     return pkg;
   }
 
   resolve(name, version = 'latest', user = null) {
     const pkg = this.get(name, user);
+    if (version !== 'latest' && !VERSION_RE.test(version)) throw new HttpError(400, 'bad_version', 'Invalid version.');
     const v = version === 'latest' ? latestVersion(Object.values(pkg.versions)) : version;
-    const rec = v && pkg.versions[v];
+    const rec = v && Object.hasOwn(pkg.versions, v) ? pkg.versions[v] : null;
     if (!rec) throw new HttpError(404, 'not_found', `${name}@${version} does not exist.`);
     return { pkg, rec };
   }
@@ -178,17 +190,28 @@ export class PackageService {
     return { name, version: rec.version, yanked };
   }
 
-  /** Move a package into a team (or between teams) to share it. */
+  /** Move a package into a team (or between teams) to share it. Taking one out of a team is for that team's owners. */
   transfer(user, name, teamName, ip) {
     const pkg = this.get(name, user);
     this.requireWrite(user, pkg);
     const team = this.teams.get(teamName);
     this.teams.require(team, user, 'maintainer');
     if (pkg.team === team.name) throw new HttpError(409, 'already_owned', `"${name}" already belongs to team "${team.name}".`);
+    const source = pkg.team ? this.store.team(pkg.team) : null;
+    if (source) this.teams.require(source, user, 'owner');
     const from = pkg.owner;
     this.store.tx((d) => {
       Object.assign(d.packages[name], { team: team.name, owner: team.name, visibility: pkg.visibility ?? 'registry' });
       this.store.audit({ userId: user.id, event: 'package.transferred', ip, package: name, from, to: team.name });
+      // The owners of both teams are told too (not with the actor's address).
+      const told = new Set([user.id]);
+      for (const t of [source, team]) {
+        for (const id of t ? this.teams.ownerIds(t) : []) {
+          if (told.has(id)) continue;
+          told.add(id);
+          this.store.audit({ userId: id, event: 'package.transferred', package: name, from, to: team.name, by: user.username });
+        }
+      }
     });
     return this.summary(this.store.pkg(name));
   }
