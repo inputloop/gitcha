@@ -275,8 +275,9 @@ only to `/var/lib/gitcha`.
 **Operations**
 
 - 🎫 **Tickets** in three scopes (user, tenant, internal) with internal notes.
-- 🔁 **Changes** with a plan, a rollback, approvals that need the approver's
-  own fresh code, no self-approval, and two approvers for high risk.
+- 🔁 **Changes** with a plan, a rollback, approvals that each carry the
+  approver's own code, no self-approval, two approvers for high risk, and
+  approvals that lapse when the change is rewritten.
 - 🖥 **C4OK** drives both as the operations kiosk.
 
 **Claude extension and CLI** (one zero-dependency package in `extension/`)
@@ -583,8 +584,9 @@ other either way.
 ### 17. Support
 
 Anyone with an account can file a ticket (a question, a bug, feedback, a
-billing issue) and follow its replies. Staff see every ticket, add internal
-notes, and work the change queue from C4OK.
+billing issue) and follow its replies (ten tickets an account a day; staff are
+not limited). Staff see every ticket, add internal notes, and work the change
+queue from C4OK.
 
 ![A support ticket](docs/screenshots/27-support.png)
 
@@ -782,9 +784,13 @@ Gitcha keeps the operational record; C4OK is the kiosk that works it.
   billing account) or **internal** (staff only). Staff can add internal notes
   that the reporter never sees.
 - **Changes** move from draft, submitted and approved through scheduled and
-  in progress to done, failed or rolled back. Each has a plan, a rollback and a risk level. Approving needs the
-  approver's own fresh code; nobody approves their own change; high-risk
-  changes need two approvers.
+  in progress to done, failed or rolled back. Each has a plan, a rollback and a risk level. Approving or
+  rejecting needs a code of the approver's own, sent with that decision (a code
+  typed earlier does not count, and each change needs its own); nobody approves
+  their own change; high-risk changes need two approvers. An approval covers
+  the change as it read when it was given: editing it, or sending it back to
+  draft, sets the approvals aside (the record keeps them as voided) and the
+  approvers approve again.
 - **C4OK's Operations door** (`/operations`, in c4ok-PRIVATE
   `w/lib/gitcha.js`) shows the queue, tickets and changes, and asks for a code
   whenever Gitcha does. It reads a console key from a file with mode 600 and

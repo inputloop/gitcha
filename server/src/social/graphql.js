@@ -44,7 +44,7 @@ type Query {
 }
 
 type Ticket { id: ID! scope: String! kind: String! title: String! body: String status: String! priority: String! tenant: String reporter: String! assignee: String createdAt: Float! updatedAt: Float! links: JSON comments: JSON events: JSON }
-type Change { id: ID! title: String! summary: String risk: String! requiredApprovals: Int! systems: [String!]! plan: String rollback: String tickets: [String!]! window: JSON status: String! author: String! approvals: JSON createdAt: Float! updatedAt: Float! events: JSON }
+type Change { id: ID! title: String! summary: String risk: String! requiredApprovals: Int! systems: [String!]! plan: String rollback: String tickets: [String!]! window: JSON status: String! author: String! approvals: JSON voidedApprovals: JSON createdAt: Float! updatedAt: Float! events: JSON }
 
 type Me { kind: String! username: String! displayName: String agent: Agent agents: [Agent!]! sshKeys: [SshKey!]! gpgKeys: [GpgKey!]! agentKeys: [AgentKey!]! budget: Budget! }
 type User { username: String! displayName: String bio: String agents: [Agent!]! posts(limit: Int = 30): [Post!]! "Owner only." budget: Budget }
@@ -107,7 +107,7 @@ type Mutation {
   updateTicket(id: ID!, status: String, priority: String, assignee: String, scope: String, via: String): Ticket!
   createChange(title: String!, summary: String, risk: String, systems: [String!], plan: String, rollback: String, tickets: [String!], windowStart: Float, windowEnd: Float, via: String): Change!
   editChange(id: ID!, title: String, summary: String, plan: String, rollback: String, risk: String): Change!
-  "Move a change: submitted, approved, rejected, scheduled, in_progress, done, failed, rolled_back, cancelled, draft. Approving and rejecting need a fresh code (pass code, or call stepUp first)."
+  "Move a change: submitted, approved, rejected, scheduled, in_progress, done, failed, rolled_back, cancelled, draft. Approving and rejecting each need a code of their own, passed in the code argument; a code typed earlier, or by stepUp, does not count. An approval covers the change as it reads: editing it or sending it back to draft sets the approvals aside."
   advanceChange(id: ID!, to: String!, note: String, code: String, via: String): Change!
   "Administrators only: user, staff or admin."
   setRole(username: String!, role: String!): JSON
@@ -273,9 +273,10 @@ export function makeGraphql(s) {
       editChange: ({ id, ...rest }, ctx) => ops.editChange(person(ctx).user, id, rest),
       advanceChange: ({ id, to, note, code, via }, ctx) => {
         const p = person(ctx);
-        if (code && p.auth) auth.stepUp(p.auth, code, ctx.ip);
-        const fresh = Boolean(p.auth) && auth.clock() - (p.auth.session.mfaAt ?? 0) <= config.policy.sensitiveWindow;
-        return ops.advance(p.user, id, to, { note, fresh, via });
+        // OPS-2: the code rides with the decision. stepUp throws on a bad one; a window opened earlier is no use here.
+        const carried = Boolean(code) && Boolean(p.auth);
+        if (carried) auth.stepUp(p.auth, code, ctx.ip);
+        return ops.advance(p.user, id, to, { note, fresh: carried, via });
       },
       setRole: ({ username, role }, ctx) => ops.setRole(person(ctx, { fresh: true }).user, username, role, ctx.ip),
       updateProfile: (args, ctx) => { const p = person(ctx); social.updateProfile(p.user, args); return meView(ctx); },
