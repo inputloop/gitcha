@@ -135,7 +135,7 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
   const server = http.createServer((req, res) => {
     handle(req, res).catch((err) => { console.error(err); res.destroy(); });
   });
-  const sweeper = setInterval(() => services.jobs.sweep(), 30_000);
+  const sweeper = setInterval(() => { services.jobs.sweep(); auth.sweep(); }, 30_000);
   sweeper.unref();
   server.on('close', () => { clearInterval(sweeper); services.jobs.cancelWaiters(); });
   return { server, ...services, router, version: VERSION };

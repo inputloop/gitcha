@@ -86,7 +86,29 @@ export class AuthService {
 
   // ---- registration & enrollment -----------------------------------------
 
+  /**
+   * Remove sign-ups that never finished (older than the enrolment window) together with their enrolment sessions,
+   * and sessions that are past their life or idle limit (AUTH-15, AUTH-19). Called before a sign-up is judged and by
+   * the server's sweeper; it writes only when there is something to remove.
+   */
+  sweep() {
+    const now = this.clock();
+    const { users, sessions } = this.store.data;
+    const staleUsers = Object.values(users).filter((u) => u.status === 'pending_mfa' && now - u.createdAt > ENROLL_TTL).map((u) => u.id);
+    const staleSessions = Object.entries(sessions)
+      .filter(([, s]) => staleUsers.includes(s.userId) || s.expiresAt < now || (s.kind !== 'enroll' && now - s.lastSeen > this.config.policy.sessionIdle))
+      .map(([hash]) => hash);
+    if (!staleUsers.length && !staleSessions.length) return 0;
+    this.store.tx((d) => {
+      for (const id of staleUsers) delete d.users[id];
+      for (const hash of staleSessions) delete d.sessions[hash];
+    });
+    return staleUsers.length + staleSessions.length;
+  }
+
   register({ username, password, confirm, email, emailConfirm, ip }) {
+    this.sweep();
+    // An unfinished first sign-up no longer strands a closed server: once it has expired it is gone (PROD-3).
     if (!this.config.openRegistration && this.store.userCount() > 0) {
       throw new HttpError(403, 'registration_closed', 'Registration is closed on this server.');
     }
@@ -104,13 +126,16 @@ export class AuthService {
     if (confirm !== undefined && confirm !== password) throw new HttpError(400, 'password_mismatch', 'The passwords do not match.');
     const sealedEmail = this.sealEmail(email, emailConfirm);
     if (this.store.team(username.toLowerCase()) || this.store.data.agents?.[username.toLowerCase()]) throw new HttpError(409, 'username_taken', 'That name belongs to a team or an agent.');
+    // A name with an unfinished sign-up is not taken over (AUTH-15): the person who started it can still finish in the
+    // browser that holds the enrolment link, and anyone else waits for it to expire (a keepers' choice: refuse, not replace).
     const existing = this.store.userByName(username);
     if (existing && existing.status === 'active') throw new HttpError(409, 'username_taken', 'That username is taken.');
+    if (existing) throw new HttpError(409, 'username_pending', 'That username has a sign-up that is not finished. Finish it in the browser where you started, or try again in 30 minutes.');
 
     const secret = generateSecret();
     const now = this.clock();
     const user = {
-      id: existing?.id ?? crypto.randomUUID(),
+      id: crypto.randomUUID(),
       username,
       // scrypt hash, then sealed with AES-256-GCM: the DB alone is useless to an attacker.
       passwordHash: this.box.seal(hashPassword(password)),
@@ -119,7 +144,7 @@ export class AuthService {
       email: sealedEmail,
       totpLastStep: -1,
       status: 'pending_mfa',
-      role: this.store.userCount() === 0 || existing?.role === 'admin' ? 'admin' : 'user',
+      role: this.store.userCount() === 0 ? 'admin' : 'user', // the first person on a server; never inherited from an earlier record of the same name
       recoveryCodes: [],
       createdAt: now,
     };
@@ -259,7 +284,7 @@ export class AuthService {
     this.loginLimiter.reset(key);
     this.ipLimiter.refund(ipKey);
     if (user.status !== 'active') {
-      throw new HttpError(403, 'mfa_not_enrolled', 'This account has not finished two-factor setup. Register again to restart setup.');
+      throw new HttpError(403, 'mfa_not_enrolled', 'This account has not finished two-factor setup. Finish it in the browser where you started, or register again once it has expired (30 minutes).');
     }
     const ticket = randomToken('gtt_');
     this.pruneTickets();

@@ -63,6 +63,10 @@ Gitcha server**.
   Passwords are hashed off the main thread, so a burst of sign-ins does not stall
   the server.
 - Unknown usernames take the same scrypt time as real ones.
+- A sign-up that is not finished (authenticator confirmed) within 30 minutes is removed
+  with its enrolment link, by the sweeper and before any new sign-up is judged; until
+  then nobody else can register that name, and a new record never inherits the old one's
+  id or role. Sessions past their life or idle limit are deleted, not just refused.
 - Web: `HttpOnly`, `SameSite=Lax`, `Secure` (on https) cookies; strict CSP with no
   inline script; `frame-ancestors 'none'`; same-site-only redirects.
 - Web writes: every form carries a CSRF token that is an HMAC (keyed from the
