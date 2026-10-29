@@ -66,3 +66,21 @@ test('FMT-2: a function never gets more memory than the runner\'s own cap', asyn
   assert.equal(asked.memoryMb, 512, 'asked for 4096, the operator allows 512');
   delete BACKENDS.fake;
 });
+
+test('SITE-1 class: the runner unpacks a source only as far as the server says it may grow', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { prepare } = await import('../lib/script.js');
+  // 3 MiB of zeros is a few KB packed. The server hands the runner the cap with the job.
+  const source = packFiles([{ path: 'big.bin', data: Buffer.alloc(3 * 1024 * 1024) }]);
+  const job = (limits) => ({ kind: 'ci', spec: { pipeline: { steps: [{ name: 'a', run: 'true' }] } }, ...(limits ? { limits } : {}) });
+  const dir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'gitcha-prep-'));
+  const small = dir();
+  assert.throws(() => prepare(small, job({ maxUnpackedBytes: 1024 * 1024 }), source), /./, 'over the cap the source is refused');
+  assert.equal(fs.existsSync(path.join(small, 'src', 'big.bin')), false, 'and nothing of it is written');
+  const roomy = dir();
+  prepare(roomy, job({ maxUnpackedBytes: 8 * 1024 * 1024 }), source);
+  assert.equal(fs.statSync(path.join(roomy, 'src', 'big.bin')).size, 3 * 1024 * 1024, 'within the cap it unpacks');
+  for (const d of [small, roomy]) fs.rmSync(d, { recursive: true, force: true });
+});

@@ -229,7 +229,7 @@ export class JobService {
     else this.store.tx((d) => Object.assign(d.jobs[job.id], patch));
     const j = this.get(job.id);
     const handed = {
-      job: { id: j.id, kind: j.kind, spec: this.specOf(j), timeoutMs: j.timeoutMs, hasSource: Boolean(j.sourceSha), owner: j.owner },
+      job: { id: j.id, kind: j.kind, spec: this.specOf(j), timeoutMs: j.timeoutMs, hasSource: Boolean(j.sourceSha), owner: j.owner, limits: { maxUnpackedBytes: 4 * this.config.maxPackageBytes } },
       jobToken,
     };
     // The runner has the caller's request now; the server need not keep its body while the call runs (FN-1).

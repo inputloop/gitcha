@@ -73,7 +73,7 @@ export class FunctionService {
     if (!Buffer.isBuffer(tarball) || !tarball.length) throw new HttpError(400, 'no_tarball', 'No function tarball was sent.');
     if (tarball.length > this.config.maxPackageBytes) throw new HttpError(413, 'too_large', 'Function is too large.');
     let files;
-    try { files = new Map(unpackFiles(tarball).map((f) => [f.path, f.data])); } catch (err) {
+    try { files = new Map(unpackFiles(tarball, { maxBytes: 4 * this.config.maxPackageBytes }).map((f) => [f.path, f.data])); } catch (err) {
       throw new HttpError(400, 'bad_tarball', `Invalid function tarball: ${err.message}`);
     }
     const cfg = files.get('gitcha.fn.json');

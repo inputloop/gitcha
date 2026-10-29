@@ -12,8 +12,8 @@ import { ownerKey } from './jobs.js';
 export const PIPELINE_FILES = ['gitcha-ci.json', 'gitcha-ci.org', 'gitcha-ci.topoforge.json'];
 
 /** Find and compile the pipeline in a source tarball (null when there is none). */
-export function pipelineFromTarball(tarball, { maxUnpackedBytes, ...opts } = {}) {
-  const files = new Map(unpackFiles(tarball, maxUnpackedBytes ? { maxBytes: maxUnpackedBytes } : undefined).map((f) => [f.path, f.data]));
+export function pipelineFromTarball(tarball, { maxUnpackedBytes = 100 * 1024 * 1024, ...opts } = {}) {
+  const files = new Map(unpackFiles(tarball, { maxBytes: maxUnpackedBytes }).map((f) => [f.path, f.data]));
   const found = PIPELINE_FILES.find((f) => files.has(f));
   if (!found) return null;
   const text = files.get(found).toString('utf8');

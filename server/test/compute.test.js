@@ -199,3 +199,23 @@ test('KEY-1: the CI door names its purpose, so an agent key opens it (and only i
     assert.equal(srv.jobs.get(r.body.id).sandboxAgent, 'ada');
   } finally { await srv.close(); }
 });
+
+test('SITE-1 class: a function, a pipeline and a handed-out job each have a cap on what they unpack to', async () => {
+  const { srv, tb, runner, bobRec } = await setup({ env: { GITCHA_MAX_PACKAGE_BYTES: String(100_000) } });
+  try {
+    // 3 MiB of zeros packs to a few KB, far under the upload limit, and is over four times it.
+    const bomb = (name) => packFiles([{ path: name, data: Buffer.alloc(3 * 1024 * 1024) }]);
+    assert.ok(bomb('gitcha.fn.json').length < 100_000);
+    assert.throws(() => srv.functions.deploy(bobRec, { tarball: bomb('gitcha.fn.json') }, '127.0.0.1'), (e) => e.status === 400 && e.code === 'bad_tarball', 'a function is cut off at four times the package limit');
+    assert.equal((await queue(srv, tb, bomb('gitcha-ci.json'))).body.error, 'bad_tarball', 'a pipeline source too');
+
+    // The runner is told the same cap with the job.
+    assert.equal((await queue(srv, tb, pipeline())).status, 201);
+    const got = await srv.jobs.claim(runner, 50);
+    assert.equal(got.job.limits.maxUnpackedBytes, 400_000);
+
+    // And a caller that names no cap gets a bounded one, not 200 MiB.
+    const { pipelineFromTarball } = await import('../src/compute/ci.js');
+    assert.throws(() => pipelineFromTarball(packFiles([{ path: 'big.bin', data: Buffer.alloc(101 * 1024 * 1024) }])), /./);
+  } finally { await srv.close(); }
+});
