@@ -129,6 +129,9 @@ server; what remains is how the machines around it are set up.
   offline. With both, a thief can undo the encryption; without the key, no
   one can sign in. Restore the key that goes with the database: the server
   will not start on accounts without it, and never makes a replacement.
+- [ ] **One server per data directory.** A second server on the same
+  `GITCHA_DATA_DIR` is refused (`db.lock`); do not run two against one volume,
+  and do not put a second copy on a network filesystem that ignores locks.
 - [ ] **Payment keys live only in the environment** file
   (`/etc/inputloop/gitcha/gitcha.env`, mode 640, root and group `gitcha`),
   never in a repository. Use Stripe and PayPal test keys first.
