@@ -178,7 +178,7 @@ export class SiteService {
     let files;
     // The cap is on what the site holds once unpacked, not on the compressed upload.
     try { files = unpackFiles(tarball, { maxBytes: cap }); } catch (err) {
-      if (err.code === 'ERR_BUFFER_TOO_LARGE' || /too large|exceeds/i.test(err.message)) throw new HttpError(413, 'too_large', 'Site is too large once unpacked.');
+      if (err.code === 'ERR_BUFFER_TOO_LARGE' || /too large|exceeds|expands to more than/i.test(err.message)) throw new HttpError(413, 'too_large', 'Site is too large once unpacked.');
       throw new HttpError(400, 'bad_tarball', `Invalid site tarball: ${err.message}`);
     }
     if (!files.length) throw new HttpError(400, 'empty_site', 'The site has no files.');

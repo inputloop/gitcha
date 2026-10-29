@@ -14,6 +14,8 @@ import { packFiles } from '../../extension/lib/tar.js';
 const env = { GITCHA_HOSTING_DOMAINS: 'pages.test,apps.test' };
 const site = (files) => packFiles(Object.entries(files).map(([p, data]) => ({ path: p, data })));
 const deploy = (srv, token, name, tarball, extra = {}) => api(srv.url, 'PUT', `/api/v1/sites/${name}/deploys`, { token, body: { tarball: tarball.toString('base64'), ...extra } });
+// Audit rows of every user, whether the store keeps one list or (after STORE-3) a slot of three lists per user.
+const auditRows = (store) => (Array.isArray(store.data.audit) ? store.data.audit : Object.values(store.data.audit).flatMap((s) => [...s.security, ...s.others, ...s.traffic]));
 const sitesDir = (srv, name) => path.join(srv.config.dataDir, 'sites', name);
 const onDisk = (srv, name) => (fs.existsSync(sitesDir(srv, name)) ? fs.readdirSync(sitesDir(srv, name)) : []);
 
@@ -197,7 +199,7 @@ test('DOM-2: a verified domain is re-checked, dropped when its proof is gone, an
     for (let i = 0; i < 3; i++) await srv.domains.recheck();
     assert.notEqual((await hostGet(srv.url, 'bob.example.com', '/')).body, 'bob mall', 'no longer served');
     assert.equal(await tlsAllowed(srv, 'bob.example.com'), false, 'no longer allowed a certificate');
-    assert.ok(srv.store.data.audit.some((e) => e.event === 'domain.lapsed' && e.domain === 'bob.example.com'));
+    assert.ok(auditRows(srv.store).some((e) => e.event === 'domain.lapsed' && e.domain === 'bob.example.com'));
 
     // A name that changed hands: alice, who now controls the DNS, takes it from bob's still-verified record.
     const again = await addDomain(srv, tb, 'mall', 'new.example.com');
