@@ -60,12 +60,13 @@ function addressKey(ip) {
   return p.v4 ? p.text : Array.from(p.bytes.slice(0, 8)).map((b) => b.toString(16).padStart(2, '0')).join('') + '/64';
 }
 
-/** Coarse network identity: IPv4 /24 or IPv6 /48. */
+/** Coarse network identity: IPv4 /24 or IPv6 /48, from the parsed address so every spelling of one network agrees (AUTH-17). */
 export function networkOf(ip = '') {
-  ip = ip.replace(/^::ffff:/, '');
-  if (ip.includes('.')) return ip.split('.').slice(0, 3).join('.') + '.0/24';
-  if (ip.includes(':')) return ip.split(':').slice(0, 3).join(':') + '::/48';
-  return ip || 'unknown';
+  const p = parseIp(ip);
+  if (!p) return String(ip || 'unknown');
+  if (p.v4) return p.text.split('.').slice(0, 3).join('.') + '.0/24';
+  const groups = [0, 1, 2].map((i) => ((p.bytes[i * 2] << 8) | p.bytes[i * 2 + 1]).toString(16));
+  return `${groups.join(':')}::/48`;
 }
 
 export class AuthService {

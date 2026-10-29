@@ -71,3 +71,35 @@ test('AUTH-3: the password limiter keys on the address the proxy saw, so a typed
     assert.ok(rows.every((e) => e.ip === '198.51.100.4'), JSON.stringify(rows.map((e) => e.ip)));
   } finally { await srv.close(); }
 });
+
+test('AUTH-16: cookies are Secure when a trusted proxy says the request came in over https, and not otherwise', async () => {
+  const setCookies = async (srv, headers) => (await fetch(srv.url + '/login', { headers })).headers.getSetCookie().join('\n');
+  const behind = await startServer({ env: { GITCHA_TRUST_PROXY: 'true' } }); // PUBLIC_URL is http: the proxy is the only sign of https
+  try {
+    assert.match(await setCookies(behind, { 'X-Forwarded-Proto': 'https' }), /gitcha_csrf=[^\n]*; Secure/);
+    assert.match(await setCookies(behind, { 'X-Forwarded-Proto': 'http, https' }), /gitcha_csrf=[^\n]*; Secure/, 'a chain is read from the proxy nearest us');
+    assert.doesNotMatch(await setCookies(behind, { 'X-Forwarded-Proto': 'https, http' }), /Secure/);
+    assert.doesNotMatch(await setCookies(behind, { 'X-Forwarded-Proto': 'http' }), /Secure/);
+    assert.doesNotMatch(await setCookies(behind, {}), /Secure/);
+  } finally { await behind.close(); }
+  const direct = await startServer(); // trust off: the header is a stranger's word
+  try {
+    assert.doesNotMatch(await setCookies(direct, { 'X-Forwarded-Proto': 'https' }), /Secure/);
+  } finally { await direct.close(); }
+  const https = await startServer({ overrides: { publicUrl: 'https://registry.example', secureCookies: true } });
+  try {
+    assert.match(await setCookies(https, {}), /gitcha_csrf=[^\n]*; Secure/);
+  } finally { await https.close(); }
+});
+
+test('AUTH-17: every spelling of one IPv6 network gets one label, and v4-mapped addresses are v4', async () => {
+  const { networkOf } = await import('../src/auth.js');
+  const spellings = ['2001:db8:0:1::5', '2001:0db8:0000:0001:0:0:0:9', '2001:DB8:0:1:ffff::1', '[2001:db8:0:1::7]:443'];
+  assert.equal(new Set(spellings.map(networkOf)).size, 1, spellings.map(networkOf).join(' '));
+  assert.equal(networkOf('2001:db8:0:1::5'), '2001:db8:0::/48');
+  assert.notEqual(networkOf('2001:db8:1::5'), networkOf('2001:db8:0:1::5'), 'a different /48 is a different network');
+  assert.equal(networkOf('::ffff:203.0.113.9'), '203.0.113.0/24');
+  assert.equal(networkOf('203.0.113.9'), '203.0.113.0/24');
+  assert.equal(networkOf('x'), 'x');
+  assert.equal(networkOf(''), 'unknown');
+});

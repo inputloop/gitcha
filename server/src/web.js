@@ -55,7 +55,10 @@ export function safeNext(n) {
 }
 
 export function registerWeb(router, { auth, packages, teams, config, billing }) {
-  const secure = config.secureCookies;
+  // Cookies are Secure when the public URL is https, or when a proxy we trust says this request came in over https
+  // (AUTH-16): a registry reachable on both schemes marks the cookies it sets over https as Secure.
+  const secureOf = (ctx) => config.secureCookies
+    || (config.trustProxy && String(ctx.req.headers['x-forwarded-proto'] ?? '').split(',').pop().trim().toLowerCase() === 'https');
 
   // CSRF token = nonce.HMAC(server key, session cookie | nonce) (AUTH-10). It is bound to the session that was in
   // the browser when it was issued, so a value planted from a sibling subdomain, or lifted from another session,
@@ -72,13 +75,13 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     const dot = token.indexOf('.');
     return dot > 0 && safeEqual(token.slice(dot + 1), csrfMac(ctx.cookies[SID] ?? '', token.slice(0, dot)));
   };
-  const csrfCookie = (token) => cookie(CSRF, token, { secure, maxAge: 86400_000 });
+  const csrfCookie = (ctx, token) => cookie(CSRF, token, { secure: secureOf(ctx), maxAge: 86400_000 });
 
   const csrfToken = (ctx) => {
     const have = ctx.cookies[CSRF];
     if (csrfValid(ctx, have)) return have;
     const t = mintCsrf(ctx.cookies[SID] ?? '');
-    ctx.setCookie(csrfCookie(t));
+    ctx.setCookie(csrfCookie(ctx, t));
     ctx.cookies[CSRF] = t;
     return t;
   };
@@ -149,7 +152,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     const f = await form(ctx);
     try {
       const { enrollToken } = auth.register({ username: f.username, password: f.password, confirm: f.confirm ?? '', email: f.email, emailConfirm: f.email_confirm, ip: ctx.ip });
-      redirect(ctx.res, '/setup-2fa', { 'Set-Cookie': [...ctx.outCookies, cookie(ENROLL, enrollToken, { secure, maxAge: 30 * 60_000 })] });
+      redirect(ctx.res, '/setup-2fa', { 'Set-Cookie': [...ctx.outCookies, cookie(ENROLL, enrollToken, { secure: secureOf(ctx), maxAge: 30 * 60_000 })] });
     } catch (err) {
       if (!(err instanceof HttpError)) throw err;
       page(ctx, 'Create account', V.registerPage({ csrf: csrfToken(ctx), error: err.message, username: f.username, email: f.email, emailConfirm: f.email_confirm }), { status: err.status });
@@ -169,7 +172,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     const f = await form(ctx);
     try {
       const { recoveryCodes } = auth.confirmEnrollment({ enrollToken: ctx.cookies[ENROLL], code: String(f.code ?? '').replace(/\s/g, ''), ip: ctx.ip });
-      ctx.setCookie(cookie(ENROLL, '', { secure, maxAge: 0 }));
+      ctx.setCookie(cookie(ENROLL, '', { secure: secureOf(ctx), maxAge: 0 }));
       page(ctx, 'Recovery codes', V.recoveryCodesPage({ codes: recoveryCodes }));
     } catch (err) {
       if (!(err instanceof HttpError) || err.code === 'enrollment_expired') throw err;
@@ -188,7 +191,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     try {
       const { ticket } = await auth.beginLogin({ username: f.username, password: f.password, ip: ctx.ip });
       redirect(ctx.res, `/login/2fa?next=${encodeURIComponent(safeNext(f.next))}`, {
-        'Set-Cookie': [...ctx.outCookies, cookie(TICKET, ticket, { secure, maxAge: config.policy.mfaTicketTtl })],
+        'Set-Cookie': [...ctx.outCookies, cookie(TICKET, ticket, { secure: secureOf(ctx), maxAge: config.policy.mfaTicketTtl })],
       });
     } catch (err) {
       if (!(err instanceof HttpError)) throw err;
@@ -215,7 +218,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
       });
       redirect(ctx.res, safeNext(f.next), {
         // A new session gets a new CSRF token; whatever was in the browser before sign-in is replaced, not trusted.
-        'Set-Cookie': [...ctx.outCookies, cookie(TICKET, '', { secure, maxAge: 0 }), cookie(SID, token, { secure, maxAge: config.policy.sessionMaxAge }), csrfCookie(mintCsrf(token))],
+        'Set-Cookie': [...ctx.outCookies, cookie(TICKET, '', { secure: secureOf(ctx), maxAge: 0 }), cookie(SID, token, { secure: secureOf(ctx), maxAge: config.policy.sessionMaxAge }), csrfCookie(ctx, mintCsrf(token))],
       });
     } catch (err) {
       if (!(err instanceof HttpError)) throw err;
@@ -252,7 +255,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     await form(ctx);
     const a = current(ctx);
     if (a) auth.revoke(a.hash, a.user.username, ctx.ip);
-    redirect(ctx.res, '/login?msg=signed_out', { 'Set-Cookie': [...ctx.outCookies, cookie(SID, '', { secure, maxAge: 0 })] });
+    redirect(ctx.res, '/login?msg=signed_out', { 'Set-Cookie': [...ctx.outCookies, cookie(SID, '', { secure: secureOf(ctx), maxAge: 0 })] });
   });
 
   // ---- packages -----------------------------------------------------------
