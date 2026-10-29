@@ -83,7 +83,7 @@ test('changes: plan and rollback required; approvals need a fresh code, a second
     assert.equal(code(await gql('sue', `mutation { advanceChange(id:"${c.id}", to:"approved") { status } }`)), 'mfa_required');
     const one = ok(await gql('sue', `mutation($c:String) { advanceChange(id:"${c.id}", to:"approved", code:$c, note:"Read the plan.") { status approvals } }`, { c: users.sue.nextCode() })).advanceChange;
     assert.equal(one.status, 'submitted', 'high risk: one approval is not enough');
-    assert.equal(code(await gql('sue', `mutation { advanceChange(id:"${c.id}", to:"approved") { status } }`)), 'already_approved');
+    assert.equal(code(await gql('sue', `mutation($c:String) { advanceChange(id:"${c.id}", to:"approved", code:$c) { status } }`, { c: users.sue.nextCode() })), 'already_approved');
     const two = ok(await gql('admin', `mutation($c:String) { advanceChange(id:"${c.id}", to:"approved", code:$c) { status approvals } }`, { c: users.admin.nextCode() })).advanceChange;
     assert.equal(two.status, 'approved');
     assert.equal(two.approvals.length, 2);

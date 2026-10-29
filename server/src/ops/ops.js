@@ -11,15 +11,24 @@
 //
 // Changes (to the live system) are staff-only and move through
 //   draft -> submitted -> approved -> scheduled -> in_progress -> done | failed | rolled_back
-// with rejected and cancelled as exits. Approval needs a fresh 2FA code; nobody
-// approves their own change; high-risk changes need two approvals.
+// with rejected and cancelled as exits. Each approval or rejection carries a 2FA code of
+// its own (a code typed earlier does not count); nobody approves their own change;
+// high-risk changes need two approvals. An approval covers the change as it read when it
+// was given (a hash of its title, summary, risk, systems, plan, rollback and window):
+// editing it, or sending it back to draft, sets the approvals aside, with an event.
+//
+// Filing is limited: an account that is not staff may file TICKETS_PER_DAY tickets in 24
+// hours (a conservative default; the keepers can raise it with config.ops.ticketsPerDay).
 import { HttpError } from '../errors.js';
+import { sha256 } from '../crypto.js';
 
 const SCOPES = ['user', 'tenant', 'internal'];
 const KINDS = ['bug', 'feedback', 'question', 'request', 'incident'];
 const STATUSES = ['new', 'triaged', 'in_progress', 'waiting', 'resolved', 'closed'];
 const PRIORITIES = ['low', 'normal', 'high', 'urgent'];
 const RISKS = { low: 1, medium: 1, high: 2 };
+const TICKETS_PER_DAY = 10;
+const DAY = 86_400_000;
 const CHANGE_FLOW = {
   draft: ['submitted', 'cancelled'],
   submitted: ['approved', 'rejected', 'draft', 'cancelled'],
@@ -31,9 +40,16 @@ const CHANGE_FLOW = {
 
 export const isStaff = (user) => user && (user.role === 'admin' || user.role === 'staff');
 
+// A record by an id the caller typed: only the table's own entries, never something every object has (GQL-4).
+const own = (table, id) => (Object.hasOwn(table, id) ? table[id] : undefined);
+
+/** What an approval covers: everything a reader of the change relies on (OPS-1). */
+export const changeHash = (c) => sha256(JSON.stringify([c.title, c.summary, c.risk, c.systems, c.plan, c.rollback, c.window?.start ?? null, c.window?.end ?? null]));
+
 export class OpsService {
-  constructor({ store, teams, billing, jobs, sites, ring, clock = Date.now }) {
+  constructor({ store, config, teams, billing, jobs, sites, ring, clock = Date.now }) {
     Object.assign(this, { store, teams, billing, jobs, sites, ring, clock });
+    this.ticketsPerDay = config?.ops?.ticketsPerDay ?? TICKETS_PER_DAY;
     store.data.ops ??= { tickets: {}, changes: {}, seq: { ticket: 0, change: 0 } };
   }
 
@@ -84,6 +100,12 @@ export class OpsService {
     if (scope !== 'tenant') tenant = null;
     title = String(title ?? '').trim();
     if (title.length < 5 || title.length > 200) throw new HttpError(400, 'bad_title', 'Give the ticket a title of 5-200 characters.');
+    // OPS-3: every ticket is a rewrite of the whole store, so one account cannot file without limit.
+    if (!isStaff(user)) {
+      const since = this.clock() - DAY;
+      const filed = Object.values(this.d.tickets).filter((t) => t.reporter === `user:${user.username}` && t.createdAt > since).length;
+      if (filed >= this.ticketsPerDay) throw new HttpError(429, 'ticket_limit', `You have filed ${filed} tickets in the last day; the limit is ${this.ticketsPerDay}. Add to an open ticket, or try again tomorrow.`);
+    }
     // Only staff may raise urgency above normal on someone's behalf; anyone can say it is urgent for them.
     const id = `T-${String(++this.d.seq.ticket).padStart(4, '0')}`;
     const now = this.clock();
@@ -97,7 +119,7 @@ export class OpsService {
   }
 
   ticket(user, id) {
-    const t = this.d.tickets[id];
+    const t = own(this.d.tickets, id);
     if (!t || !this.canSee(user, t)) throw new HttpError(404, 'ticket_not_found', 'No such ticket.');
     return t;
   }
@@ -160,7 +182,7 @@ export class OpsService {
     const c = {
       id, title: title.slice(0, 200), summary: String(summary ?? '').slice(0, 20_000), risk, requiredApprovals: RISKS[risk],
       systems: systems.map(String).slice(0, 20), plan: String(plan).slice(0, 20_000), rollback: String(rollback).slice(0, 20_000),
-      tickets: tickets.filter((t) => this.d.tickets[t]).slice(0, 50), window: { start: windowStart ?? null, end: windowEnd ?? null },
+      tickets: tickets.filter((t) => own(this.d.tickets, t)).slice(0, 50), window: { start: windowStart ?? null, end: windowEnd ?? null },
       status: 'draft', author: user.username, approvals: [], createdAt: now, updatedAt: now,
       events: [{ at: now, by: user.username, type: 'created', via: via ?? null }],
     };
@@ -170,32 +192,53 @@ export class OpsService {
 
   change(user, id) {
     this.staff(user);
-    const c = this.d.changes[id];
+    const c = own(this.d.changes, id);
     if (!c) throw new HttpError(404, 'change_not_found', 'No such change.');
     return c;
   }
 
-  /** Move a change along its flow. `fresh` is true when the caller passed a fresh 2FA check. */
+  /** Approvals that cover the change as it reads now (OPS-1). */
+  liveApprovals(c) {
+    const hash = changeHash(c);
+    return c.approvals.filter((a) => a.hash === hash && a.risk === c.risk);
+  }
+
+  /** Inside a transaction: set aside the approvals that no longer cover `x` (or all of them), and say so. */
+  voidApprovals(x, by, reason, { all = false } = {}) {
+    const live = all ? [] : this.liveApprovals(x);
+    const stale = x.approvals.filter((a) => !live.includes(a));
+    if (!stale.length) return;
+    x.approvals = live;
+    (x.voidedApprovals ??= []).push(...stale.map((a) => ({ ...a, voidedAt: this.clock(), reason })));
+    x.events.push({ at: this.clock(), by, type: 'approvals_voided', reason, count: stale.length, approvers: stale.map((a) => a.by) });
+  }
+
+  /**
+   * Move a change along its flow. `fresh` is true only when this very call carried a code that
+   * checked out; an approval or rejection is refused without it (OPS-2).
+   */
   advance(user, id, to, { note, fresh = false, via } = {}) {
     const c = this.change(user, id);
     if (!(CHANGE_FLOW[c.status] ?? []).includes(to)) throw new HttpError(409, 'bad_transition', `A ${c.status} change cannot become ${to}.`);
     if (to === 'submitted' && (!c.plan.trim() || !c.rollback.trim())) throw new HttpError(400, 'incomplete', 'Write the plan and the rollback before submitting.');
     if (to === 'approved' || to === 'rejected') {
-      if (!fresh) throw new HttpError(401, 'mfa_required', 'Approving or rejecting a change needs a fresh authenticator code.', { reason: 'sensitive_action' });
       if (c.author === user.username) throw new HttpError(403, 'own_change', 'Nobody approves or rejects their own change.');
+      if (!fresh) throw new HttpError(401, 'mfa_required', 'Approving or rejecting a change needs an authenticator code sent with it.', { reason: 'sensitive_action' });
     }
     if (['scheduled', 'in_progress', 'done', 'failed', 'rolled_back'].includes(to) && c.status === 'submitted') throw new HttpError(409, 'not_approved', 'This change is not approved yet.');
     let status = to;
-    const approvals = [...c.approvals];
+    const live = this.liveApprovals(c);
     if (to === 'approved') {
-      if (approvals.some((a) => a.by === user.username)) throw new HttpError(409, 'already_approved', 'You already approved this change.');
-      approvals.push({ by: user.username, at: this.clock(), note: note ?? null });
-      if (approvals.length < c.requiredApprovals) status = 'submitted'; // still waiting for another approver
+      if (live.some((a) => a.by === user.username)) throw new HttpError(409, 'already_approved', 'You already approved this change.');
+      if (live.length + 1 < RISKS[c.risk]) status = 'submitted'; // still waiting for another approver
     }
     this.store.tx((d) => {
       const x = d.ops.changes[id];
+      // Sent back to draft, nothing approved survives; otherwise only what no longer matches goes.
+      this.voidApprovals(x, user.username, to === 'draft' ? 'sent_back' : 'changed', { all: to === 'draft' });
+      if (to === 'approved') x.approvals.push({ by: user.username, at: this.clock(), note: note ?? null, hash: changeHash(x), risk: x.risk });
       x.events.push({ at: this.clock(), by: user.username, type: to, from: c.status, note: note ?? null, via: via ?? null });
-      Object.assign(x, { status, approvals, updatedAt: this.clock() });
+      Object.assign(x, { status, updatedAt: this.clock() });
       this.store.audit({ userId: user.id, event: `change.${to}`, change: id, status });
     });
     return this.d.changes[id];
@@ -208,7 +251,11 @@ export class OpsService {
     const allowed = {};
     for (const k of ['title', 'summary', 'plan', 'rollback']) if (patch[k] !== undefined) allowed[k] = String(patch[k]).slice(0, k === 'title' ? 200 : 20_000);
     if (patch.risk !== undefined) { if (!RISKS[patch.risk]) throw new HttpError(400, 'bad_risk', 'Bad risk.'); allowed.risk = patch.risk; allowed.requiredApprovals = RISKS[patch.risk]; }
-    this.store.tx((d) => Object.assign(d.ops.changes[id], allowed, { updatedAt: this.clock() }));
+    this.store.tx((d) => {
+      const x = d.ops.changes[id];
+      Object.assign(x, allowed, { updatedAt: this.clock() });
+      this.voidApprovals(x, user.username, 'edited'); // an approval of the old text is not an approval of this one
+    });
     return this.d.changes[id];
   }
 
@@ -230,7 +277,7 @@ export class OpsService {
     return {
       at: this.clock(),
       tickets: { open: open.length, byScope: count(open, 'scope'), byPriority: count(open, 'priority'), unassigned: open.filter((t) => !t.assignee).length, urgent: open.filter((t) => t.priority === 'urgent').map((t) => ({ id: t.id, title: t.title, scope: t.scope })) },
-      changes: { byStatus: count(Object.values(this.d.changes), 'status'), awaitingApproval: Object.values(this.d.changes).filter((c) => c.status === 'submitted').map((c) => ({ id: c.id, title: c.title, risk: c.risk, approvals: c.approvals.length, required: c.requiredApprovals })) },
+      changes: { byStatus: count(Object.values(this.d.changes), 'status'), awaitingApproval: Object.values(this.d.changes).filter((c) => c.status === 'submitted').map((c) => ({ id: c.id, title: c.title, risk: c.risk, approvals: this.liveApprovals(c).length, required: RISKS[c.risk] })) },
       runners: { total: runners.length, online: runners.filter((r) => this.clock() - r.lastSeen < 90_000).length },
       jobs: { queued: jobs.filter((j) => j.status === 'queued').length, running: jobs.filter((j) => j.status === 'running').length, failed24h: jobs.filter((j) => ['failed', 'timed_out'].includes(j.status) && (j.finishedAt ?? 0) > day).length },
       hosting: { sites: Object.keys(this.store.data.sites ?? {}).length, customDomains: Object.values(this.store.data.domains ?? {}).filter((x) => x.verified).length },

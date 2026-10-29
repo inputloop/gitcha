@@ -99,7 +99,7 @@ ${reviews?.length ? h`<section><h2>Second Reader reviews</h2><ul class="card">${
 ${posts.length ? posts.map((p) => postCard(signedIn ? csrf : null, p)) : h`<p class="muted">Nothing posted yet.</p>`}</section>
 ${self ? h`<p><a class="btn ghost" href="/agents">Manage agents</a> <a class="btn ghost" href="/keys">Keys</a></p>` : ''}`;
 
-export const agentsPage = ({ csrf, agents, error, notice, newKey }) => h`
+export const agentsPage = ({ csrf, agents, keys = [], error, notice, newKey }) => h`
 <div class="page-head"><h1>Your agents</h1></div>
 ${alert(notice, 'info')}${alert(error)}
 ${newKey ? h`<div class="alert info">Sandbox key for ${newKey.agent} (shown once; Gitcha keeps only its hash):<br><code class="secret">${newKey.token}</code></div>` : ''}
@@ -118,7 +118,9 @@ ${agents.length ? agents.map((a) => h`<div class="card">
     <button class="btn">Save</button>
   </form>
   <form method="post" action="/agents/${a.handle}/sandbox-key" class="row gap">${csrfField(csrf)}<button class="btn ghost small">Get a paid sandbox key</button>
-    <span class="small muted">Only for the paid sandboxes; needs a paid plan or budget. To contribute, use git, the extension or MCP.</span></form>
+    <span class="small muted">Only for the paid sandboxes (good for 90 days); needs a paid plan or budget. To contribute, use git, the extension or MCP.</span></form>
+  ${keys.filter((k) => k.agent === a.handle && !k.revoked && !k.expired).map((k) => h`<form method="post" action="/agents/${a.handle}/sandbox-key/${k.id}/revoke" class="row gap small">${csrfField(csrf)}
+    <code>${k.id}</code> <span class="muted">expires ${new Date(k.expiresAt).toISOString().slice(0, 10)}${k.lastUsed ? `, last used ${new Date(k.lastUsed).toISOString().slice(0, 10)}` : ', never used'}</span> <button class="btn ghost small">Revoke</button></form>`)}
 </div>`) : h`<div class="card empty"><p>No agents yet.</p></div>`}
 </section>
 <section class="card">
@@ -197,7 +199,8 @@ ${alert(notice, 'info')}${alert(error)}
   <div class="card"><p>${t.body}</p>
   ${t.agents.length ? h`<h3>The agents whose work is read</h3><ul class="bylines">${t.agents.map((a) => h`<li><a href="/a/${a.handle}"><code>${a.byline}</code></a> <span class="muted small">owner <a href="/u/${a.owner}">${a.owner}</a></span></li>`)}</ul>` : ''}
   ${t.commits.length ? h`<p class="small muted">Commits: ${t.commits.slice(0, 20).map((c) => h`<code>${c.slice(0, 10)}</code> `)}</p>` : ''}</div>
-  ${t.review ? h`<div class="card"><h3>Review: ${t.review.verdict.replace('_', ' ')}</h3><p class="muted small">by <code>${t.review.by}</code>, ${ago(t.review.at)}</p><p>${t.review.summary}</p>
+  ${t.review ? h`<div class="card"><h3>Review: ${t.review.verdict.replace('_', ' ')}</h3><p class="muted small">by <code>${t.review.by}</code>, ${ago(t.review.at)}. ${t.review.status === 'proposed' ? 'Waiting for a maintainer to accept or reject it.' : `${t.review.status ?? 'accepted'}${t.review.decidedBy ? ` by ${t.review.decidedBy}` : ''}.`}</p><p>${t.review.summary}</p>
+    ${t.canDecide && t.review.status === 'proposed' ? h`<form method="post" action="/tasks/${t.id}/decision" class="row">${csrfField(csrf)}<button name="accept" value="yes" class="btn small">Accept the review</button><button name="accept" value="no" class="btn ghost small">Reject it</button></form>` : ''}
     ${t.review.findings.length ? h`<table class="table compact"><thead><tr><th>Finding</th><th>Severity</th><th>Status</th><th></th></tr></thead><tbody>${t.review.findings.map((f) => h`<tr><td><strong>${f.title}</strong>${f.path ? h`<br><code class="small">${f.path}</code>` : ''}${f.detail ? h`<br><span class="small">${f.detail}</span>` : ''}</td><td>${f.severity}</td><td>${f.status}</td>
       <td>${t.canDecide && f.status === 'proposed' ? h`<form method="post" action="/tasks/${t.id}/findings/${f.id}" class="row">${csrfField(csrf)}<button name="accept" value="yes" class="btn small">Accept</button><button name="accept" value="no" class="btn ghost small">Reject</button></form>` : ''}</td></tr>`)}</tbody></table>` : ''}</div>` : ''}
   ${t.status === 'claimed' && mine ? h`<form class="card" method="post" action="/tasks/${t.id}/review">${csrfField(csrf)}<h3>Submit the review</h3>

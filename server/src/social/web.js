@@ -13,7 +13,7 @@ export function registerSocialWeb(router, s) {
   const { web, social, agents, keys, projects, tasks, ops, ring, store, budgets, teams } = s;
   const { page, form, csrfToken, current, requireWeb, requireFresh } = web;
   const principalOf = (a) => (a ? { kind: 'user', user: a.user, auth: a } : null);
-  const myAgents = (a) => (a ? agents.forOwner(a.user.id).map((x) => agents.view(x)) : []);
+  const myAgents = (a) => (a ? agents.forOwner(a.user.id).map((x) => agents.view(x, { owner: true })) : []);
   const views = (ctx, posts) => posts.map((p) => social.view(p, principalOf(current(ctx))));
 
   /** Run a form action; on a rule violation show `onError(message)` instead of a stack. */
@@ -83,7 +83,7 @@ export function registerSocialWeb(router, s) {
     const self = a?.user.id === u.id;
     page(ctx, u.username, SV.profilePage({
       csrf: csrfToken(ctx), who: { username: u.username, displayName: u.profile?.displayName, bio: u.profile?.bio }, isAgent: false,
-      posts: views(ctx, social.feed({ author: `user:${u.username}`, sort: 'new', limit: 30 })), agents: agents.forOwner(u.id).map((x) => agents.view(x)),
+      posts: views(ctx, social.feed({ author: `user:${u.username}`, sort: 'new', limit: 30 })), agents: agents.forOwner(u.id).map((x) => agents.view(x, { owner: self })),
       budget: self ? budgets.balance(`user:${u.username}`) : null, self, signedIn: Boolean(a),
     }), { user: a?.user, wide: true });
   });
@@ -93,13 +93,13 @@ export function registerSocialWeb(router, s) {
     const ag = agents.get(ctx.params.handle);
     const reviews = Object.values(tasks.data).filter((t) => t.claimant?.handle === ag.handle && t.review && tasks.project(t)?.visibility === 'public').map((t) => tasks.view(t, null));
     page(ctx, ag.name, SV.profilePage({
-      csrf: csrfToken(ctx), who: agents.view(ag), isAgent: true, posts: views(ctx, social.feed({ author: `agent:${ag.handle}`, sort: 'new', limit: 30 })),
+      csrf: csrfToken(ctx), who: agents.view(ag, { owner: a?.user.id === ag.owner }), isAgent: true, posts: views(ctx, social.feed({ author: `agent:${ag.handle}`, sort: 'new', limit: 30 })),
       agents: [], budget: a?.user.id === ag.owner ? budgets.balance(`agent:${ag.handle}`) : null, self: a?.user.id === ag.owner, signedIn: Boolean(a), reviews,
     }), { user: a?.user, wide: true });
   });
 
   // ---- your agents --------------------------------------------------------------------------
-  const agentsView = (ctx, a, extra = {}) => page(ctx, 'Agents', SV.agentsPage({ csrf: csrfToken(ctx), agents: myAgents(a), ...extra }), { user: a.user, wide: true, status: extra.status ?? 200 });
+  const agentsView = (ctx, a, extra = {}) => page(ctx, 'Agents', SV.agentsPage({ csrf: csrfToken(ctx), agents: myAgents(a), keys: keys.agentKeysFor(a.user), ...extra }), { user: a.user, wide: true, status: extra.status ?? 200 });
   router.get('/agents', (ctx) => { const a = requireWeb(ctx); if (a) agentsView(ctx, a, { notice: web.NOTICES[ctx.url.searchParams.get('msg')] }); });
 
   router.post('/agents', async (ctx) => {
@@ -129,6 +129,13 @@ export function registerSocialWeb(router, s) {
     }, (err) => agentsView(ctx, a, { error: err.message, status: err.status }));
   });
 
+  router.post('/agents/:handle/sandbox-key/:id/revoke', async (ctx) => {
+    await form(ctx);
+    const a = requireWeb(ctx);
+    if (!a || !requireFresh(ctx, a, '/agents?msg=confirm_again', true)) return;
+    await attempt(ctx, () => { agents.mine(a.user, ctx.params.handle); keys.revokeAgentKey(a.user, ctx.params.id, ctx.ip); redirect(ctx.res, '/agents'); }, (err) => agentsView(ctx, a, { error: err.message, status: err.status }));
+  });
+
   // ---- keys -------------------------------------------------------------------------------------
   const keysView = (ctx, a, extra = {}) => page(ctx, 'Keys', SV.keysPage({ csrf: csrfToken(ctx), ssh: keys.sshFor(a.user), gpg: keys.gpgFor(a.user), agents: myAgents(a), ...extra }), { user: a.user, wide: true, status: extra.status ?? 200 });
   router.get('/keys', (ctx) => { const a = requireWeb(ctx); if (a) keysView(ctx, a, { notice: web.NOTICES[ctx.url.searchParams.get('msg')] }); });
@@ -142,11 +149,11 @@ export function registerSocialWeb(router, s) {
   router.post('/keys/gpg', keyPost((ctx, a, f) => { keys.addGpg(a.user, keys.holder(a.user, f.agent || null, agents), { key: f.key }, ctx.ip); redirect(ctx.res, '/keys'); }));
   router.post('/keys/ssh/remove', keyPost((ctx, a, f) => { keys.removeKey(a.user, 'ssh', f.id, ctx.ip); redirect(ctx.res, '/keys'); }));
   router.post('/keys/gpg/remove', keyPost((ctx, a, f) => { keys.removeKey(a.user, 'gpg', f.id, ctx.ip); redirect(ctx.res, '/keys'); }));
-  router.post('/keys/console', keyPost((ctx, a, f) => { keysView(ctx, a, { newKey: keys.createConsoleKey(a.user, { name: f.name }, ctx.ip) }); }));
+  router.post('/keys/console', keyPost((ctx, a, f) => { keysView(ctx, a, { newKey: keys.createConsoleKey(a.user, { name: f.name }, ctx.ip, { mfaAt: a.session.mfaAt }) }); }));
 
   // ---- projects -----------------------------------------------------------------------------------
   const projectsView = (ctx, a, extra = {}) => page(ctx, 'Projects', SV.projectsPage({
-    csrf: a ? csrfToken(ctx) : null, projects: projects.list(principalOf(a)).map((p) => projects.view(p, principalOf(a))),
+    csrf: a ? csrfToken(ctx) : null, projects: projects.list(principalOf(a)).filter((p) => tasks.access.how(principalOf(a), p) !== 'admin').map((p) => projects.view(p, principalOf(a))),
     teams: a ? teams.forUser(a.user).filter((t) => t.role !== 'member').map((t) => t.name) : [], ...extra,
   }), { user: a?.user, wide: true, status: extra.status ?? 200 });
   router.get('/projects', (ctx) => projectsView(ctx, current(ctx)));
@@ -162,7 +169,7 @@ export function registerSocialWeb(router, s) {
 
   const projectFor = (ctx, a) => {
     const p = projects.find(ctx.params.owner, ctx.params.name);
-    if (!p || !projects.canRead(principalOf(a), p)) throw new HttpError(404, 'not_found', 'No such project.');
+    if (!p || !tasks.access.read(principalOf(a), p)) throw new HttpError(404, 'not_found', 'No such project.');
     return p;
   };
   const projectView = (ctx, a, p, extra = {}) => page(ctx, projects.key(p.owner, p.name), SV.projectPage({
@@ -217,6 +224,7 @@ export function registerSocialWeb(router, s) {
     });
     tasks.submitReview(principalOf(a), ctx.params.id, { verdict: f.verdict, summary: f.summary, findings });
   }));
+  router.post('/tasks/:id/decision', taskPost((ctx, a, f) => tasks.decideReview(a.user, ctx.params.id, f.accept === 'yes')));
   router.post('/tasks/:id/findings/:finding', taskPost((ctx, a, f) => tasks.decideFinding(a.user, ctx.params.id, ctx.params.finding, f.accept === 'yes')));
 
   // ---- support (tickets, as their reporters and tenants see them) ---------------------------------

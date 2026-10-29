@@ -13,6 +13,9 @@ import { principalKey } from './principal.js';
 
 const TAG_RE = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const EPOCH = 1_700_000_000;
+// MEDIA-1: a conservative daily allowance per account; config.social.mediaDailyBytes moves the byte figure.
+const MEDIA_DAILY_BYTES = 100 * 1024 * 1024;
+const MEDIA_DAILY_FILES = 200;
 
 /** Recognise media by its bytes, never by the name or the declared type. */
 export function sniffMedia(buf) {
@@ -73,6 +76,11 @@ export class SocialService {
 
   updateProfile(user, { displayName, bio }) {
     if (displayName !== undefined && !/^[A-Za-z][A-Za-z0-9 .'-]{0,39}$/.test(displayName)) throw new HttpError(400, 'bad_display_name', 'Display names start with a letter, max 40 characters (used in agent bylines).');
+    // SOC-1: a byline names its human by this name, so it must name one person: not another's username or display name.
+    const want = displayName?.toLowerCase();
+    if (want && Object.values(this.store.data.users).some((u) => u.id !== user.id && (u.username.toLowerCase() === want || u.profile?.displayName?.toLowerCase() === want))) {
+      throw new HttpError(409, 'display_name_taken', 'Someone already goes by that name. Pick another; bylines use it to say whose agent wrote what.');
+    }
     this.store.tx((d) => {
       const u = d.users[user.id];
       u.profile = { ...(u.profile ?? {}), ...(displayName !== undefined ? { displayName } : {}), ...(bio !== undefined ? { bio: String(bio).slice(0, 1000) } : {}) };
@@ -87,6 +95,15 @@ export class SocialService {
     if (buf.length > this.config.social.maxMediaBytes) throw new HttpError(413, 'too_large', `Media files are at most ${Math.round(this.config.social.maxMediaBytes / 1048576)} MB.`);
     const kind = sniffMedia(buf);
     if (!kind) throw new HttpError(415, 'unsupported_media', 'Upload PNG, JPEG, GIF, WebP, MP4, WebM, MP3, Ogg or PDF. SVG and HTML are not accepted.');
+    // MEDIA-1: everything uploaded is public and kept, so what one account may add in a day is bounded.
+    const who = principalKey(principal);
+    const day = new Date(this.clock()).toISOString().slice(0, 10);
+    const used = this.store.data.mediaDaily?.[who]?.day === day ? this.store.data.mediaDaily[who] : { day, bytes: 0, files: 0 };
+    const cap = this.config.social.mediaDailyBytes ?? MEDIA_DAILY_BYTES;
+    if (used.bytes + buf.length > cap || used.files >= MEDIA_DAILY_FILES) {
+      throw new HttpError(429, 'media_quota', `Uploads are limited to ${Math.round(cap / 1048576)} MB and ${MEDIA_DAILY_FILES} files a day for each account. Try again tomorrow.`);
+    }
+    this.store.tx((d) => { (d.mediaDaily ??= {})[who] = { day, bytes: used.bytes + buf.length, files: used.files + 1 }; });
     const id = sha256(buf);
     this.store.writeBlob(id, buf);
     if (!this.store.data.media[id]) this.store.tx((d) => { d.media[id] = { ...kind, size: buf.length, by: principalKey(principal), at: this.clock() }; });
@@ -94,7 +111,7 @@ export class SocialService {
   }
 
   mediaView(id) {
-    const m = this.store.data.media[id];
+    const m = Object.hasOwn(this.store.data.media, id) ? this.store.data.media[id] : null;
     return m ? { id, type: m.type, kind: m.kind, size: m.size, url: `/media/${id}.${m.ext}` } : null;
   }
 
@@ -116,7 +133,7 @@ export class SocialService {
     if (link !== undefined && link !== null && link !== '') {
       try { const u = new URL(link); if (!/^https?:$/.test(u.protocol)) throw new Error(); } catch { throw new HttpError(400, 'bad_link', 'Links must be http(s) URLs.'); }
     }
-    for (const m of media) if (!this.store.data.media[m]) throw new HttpError(400, 'bad_media', `Unknown media ${m}; upload it first.`);
+    for (const m of media) if (!Object.hasOwn(this.store.data.media, m)) throw new HttpError(400, 'bad_media', `Unknown media ${m}; upload it first.`);
     const post = {
       id: crypto.randomBytes(6).toString('hex'), kind, author, title, body, link: link || null,
       tags: parent ? [] : normalizeTags([...(tags ?? []), ...(body.match(/(?:^|\s)#([a-z0-9][a-z0-9-]{0,39})/gi) ?? []).map((t) => t.trim())]),
@@ -143,7 +160,7 @@ export class SocialService {
   }
 
   get(id) {
-    const p = this.posts[id];
+    const p = Object.hasOwn(this.posts, id) ? this.posts[id] : null; // an id like "constructor" is not a post
     if (!p) throw new HttpError(404, 'post_not_found', 'No such post.');
     return p;
   }
@@ -187,6 +204,16 @@ export class SocialService {
     const top = root.root ? this.get(root.root) : root;
     const replies = Object.values(this.posts).filter((p) => p.root === top.id).sort((a, b) => a.createdAt - b.createdAt);
     return { root: top, replies };
+  }
+
+  /** The replies beneath a post, never the post itself: all of a root's replies, or the ones under a reply. */
+  replies(id) {
+    const p = this.get(id);
+    const top = p.root ? this.get(p.root) : p;
+    const all = Object.values(this.posts).filter((x) => x.root === top.id).sort((a, b) => a.createdAt - b.createdAt);
+    if (!p.root) return all;
+    const under = new Set([p.id]);
+    return all.filter((x) => under.has(x.parent) && under.add(x.id));
   }
 
   /** Forums: tags with how many threads and when they were last active. */

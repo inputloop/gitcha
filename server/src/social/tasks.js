@@ -4,22 +4,26 @@
 // agents' work meets in a project that has task tracking on, a Second Reader
 // task is opened. Only an agent that opted in to review this kind of work,
 // and that is independent of both (not one of them, not owned by either
-// owner), may claim it. Its review and findings earn budget; findings count
-// once the project's maintainers accept them.
+// owner), may claim it. Its review and findings earn budget once a maintainer
+// accepts them, and never a maintainer who owns the reviewing agent: nobody
+// decides on their own agent's work.
 //
 // Claims and changes to tasks go through the GraphQL API (or the web UI).
 import crypto from 'node:crypto';
 import { HttpError } from '../errors.js';
 import { byline } from './agents.js';
 import { principalKey } from './principal.js';
+import { ProjectAccess } from './access.js';
 
 const CLAIM_TTL = 72 * 3600_000;
 const SEVERITIES = ['low', 'medium', 'high'];
 const VERDICTS = ['approve', 'request_changes', 'comment'];
 
 export class TaskService {
-  constructor({ store, config, projects, agents, budgets, nexttime, clock = Date.now }) {
+  constructor({ store, config, projects, teams, agents, budgets, nexttime, clock = Date.now }) {
     Object.assign(this, { store, config, projects, agents, budgets, nexttime, clock });
+    this.access = new ProjectAccess({ store, projects, teams, clock });
+    this.mirrors = new Map(); // task id -> the create call still in flight
     store.data.tasks ??= {};
     projects.onWorkedTogether = (p, info) => this.secondReaderFor(p, info);
   }
@@ -29,7 +33,7 @@ export class TaskService {
   url(t) { return `${this.config.publicUrl}/tasks/${t.id}`; }
 
   get(id) {
-    const t = this.data[id];
+    const t = Object.hasOwn(this.data, id) ? this.data[id] : null;
     if (!t) throw new HttpError(404, 'task_not_found', 'No such task.');
     return t;
   }
@@ -38,7 +42,7 @@ export class TaskService {
 
   readable(principal, t) {
     const p = this.project(t);
-    if (!p || !this.projects.canRead(principal, p)) throw new HttpError(404, 'task_not_found', 'No such task.');
+    if (!p || !this.access.read(principal, p)) throw new HttpError(404, 'task_not_found', 'No such task.');
     return p;
   }
 
@@ -57,19 +61,49 @@ export class TaskService {
       agents: (t.agents ?? []).map((h) => this.agentRef(h)), commits: t.commits ?? [],
       claimant: t.claimant ? { ...t.claimant, ...(t.claimant.kind === 'agent' ? this.agentRef(t.claimant.handle) : {}) } : null,
       claimExpiresAt: t.claimExpiresAt ?? null, review: t.review ?? null,
-      nexttime: t.nexttime ?? null,
+      nexttime: this.nexttimeView(t, p, principal),
       canDecide: Boolean(principal?.kind === 'user' && p && this.projects.isMaintainer(principal.user, p)),
     };
   }
 
   newId() { return `t_${crypto.randomBytes(6).toString('hex')}`; }
 
+  /** What a reader sees of the NextTime side: the refusal texts are for the project's maintainers only (NXT-2). */
+  nexttimeView(t, p, principal) {
+    if (!t.nexttime) return null;
+    if (principal?.kind === 'user' && p && this.projects.isMaintainer(principal.user, p)) return t.nexttime;
+    const { error, completeError, ...rest } = t.nexttime;
+    return { ...rest, ...(error || completeError ? { refused: true } : {}) };
+  }
+
+  /**
+   * Copy a task to NextTime as a request. Only tasks of public projects go (NXT-1): the board
+   * is shared, so a private project's titles, bodies and bylines never leave this server.
+   */
   mirror(t) {
     if (!this.nexttime?.configured) return;
-    const key = t.project;
-    this.nexttime.createRequest(t, key)
+    if (this.project(t)?.visibility !== 'public') return;
+    const call = this.nexttime.createRequest({ ...t, url: this.url(t) }, t.project)
       .then((id) => { this.store.tx((d) => { d.tasks[t.id].nexttime = { requestId: id, mirroredAt: this.clock() }; }); })
-      .catch((err) => { this.store.tx((d) => { d.tasks[t.id].nexttime = { error: String(err.message).slice(0, 300), at: this.clock() }; }); });
+      .catch((err) => { this.store.tx((d) => { d.tasks[t.id].nexttime = { error: String(err.message).slice(0, 300), at: this.clock() }; }); })
+      .finally(() => this.mirrors.delete(t.id));
+    this.mirrors.set(t.id, call);
+  }
+
+  /** Tell NextTime how a closed task ended, once its request exists and only once (NXT-2). */
+  settleNextTime(id) {
+    const wait = this.mirrors.get(id);
+    if (wait) { wait.then(() => this.settleNextTime(id)); return; } // closed while the create was in flight
+    const t = this.get(id);
+    const rid = t.nexttime?.requestId;
+    if (!rid || !this.nexttime?.configured || t.nexttime.completedAt || t.nexttime.cancelledAt || t.nexttime.completeTriedAt) return;
+    const note = (patch) => this.store.tx((d) => { d.tasks[id].nexttime = { ...d.tasks[id].nexttime, ...patch }; });
+    if (t.status === 'closed') this.nexttime.cancel(rid).then(() => note({ cancelledAt: this.clock() })).catch(() => {});
+    else if (t.status === 'done' && this.nexttime.completeOnDone) {
+      this.nexttime.complete(rid)
+        .then(() => note({ completedAt: this.clock(), completeError: null }))
+        .catch((err) => note({ completeError: String(err.message).slice(0, 300), completeTriedAt: this.clock() }));
+    }
   }
 
   // ---- creating ---------------------------------------------------------------------------
@@ -112,13 +146,18 @@ export class TaskService {
     return t;
   }
 
-  /** Open Second Reader tasks this agent may claim. */
-  pool(agent) {
+  /**
+   * Open Second Reader tasks this agent may claim and `principal` may see. A task of a
+   * private project is listed only to people who belong to it (a site administrator opens
+   * one by its id, which tells the owner, rather than finding it in a list).
+   */
+  pool(agent, principal) {
     return Object.values(this.data).filter((t) => {
       if (t.kind !== 'second_reader' || t.status !== 'open') return false;
       const p = this.project(t);
+      if (!p || !['public', 'member'].includes(this.access.how(principal, p))) return false;
       const involved = t.agents.map((h) => this.store.data.agents[h]).filter(Boolean);
-      return p && this.agents.eligible(agent, { involved, project: p, tags: t.tags });
+      return this.agents.eligible(agent, { involved, project: p, tags: t.tags });
     });
   }
 
@@ -190,24 +229,42 @@ export class TaskService {
     });
     const agent = this.store.data.agents[t.claimant.handle];
     const owner = this.agents.ownerOf(agent);
-    const review = { verdict, summary: summary.slice(0, 20_000), findings: fs, at: this.clock(), by: this.agentRef(agent.handle).byline };
+    const review = { verdict, summary: summary.slice(0, 20_000), findings: fs, at: this.clock(), by: this.agentRef(agent.handle).byline, status: 'proposed' };
     this.store.tx((d) => {
       Object.assign(d.tasks[id], { status: 'reviewed', review });
       d.agents[agent.handle].stats.reviews += 1;
     });
-    this.budgets.award('review', { agent: agent.handle, ownerKey: `user:${owner.username}` }, `review:${id}`);
     try { this.onReviewed?.(this.get(id)); } catch { /* activity posts never fail a review */ }
+    return this.get(id);
+  }
+
+  /** A maintainer may decide on a review or finding unless they own the agent that wrote it. */
+  requireIndependent(user, t) {
+    const p = this.project(t);
+    if (!p || !this.projects.isMaintainer(user, p)) throw new HttpError(403, 'project_forbidden', 'Only the project\'s maintainers accept or reject reviews and findings.');
+    const agent = this.store.data.agents[t.claimant?.handle];
+    if (agent && agent.owner === user.id) throw new HttpError(403, 'own_agent', 'Nobody decides on their own agent\'s work; another maintainer of the project does.');
+    return agent;
+  }
+
+  /** Accept (the review pays) or reject a submitted review. */
+  decideReview(user, id, accept) {
+    const t = this.get(id);
+    const agent = this.requireIndependent(user, t);
+    if (!t.review) throw new HttpError(409, 'no_review', 'Nothing has been submitted to decide on.');
+    const state = t.review.status ?? 'accepted'; // a review from before reviews waited for a decision was paid when it came in
+    if (state !== 'proposed') throw new HttpError(409, 'decided', `That review was already ${state}.`);
+    this.store.tx((d) => { Object.assign(d.tasks[id].review, { status: accept ? 'accepted' : 'rejected', decidedBy: user.username, decidedAt: this.clock() }); });
+    if (accept) this.budgets.award('review', { agent: agent.handle, ownerKey: `user:${this.agents.ownerOf(agent).username}` }, `review:${id}`);
     return this.get(id);
   }
 
   decideFinding(user, id, findingId, accept) {
     const t = this.get(id);
-    const p = this.project(t);
-    if (!p || !this.projects.isMaintainer(user, p)) throw new HttpError(403, 'project_forbidden', 'Only the project\'s maintainers accept or reject findings.');
+    const agent = this.requireIndependent(user, t);
     const f = t.review?.findings.find((x) => x.id === findingId);
     if (!f) throw new HttpError(404, 'finding_not_found', 'No such finding.');
     if (f.status !== 'proposed') throw new HttpError(409, 'decided', `That finding was already ${f.status}.`);
-    const agent = this.store.data.agents[t.claimant.handle];
     const owner = this.agents.ownerOf(agent);
     this.store.tx((d) => {
       const ff = d.tasks[id].review.findings.find((x) => x.id === findingId);
@@ -223,17 +280,9 @@ export class TaskService {
     const p = this.project(t);
     if (!p || !this.projects.isMaintainer(user, p)) throw new HttpError(403, 'project_forbidden', 'Only the project\'s maintainers close tasks.');
     if (!['done', 'closed'].includes(status)) throw new HttpError(400, 'bad_status', 'Close as done or closed.');
+    if (['done', 'closed'].includes(t.status)) return t; // already finished: a second close changes nothing and tells NextTime nothing
     this.store.tx((d) => Object.assign(d.tasks[id], { status, closedAt: this.clock(), closedBy: user.username }));
-    const rid = t.nexttime?.requestId;
-    if (rid && this.nexttime?.configured) {
-      const note = (patch) => this.store.tx((d) => { d.tasks[id].nexttime = { ...d.tasks[id].nexttime, ...patch }; });
-      if (status === 'closed') this.nexttime.cancel(rid).then(() => note({ cancelledAt: this.clock() })).catch(() => {});
-      else if (this.nexttime.completeOnDone) {
-        this.nexttime.complete(rid)
-          .then(() => note({ completedAt: this.clock(), completeError: null }))
-          .catch((err) => note({ completeError: String(err.message).slice(0, 300), completeTriedAt: this.clock() }));
-      }
-    }
+    this.settleNextTime(id);
     return this.get(id);
   }
 

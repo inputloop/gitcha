@@ -143,3 +143,31 @@ test('the account page answers, and its forms work: email, check toggles, recove
   assert.equal(srv.auth.checkSettings(srv.store.userByName('bob')).new_network, false);
   assert.match((await B.post('/account/recovery-codes', {})).text, /recovery codes/i);
 });
+
+test('K4: sandbox keys are listed on the agents page and revoked one at a time', async () => {
+  const alice = srv.store.userByName('alice');
+  const A = browser(`gitcha_sid=${srv.auth.createSession(alice, { kind: 'web', name: 'keys', ip: '127.0.0.1' }).token}`);
+  srv.budgets.entry('agent:ada', 3, 'seed');
+  const one = srv.keys.createAgentKey(alice, srv.agents.get('ada'), { purpose: 'sandbox' }, '127.0.0.1');
+  const two = srv.keys.createAgentKey(alice, srv.agents.get('ada'), { purpose: 'sandbox' }, '127.0.0.1');
+  const page = (await A.get('/agents')).text;
+  assert.match(page, new RegExp(`/agents/ada/sandbox-key/${one.id}/revoke`));
+  assert.match(page, new RegExp(`/agents/ada/sandbox-key/${two.id}/revoke`));
+  assert.doesNotMatch(page, /gak_/, 'the page never shows a secret again');
+  assert.equal((await A.post(`/agents/ada/sandbox-key/${one.id}/revoke`, {})).status, 303);
+  assert.equal(srv.principals.fromToken(one.token, '127.0.0.1', { purpose: 'sandbox' }), null);
+  assert.equal(srv.principals.fromToken(two.token, '127.0.0.1', { purpose: 'sandbox' })?.agent.handle, 'ada');
+  assert.doesNotMatch((await A.get('/agents')).text, new RegExp(`sandbox-key/${one.id}/revoke`));
+  const B = browser(`gitcha_sid=${srv.auth.createSession(srv.store.userByName('bob'), { kind: 'web', name: 'keys', ip: '127.0.0.1' }).token}`);
+  assert.equal((await B.post(`/agents/ada/sandbox-key/${two.id}/revoke`, {})).status, 403, 'not bob\'s agent');
+});
+
+test('KEY-2: the console key form stamps the key with the code time of the session that asked', async () => {
+  const made = srv.auth.createSession(srv.store.userByName('alice'), { kind: 'web', name: 'form', ip: '127.0.0.1' });
+  const typed = made.session.mfaAt;
+  srv.clock.advance(5 * 60_000);
+  const A = browser(`gitcha_sid=${made.token}`);
+  assert.equal((await A.post('/keys/console', { name: 'web-minted' })).status, 200);
+  const child = Object.values(srv.store.data.sessions).find((x) => x.name === 'console: web-minted');
+  assert.equal(child.mfaAt, typed, 'five minutes older than "now": no new window');
+});

@@ -188,7 +188,10 @@ test('Second Reader: only independent, opted-in agents claim; reviews and accept
   assert.equal(rev.review.by, 'Cora (for carol, claude-haiku-5-5)');
 
   const before = ok(await gql(tc, '{ budget(account:"agent:cora") { balance } }')).budget.balance;
-  assert.equal(before, 10, 'review award');
+  assert.equal(before, 0, 'a review pays when a maintainer accepts it, not when it is written');
+  assert.equal(code(await gql(tc, `mutation { decideReview(task:"${sr.id}", accept:true) { status } }`)), 'project_forbidden');
+  ok(await gql(ta, `mutation { decideReview(task:"${sr.id}", accept:true) { status } }`));
+  assert.equal(ok(await gql(tc, '{ budget(account:"agent:cora") { balance } }')).budget.balance, 10, 'review award');
   assert.equal(code(await gql(tc, `mutation { decideFinding(task:"${sr.id}", finding:"f1", accept:true) { status } }`)), 'project_forbidden');
   ok(await gql(ta, `mutation { decideFinding(task:"${sr.id}", finding:"f1", accept:true) { status } }`));
   assert.equal(code(await gql(ta, `mutation { decideFinding(task:"${sr.id}", finding:"f1", accept:true) { status } }`)), 'decided');
@@ -198,13 +201,14 @@ test('Second Reader: only independent, opted-in agents claim; reviews and accept
   assert.equal(ok(await gql(tc, '{ budget(account:"user:carol") { balance } }')).budget.balance, 15, 'the owner earns too');
   assert.equal(code(await gql(ta, '{ budget(account:"agent:cora") { balance } }')), 'not_yours');
 
-  // With a budget, Cora can now have a sandbox key (a sensitive action: fresh code); it acts only as Cora.
+  // With a budget, Cora can now have a sandbox key (a sensitive action: fresh code); the sandbox door resolves it as Cora and nothing else does.
   await fetch(`${srv.url}/api/v1/auth/step-up`, { method: 'POST', headers: { Authorization: `Bearer ${tc}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ code: carol.nextCode() }) });
   const key = ok(await gql(tc, 'mutation { createAgentKey(agent:"cora", purpose:"sandbox") { token } }')).createAgentKey.token;
-  const me = ok(await gql(key, '{ me { kind agent { handle } } }')).me;
-  assert.deepEqual(me, { kind: 'agent', agent: { handle: 'cora' } });
-  assert.equal(code(await gql(key, 'mutation { createConsoleKey(name:"x") { token } }')), 'people_only');
-  assert.equal(code(await gql(key, 'mutation { registerAgent(handle:"evil", name:"E", model:"m") { handle } }')), 'people_only');
+  // The key opens the sandbox door and nothing else: GraphQL refuses it (KEY-1; test/keys-doors.test.js has the rest).
+  const refused = await gql(key, '{ me { kind agent { handle } } }');
+  assert.equal(refused.status, 401);
+  assert.equal(refused.error, 'unauthenticated');
+  assert.equal(srv.principals.fromToken(key, '127.0.0.1', { purpose: 'sandbox' }).agent.handle, 'cora');
   const reviewPost = ok(await gql(null, '{ agent(handle:"cora") { posts { title tags } } }')).agent.posts[0];
   assert.match(reviewPost.title, /Second Reader review of alice\/demo: request changes/);
 });
@@ -223,7 +227,8 @@ test('social: posts, tags become forums, threads, votes, media', async () => {
   const v = ok(await gql(tc, `mutation { vote(post:"${p.id}", value:1) { score replies } }`)).vote;
   assert.deepEqual(v, { score: 2, replies: 1 });
   const thread = ok(await gql(null, `{ post(id:"${p.id}") { thread { id } } }`)).post.thread;
-  assert.equal(thread.length, 2);
+  assert.equal(thread.length, 1, 'the thread of a post is its replies, not the post itself');
+  assert.equal(thread[0].id, r.id);
   const topics = ok(await gql(null, '{ topics { tag threads } }')).topics;
   assert.ok(topics.find((t) => t.tag === 'parsers').threads >= 2);
   const forum = ok(await gql(null, '{ feed(tag:"parsers", sort:NEW) { title } }')).feed.map((x) => x.title);
