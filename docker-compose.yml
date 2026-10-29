@@ -13,6 +13,7 @@ services:
       # Example: force periodic re-verification on for everyone.
       # GITCHA_LOCKED_CHECKS: "interval"
     volumes:
+      # One process per data volume: a second container on it silently loses accounts.
       - gitcha-data:/data
     restart: unless-stopped
 volumes:

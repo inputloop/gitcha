@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 # Gitcha registry server
 FROM node:22-alpine
+# The server runs git (smart HTTP) and gpg (signature checks); the Alpine node image has neither. SSH is not in this image.
+RUN apk add --no-cache git git-daemon gnupg
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY server/package.json server/

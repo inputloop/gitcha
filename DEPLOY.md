@@ -74,6 +74,17 @@ be named as such in alphaOS's security model.
 4. Open the public URL and register. **The first account becomes the administrator.**
 5. Set `GITCHA_OPEN_REGISTRATION=false` afterwards if sign-up should be closed.
 
+### Running it
+
+- **Firewall:** open 443 and 80 for the proxy, and 22 if you offer git over SSH; nothing else (4873 stays on loopback).
+- **`GITCHA_TRUST_PROXY=true`** makes Gitcha believe `X-Forwarded-For`; turn it on only when the proxy on this host is the one way in, or anyone can choose the address that rate limits and the new-network check see.
+- **Upgrades:** the package restarts a running `gitcha` itself (`systemctl try-restart`); if you installed the new code any other way, run `systemctl restart gitcha`, or a security fix is installed and not live.
+- **One process per data directory:** the database is one file held in memory, so a second server on the same directory (a hand-started `gitcha-server` beside the unit, a second container on the volume) silently loses accounts.
+- **`GITCHA_LOCKED_CHECKS`** is a comma list of the two-factor checks people cannot turn off (`interval`, `new_network`, `sensitive`); it is empty unless you set it.
+- **Limits in the units:** the server unit caps memory at 2G and tasks at 512, the runner's at 6G and 1024, and both allow only `AF_UNIX`, `AF_INET` and `AF_INET6`. They are the keepers' numbers: change them with `systemctl edit`. The runner's unit also drops every capability, which has not been tried against a real bContain job yet.
+- **Settings:** `gitcha.env` lists every setting the server reads, with its default on a `#` line.
+- **Docker:** the image has `git` and `gpg`, no sshd, so there is no git over SSH there.
+
 ### TLS and DNS
 
 `/usr/share/doc/inputloop-gitcha/Caddyfile.example` puts Caddy in front: a wildcard

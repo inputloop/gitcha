@@ -19,6 +19,17 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# Not tried against a real bContain job yet: if a job proves it needs a capability or another address family, relax that line.
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadWritePaths=/var/lib/gitcha-runner
+# Ceilings (the keepers' numbers): two VMs of 2 GiB each by default, and what bContain starts around them.
+MemoryMax=6G
+TasksMax=1024
 [Install]
 WantedBy=multi-user.target

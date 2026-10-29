@@ -23,6 +23,10 @@ ProtectControlGroups=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 ReadWritePaths=/var/lib/gitcha
+# Ceilings (the keepers' numbers): the whole database is held in memory, and git and gpg run as children.
+MemoryMax=2G
+TasksMax=512
 [Install]
 WantedBy=multi-user.target
