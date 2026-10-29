@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { startServer, createUser, api, deviceLogin } from './helpers.js';
 import { totp } from '../src/totp.js';
+import { sha256 } from '../src/crypto.js';
 
 const HOUR = 3600_000;
 
@@ -359,5 +360,31 @@ test('AUTH-19: a lockout leaves one audit row for the owner, not one per refused
     const rows = srv.store.auditFor(id, 100).filter((r) => r.event === 'login.rate_limited');
     assert.equal(rows.length, 1, 'eight refused requests, one row');
     assert.equal(srv.store.auditFor(id, 100).filter((r) => r.event === 'login.bad_password').length, 10);
+  } finally { await srv.close(); }
+});
+
+test('AUTH-12: recovery codes are 80 bits, stored as keyed hashes, and the old 40-bit ones still work once', async () => {
+  const srv = await startServer();
+  try {
+    const reg = srv.auth.register({ username: 'carol', password: 'a long passphrase here', ip: 'x' });
+    const { recoveryCodes } = srv.auth.confirmEnrollment({ enrollToken: reg.enrollToken, code: totp(reg.secret, { now: srv.clock() }), ip: 'x' });
+    for (const c of recoveryCodes) assert.match(c, /^[a-f0-9]{5}(-[a-f0-9]{5}){3}$/, 'four groups of five hex digits');
+    const user = srv.store.userByName('carol');
+    // Nothing in the database is a bare SHA-256 of a code: an offline guesser gets nothing without the server key.
+    const bare = new Set(recoveryCodes.map((c) => sha256(c)));
+    assert.ok(user.recoveryCodes.every((h) => h.startsWith('hm1.') && !bare.has(h)), user.recoveryCodes[0]);
+    // A different server key makes different hashes of the same code.
+    const other = await startServer();
+    try {
+      assert.notEqual(other.auth.recoveryHash(recoveryCodes[0]), user.recoveryCodes[0]);
+    } finally { await other.close(); }
+    // It works once, typed with or without dashes and spaces and in capitals.
+    const token = (await deviceLogin(srv, { username: 'carol', password: 'a long passphrase here', nextCode: () => { srv.clock.advance(31_000); return totp(reg.secret, { now: srv.clock() }); } }));
+    assert.equal((await api(srv.url, 'POST', '/api/v1/auth/step-up', { token, body: { code: recoveryCodes[1].toUpperCase().replaceAll('-', ' ') } })).body.method, 'recovery');
+    assert.equal((await api(srv.url, 'POST', '/api/v1/auth/step-up', { token, body: { code: recoveryCodes[1] } })).status, 401);
+    // A code issued before this change (40 bits, plain SHA-256) is still honoured once.
+    await srv.store.tx((d) => { d.users[user.id].recoveryCodes.push(sha256('abcde-12345')); });
+    assert.equal((await api(srv.url, 'POST', '/api/v1/auth/step-up', { token, body: { code: 'abcde-12345' } })).body.method, 'recovery');
+    assert.equal((await api(srv.url, 'POST', '/api/v1/auth/step-up', { token, body: { code: 'abcde-12345' } })).status, 401);
   } finally { await srv.close(); }
 });

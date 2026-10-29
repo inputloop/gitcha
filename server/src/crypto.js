@@ -82,8 +82,18 @@ export function createSecretBox(keyB64) {
 }
 
 export function generateRecoveryCodes(n = 10) {
+  // 80 bits each (AUTH-12): four groups of five hex digits. Codes of the old 40-bit shape are still accepted until
+  // their owner regenerates them.
   return Array.from({ length: n }, () => {
-    const raw = crypto.randomBytes(5).toString('hex');
-    return `${raw.slice(0, 5)}-${raw.slice(5)}`;
+    const raw = crypto.randomBytes(10).toString('hex');
+    return [0, 5, 10, 15].map((k) => raw.slice(k, k + 5)).join('-');
   });
+}
+
+/** What a typed recovery code means: lower case, no spaces or dashes, in its dashed form; null when it is not one. */
+export function normalizeRecoveryCode(input) {
+  const bare = String(input ?? '').toLowerCase().replace(/[\s-]/g, '');
+  if (/^[a-f0-9]{10}$/.test(bare)) return `${bare.slice(0, 5)}-${bare.slice(5)}`;
+  if (/^[a-f0-9]{20}$/.test(bare)) return [0, 5, 10, 15].map((k) => bare.slice(k, k + 5)).join('-');
+  return null;
 }

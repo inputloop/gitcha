@@ -138,7 +138,7 @@ export const codePage = ({ csrf, error, action, title, message, next = '', reaso
   ${alert(error)}
   <form method="post" action="${action}">
     ${csrfField(csrf)}<input type="hidden" name="next" value="${next}">
-    <label>Authenticator code <input class="otp" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="11" required autofocus placeholder="123 456"></label>
+    <label>Authenticator code <input class="otp" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="24" required autofocus placeholder="123 456"></label>
     <button class="btn block">Verify</button>
   </form>
   <p class="muted center">Lost your phone? Enter one of your recovery codes instead.</p>
@@ -241,7 +241,7 @@ ${alert(notice, 'info')}${alert(error)}
           <span><strong>${label}</strong>${key === 'interval' ? h` <span class="muted">(every ${hours(checks.intervalMs)})</span>` : ''}${locked ? h` <span class="badge">required by admin</span>` : ''}<br><span class="muted small">${help}</span></span>
         </label>`;
       })}
-      <label>Authenticator code <input class="otp" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="16" required></label>
+      <label>Authenticator code <input class="otp" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="24" required></label>
       <button class="btn">Save check settings</button>
     </form>
     <p class="small muted">This browser last verified ${ago(mfaState.verifiedAt)}${mfaState.nextCheckAt ? h`; next check ${ago(mfaState.nextCheckAt)}` : ''}.</p>

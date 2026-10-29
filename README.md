@@ -222,8 +222,8 @@ only to `/var/lib/gitcha`.
   and admins can lock checks on with `GITCHA_LOCKED_CHECKS`.
 - 🔒 **Secrets encrypted at rest.** Passwords are hashed with scrypt *and then*
   sealed with AES-256-GCM. TOTP secrets are AES-256-GCM encrypted. Session,
-  device, console, runner and agent tokens and recovery codes are stored only
-  as hashes.
+  device, console, runner and agent tokens are stored only as hashes; recovery
+  codes only as keyed hashes (HMAC with the server key).
 
 **The forge**
 
@@ -1113,7 +1113,9 @@ See [SECURITY.md](SECURITY.md) for the full model. In short:
   `AES-256-GCM(scrypt(password))`. Clients never write them to disk.
 - **TOTP secrets:** AES-256-GCM encrypted. Codes are single-use and
   rate-limited.
-- **Tokens and recovery codes:** stored only as SHA-256 hashes.
+- **Tokens:** stored only as SHA-256 hashes. **Recovery codes** (80 bits each) are
+  stored as HMAC-SHA-256 under a key derived from the server key; codes issued
+  before that (40 bits, plain SHA-256) still work until you generate a new set.
 - **2FA:** required to sign in on the web and in the CLI, and to set up any
   device, including the Claude extension's and C4OK's. Follow-up checks are
   server-enforced, user-toggleable with a fresh code, and admin-lockable.

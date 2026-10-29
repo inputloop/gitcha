@@ -3,7 +3,7 @@
 // Accounts, two-factor enrollment, login, sessions/device tokens and the
 // intermittent ("step-up") 2FA policy. Pure logic: no HTTP in here.
 import crypto from 'node:crypto';
-import { hashPassword, verifyPasswordAsync, DUMMY_HASH, randomToken, sha256, createSecretBox, generateRecoveryCodes } from './crypto.js';
+import { hashPassword, verifyPasswordAsync, DUMMY_HASH, randomToken, sha256, createSecretBox, generateRecoveryCodes, normalizeRecoveryCode, deriveKey, hmac } from './crypto.js';
 import { generateSecret, verifyTotp, otpauthUrl } from './totp.js';
 import { HttpError, mfaRequired } from './errors.js';
 import { parseIp } from './http.js';
@@ -74,6 +74,7 @@ export class AuthService {
     this.config = config;
     this.clock = clock;
     this.box = createSecretBox(config.secretKey);
+    this.recoveryKey = deriveKey(config.secretKey, 'recovery codes v1');
     this.tickets = new Map(); // password-ok, awaiting second factor
     const lim = (max, mins) => new RateLimiter({ max, windowMs: mins * 60_000, clock });
     this.loginLimiter = lim(10, 15); // wrong passwords per address and username
@@ -178,7 +179,7 @@ export class AuthService {
     }
     const codes = generateRecoveryCodes();
     this.store.tx((d) => {
-      Object.assign(d.users[user.id], { status: 'active', totpLastStep: step, recoveryCodes: codes.map((c) => sha256(c)), activatedAt: this.clock() });
+      Object.assign(d.users[user.id], { status: 'active', totpLastStep: step, recoveryCodes: codes.map((c) => this.recoveryHash(c)), activatedAt: this.clock() });
       delete d.sessions[sha256(enrollToken)];
       this.store.audit({ userId: user.id, event: 'account.activated', ip });
     });
@@ -187,6 +188,8 @@ export class AuthService {
   }
 
   // ---- second-factor verification ----------------------------------------
+
+  recoveryHash(normalized) { return `hm1.${hmac(this.recoveryKey, normalized)}`; }
 
   /** The second-factor lock is per user and per network (AUTH-6): a stranger's guesses lock the stranger, not the owner. */
   mfaKey(user, ip) { return `mfa:${user.id}:${networkOf(ip)}`; }
@@ -207,10 +210,11 @@ export class AuthService {
         this.mfaLimiter.reset(lockKey);
         return 'totp';
       }
-    } else if (/^[a-f0-9]{5}-?[a-f0-9]{5}$/.test(code)) {
-      const normalized = code.includes('-') ? code : `${code.slice(0, 5)}-${code.slice(5)}`;
-      const h = sha256(normalized);
-      if (user.recoveryCodes.includes(h)) {
+    } else if (normalizeRecoveryCode(code)) {
+      // Stored as a keyed hash (the server key); the 40-bit codes issued before are plain SHA-256 and work until regenerated.
+      const normalized = normalizeRecoveryCode(code);
+      const h = [this.recoveryHash(normalized), sha256(normalized)].find((x) => user.recoveryCodes.includes(x));
+      if (h) {
         this.store.tx((d) => {
           d.users[user.id].recoveryCodes = d.users[user.id].recoveryCodes.filter((x) => x !== h);
           this.store.audit({ userId: user.id, event: 'mfa.recovery_code_used', ip, remaining: d.users[user.id].recoveryCodes.length });
@@ -441,7 +445,7 @@ export class AuthService {
   regenerateRecoveryCodes(user, ip) {
     const codes = generateRecoveryCodes();
     this.store.tx((d) => {
-      d.users[user.id].recoveryCodes = codes.map((c) => sha256(c));
+      d.users[user.id].recoveryCodes = codes.map((c) => this.recoveryHash(c));
       this.store.audit({ userId: user.id, event: 'mfa.recovery_codes_regenerated', ip });
     });
     return codes;

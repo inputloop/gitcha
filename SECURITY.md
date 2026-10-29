@@ -14,7 +14,7 @@ Gitcha server**.
 | Account password | server `db.json` | scrypt (N=2¹⁵, r=8, p=1, 16-byte salt), **then encrypted** with AES-256-GCM using the server key. The plaintext password is never stored anywhere. |
 | TOTP (authenticator) secret | server `db.json` | AES-256-GCM with the server key. |
 | Email address (optional) | server `db.json` | AES-256-GCM with the server key. Shown only to its owner; changing it needs a fresh code. |
-| Recovery codes | server `db.json` | SHA-256 hashes; each is deleted when used. |
+| Recovery codes | server `db.json` | HMAC-SHA-256 under a key derived from the server key (80-bit codes); each is deleted when used. Codes issued before 40-bit/SHA-256 still work until regenerated. |
 | Web sessions / device tokens | server `db.json` | Only SHA-256 hashes of the 256-bit tokens. |
 | Server key | `$GITCHA_DATA_DIR/secret.key` (0600) or `GITCHA_SECRET_KEY` | Keep it **separate from backups of `db.json`**. Losing it locks every account. |
 | Console keys, runner tokens, agent API keys | server `db.json` | Only SHA-256 hashes. Shown once at creation. |
