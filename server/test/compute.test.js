@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { startServer, createUser, api, deviceLogin } from './helpers.js';
 import { packFiles } from '../../extension/lib/tar.js';
 import { HttpError } from '../src/errors.js';
@@ -48,15 +49,27 @@ test('LIM-2: one owner cannot queue builds without limit, and the pipeline is no
   } finally { await srv.close(); }
 });
 
-test('LIM-1b: a build\'s source is removed from the blob directory when the build ends', async () => {
-  const { srv, tb } = await setup();
+test('LIM-1b: a build\'s source is kept in a file of its own, not among the hash-named blobs, and goes when the build ends', async () => {
+  const { srv, tb, runner, runnerToken } = await setup();
   try {
-    const r = await queue(srv, tb, pipeline());
-    const blob = path.join(srv.store.blobDir, srv.store.data.jobs[r.body.id].sourceSha);
-    assert.ok(fs.existsSync(blob), 'kept while the build waits');
+    const tar = pipeline();
+    const r = await queue(srv, tb, tar);
+    // Blobs are named by the hash of their bytes and are checked against it on their first read after a start:
+    // a source under a random name among them would read as damaged after a restart.
+    for (const name of fs.readdirSync(srv.store.blobDir)) {
+      if (name.includes('.tmp')) continue;
+      assert.equal(crypto.createHash('sha256').update(fs.readFileSync(path.join(srv.store.blobDir, name))).digest('hex'), name, `blob ${name} is named by its hash`);
+    }
+    const file = path.join(srv.jobs.sourceDir, srv.store.data.jobs[r.body.id].sourceSha);
+    assert.ok(fs.existsSync(file), 'kept while the build waits');
+    // The runner still gets the source from the server.
+    const got = await srv.jobs.claim(runner, 50);
+    const src = await fetch(`${srv.url}/api/v1/runner/jobs/${r.body.id}/source`, { headers: { Authorization: `Bearer ${runnerToken}`, 'X-Gitcha-Job-Token': got.jobToken } });
+    assert.equal(src.status, 200);
+    assert.deepEqual(Buffer.from(await src.arrayBuffer()), tar);
     const c = await api(srv.url, 'POST', `/api/v1/ci/runs/${r.body.id}/cancel`, { token: tb });
     assert.equal(c.body.status, 'cancelled');
-    assert.equal(fs.existsSync(blob), false, 'gone once it is cancelled');
+    assert.equal(fs.existsSync(file), false, 'gone once it is cancelled');
   } finally { await srv.close(); }
 });
 

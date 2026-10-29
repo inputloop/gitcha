@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // CI: build a source tarball with the steps in its pipeline file, on a runner,
 // and optionally publish the result to a hosted site.
-import crypto from 'node:crypto';
 import { HttpError } from '../errors.js';
 import { sha256 } from '../crypto.js';
 import { unpackFiles, packFiles } from '../../../extension/lib/tar.js';
@@ -97,9 +96,8 @@ export class CiService {
       if (reservedMinutes < 1) throw new HttpError(402, 'budget_exhausted', `${sandboxAgent} has no sandbox credits left to hold for a build.`);
       if (reservedMinutes * 60_000 < timeoutMs) { timeoutMs = reservedMinutes * 60_000; cutTo = reservedMinutes; }
     }
-    // The source and the pipeline are stored once, in blobs: the source under a key of its own so it can go when the build ends.
-    const sourceKey = crypto.randomBytes(32).toString('hex');
-    this.store.writeBlob(sourceKey, tarball);
+    // The pipeline is stored once, in a blob; the source in a file of its own, so it can go when the build ends.
+    const sourceKey = this.jobs.keepSource(tarball);
     const pipelineJson = Buffer.from(JSON.stringify(found.pipeline));
     const pipelineSha = sha256(pipelineJson);
     this.store.writeBlob(pipelineSha, pipelineJson);

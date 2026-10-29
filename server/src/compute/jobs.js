@@ -36,6 +36,8 @@ export class JobService {
     this.data.jobs ??= {};
     this.logDir = path.join(config.dataDir, 'logs');
     fs.mkdirSync(this.logDir, { recursive: true, mode: 0o700 });
+    this.sourceDir = path.join(config.dataDir, 'job-sources');
+    fs.mkdirSync(this.sourceDir, { recursive: true, mode: 0o700 });
     this.queue = [];          // queued job ids, oldest first (CI + functions)
     this.live = new Map();    // in-memory function invocations by id
     this.waiters = [];        // runners blocked in claim()
@@ -196,9 +198,23 @@ export class JobService {
     try { return { pipeline: JSON.parse(this.store.readBlob(j.pipelineSha).toString('utf8')) }; } catch { return null; }
   }
 
-  /** A build's source is only needed until it ends; it is stored under a key of its own, so removing it is safe (LIM-1b). */
+  /**
+   * A build's source is only needed until it ends, so it is kept in a file of its own, not in the blobs: those are
+   * named by the hash of their bytes, shared with packages and functions, and never deleted (LIM-1b). The key is
+   * stored in the job's `sourceSha`.
+   */
+  keepSource(buf) {
+    const key = crypto.randomBytes(16).toString('hex');
+    fs.writeFileSync(path.join(this.sourceDir, key), buf, { mode: 0o600 });
+    return key;
+  }
+
+  readSource(job) {
+    try { return fs.readFileSync(path.join(this.sourceDir, job.sourceSha)); } catch { throw new HttpError(404, 'no_source', 'This job\'s source is no longer kept.'); }
+  }
+
   dropSource(job) {
-    if (job.kind === 'ci' && job.ownSource && job.sourceSha) fs.rmSync(path.join(this.store.blobDir, job.sourceSha), { force: true });
+    if (job.kind === 'ci' && job.ownSource && job.sourceSha) fs.rmSync(path.join(this.sourceDir, job.sourceSha), { force: true });
   }
 
   trimHistory() {

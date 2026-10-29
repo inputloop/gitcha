@@ -67,7 +67,7 @@ export function registerComputeApi(router, { auth, jobs, ci, functions, config, 
   router.get('/api/v1/runner/jobs/:id/source', (ctx) => {
     const j = jobAuth(ctx);
     if (!j.sourceSha) throw new HttpError(404, 'no_source', 'This job has no source.');
-    send(ctx.res, 200, auth.store.readBlob(j.sourceSha), { 'Content-Type': 'application/gzip' });
+    send(ctx.res, 200, j.ownSource ? jobs.readSource(j) : auth.store.readBlob(j.sourceSha), { 'Content-Type': 'application/gzip' });
   });
 
   router.post('/api/v1/runner/jobs/:id/log', async (ctx) => {
