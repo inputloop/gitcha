@@ -17,11 +17,11 @@ export const METRICS = {
   sites: 'sites',
 };
 
-// Defaults; an operator replaces them with GITCHA_PLANS_FILE (same shape).
+// Defaults; an operator replaces them with GITCHA_PLANS_FILE (same shape). A numeric price is per month in GITCHA_CURRENCY; text is shown as written.
 export const DEFAULT_PLANS = {
   free: { name: 'Free', price: null, limits: { fn_invocations: 10_000, build_minutes: 300, sites: 3 }, paid: false },
-  pro: { name: 'Pro', price: '5 per month', limits: { fn_invocations: 1_000_000, build_minutes: 3000, sites: 50 }, paid: true },
-  team: { name: 'Team', price: '20 per month', limits: { fn_invocations: 5_000_000, build_minutes: 10_000, sites: 200 }, paid: true },
+  pro: { name: 'Pro', price: 5, limits: { fn_invocations: 1_000_000, build_minutes: 3000, sites: 50 }, paid: true },
+  team: { name: 'Team', price: 20, limits: { fn_invocations: 5_000_000, build_minutes: 10_000, sites: 200 }, paid: true },
 };
 
 const month = (t) => new Date(t).toISOString().slice(0, 7);
@@ -81,9 +81,12 @@ export class BillingService {
   get data() { return this.store.data.billing; }
 
   /** For the ring manifest: what this instance sells. */
+  /** What a plan says it costs. The charge itself is whatever the Stripe Price or PayPal Plan says; nothing here compares them. */
+  priceLabel(p) { return typeof p.price === 'number' ? `${p.price} ${this.config.billing.currency ?? 'USD'} per month` : p.price ?? null; }
+
   paidFeatures() {
     if (!this.enabled) return [];
-    return Object.entries(this.plans).filter(([, p]) => p.paid).map(([id, p]) => `${p.name} plan (${p.price ?? 'priced on request'})`);
+    return Object.entries(this.plans).filter(([, p]) => p.paid).map(([id, p]) => `${p.name} plan (${this.priceLabel(p) ?? 'priced on request'})`);
   }
 
   // ---- accounts and permissions ------------------------------------------------------
@@ -362,7 +365,7 @@ export class BillingService {
       ...(pool.length > 1 ? { sharedWith: pool.length - 1 } : {}), ...(over.over.length ? { overQuota: { sites: over.over, limit: over.limit, readOnlyFrom: over.readOnlyFrom } } : {}),
       subscription: sub ? { provider: sub.provider, plan: sub.plan, status: sub.status === 'active' && this.standing(sub) !== 'paid' ? 'past_due' : sub.status, currentPeriodEnd: sub.currentPeriodEnd ?? null } : null,
       pendingCheckout: this.accountOf(o.key)?.checkout ? { provider: this.accountOf(o.key).checkout.provider, plan: this.accountOf(o.key).checkout.plan } : null,
-      plans: Object.entries(this.plans).map(([id, p]) => ({ id, name: p.name, price: p.price, limits: p.limits, paid: Boolean(p.paid) })),
+      plans: Object.entries(this.plans).map(([id, p]) => ({ id, name: p.name, price: this.priceLabel(p), limits: p.limits, paid: Boolean(p.paid) })),
       providers: Object.keys(this.providers).filter((k) => this.providers[k].canSell),
       // The money history is for the people who manage the account, not for every member of a team.
       ...(this.mayManage(user, o) ? { history: [...(this.accountOf(o.key)?.history ?? [])].reverse().slice(0, 25) } : {}),

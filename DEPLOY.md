@@ -232,7 +232,8 @@ Off unless `GITCHA_BILLING=yes`. Then:
   webhook to `https://gitcha.example.org/api/v1/billing/paypal/webhook` for the
   `BILLING.SUBSCRIPTION.*` events; put its id in `PAYPAL_WEBHOOK_ID`.
 - Plans and limits default to Free, Pro and Team; replace them with a JSON file named by
-  `GITCHA_PLANS_FILE`.
+  `GITCHA_PLANS_FILE`. A numeric `price` is shown per month in `GITCHA_CURRENCY` (USD by default),
+  text as written; what is charged is whatever the Stripe Price or PayPal Plan says.
 - On start the server logs which mode each provider's keys are in (Stripe from the `sk_live_` or
   `sk_test_` prefix, PayPal from the API host). A subscription records the mode that wrote it, and
   one written with test keys is not a paid plan once the keys are live; the log counts them.
