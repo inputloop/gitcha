@@ -23,6 +23,7 @@ export class TaskService {
   constructor({ store, config, projects, teams, agents, budgets, nexttime, clock = Date.now }) {
     Object.assign(this, { store, config, projects, agents, budgets, nexttime, clock });
     this.access = new ProjectAccess({ store, projects, teams, clock });
+    this.mirrors = new Map(); // task id -> the create call still in flight
     store.data.tasks ??= {};
     projects.onWorkedTogether = (p, info) => this.secondReaderFor(p, info);
   }
@@ -60,19 +61,49 @@ export class TaskService {
       agents: (t.agents ?? []).map((h) => this.agentRef(h)), commits: t.commits ?? [],
       claimant: t.claimant ? { ...t.claimant, ...(t.claimant.kind === 'agent' ? this.agentRef(t.claimant.handle) : {}) } : null,
       claimExpiresAt: t.claimExpiresAt ?? null, review: t.review ?? null,
-      nexttime: t.nexttime ?? null,
+      nexttime: this.nexttimeView(t, p, principal),
       canDecide: Boolean(principal?.kind === 'user' && p && this.projects.isMaintainer(principal.user, p)),
     };
   }
 
   newId() { return `t_${crypto.randomBytes(6).toString('hex')}`; }
 
+  /** What a reader sees of the NextTime side: the refusal texts are for the project's maintainers only (NXT-2). */
+  nexttimeView(t, p, principal) {
+    if (!t.nexttime) return null;
+    if (principal?.kind === 'user' && p && this.projects.isMaintainer(principal.user, p)) return t.nexttime;
+    const { error, completeError, ...rest } = t.nexttime;
+    return { ...rest, ...(error || completeError ? { refused: true } : {}) };
+  }
+
+  /**
+   * Copy a task to NextTime as a request. Only tasks of public projects go (NXT-1): the board
+   * is shared, so a private project's titles, bodies and bylines never leave this server.
+   */
   mirror(t) {
     if (!this.nexttime?.configured) return;
-    const key = t.project;
-    this.nexttime.createRequest(t, key)
+    if (this.project(t)?.visibility !== 'public') return;
+    const call = this.nexttime.createRequest({ ...t, url: this.url(t) }, t.project)
       .then((id) => { this.store.tx((d) => { d.tasks[t.id].nexttime = { requestId: id, mirroredAt: this.clock() }; }); })
-      .catch((err) => { this.store.tx((d) => { d.tasks[t.id].nexttime = { error: String(err.message).slice(0, 300), at: this.clock() }; }); });
+      .catch((err) => { this.store.tx((d) => { d.tasks[t.id].nexttime = { error: String(err.message).slice(0, 300), at: this.clock() }; }); })
+      .finally(() => this.mirrors.delete(t.id));
+    this.mirrors.set(t.id, call);
+  }
+
+  /** Tell NextTime how a closed task ended, once its request exists and only once (NXT-2). */
+  settleNextTime(id) {
+    const wait = this.mirrors.get(id);
+    if (wait) { wait.then(() => this.settleNextTime(id)); return; } // closed while the create was in flight
+    const t = this.get(id);
+    const rid = t.nexttime?.requestId;
+    if (!rid || !this.nexttime?.configured || t.nexttime.completedAt || t.nexttime.cancelledAt || t.nexttime.completeTriedAt) return;
+    const note = (patch) => this.store.tx((d) => { d.tasks[id].nexttime = { ...d.tasks[id].nexttime, ...patch }; });
+    if (t.status === 'closed') this.nexttime.cancel(rid).then(() => note({ cancelledAt: this.clock() })).catch(() => {});
+    else if (t.status === 'done' && this.nexttime.completeOnDone) {
+      this.nexttime.complete(rid)
+        .then(() => note({ completedAt: this.clock(), completeError: null }))
+        .catch((err) => note({ completeError: String(err.message).slice(0, 300), completeTriedAt: this.clock() }));
+    }
   }
 
   // ---- creating ---------------------------------------------------------------------------
@@ -249,17 +280,9 @@ export class TaskService {
     const p = this.project(t);
     if (!p || !this.projects.isMaintainer(user, p)) throw new HttpError(403, 'project_forbidden', 'Only the project\'s maintainers close tasks.');
     if (!['done', 'closed'].includes(status)) throw new HttpError(400, 'bad_status', 'Close as done or closed.');
+    if (['done', 'closed'].includes(t.status)) return t; // already finished: a second close changes nothing and tells NextTime nothing
     this.store.tx((d) => Object.assign(d.tasks[id], { status, closedAt: this.clock(), closedBy: user.username }));
-    const rid = t.nexttime?.requestId;
-    if (rid && this.nexttime?.configured) {
-      const note = (patch) => this.store.tx((d) => { d.tasks[id].nexttime = { ...d.tasks[id].nexttime, ...patch }; });
-      if (status === 'closed') this.nexttime.cancel(rid).then(() => note({ cancelledAt: this.clock() })).catch(() => {});
-      else if (this.nexttime.completeOnDone) {
-        this.nexttime.complete(rid)
-          .then(() => note({ completedAt: this.clock(), completeError: null }))
-          .catch((err) => note({ completeError: String(err.message).slice(0, 300), completeTriedAt: this.clock() }));
-      }
-    }
+    this.settleNextTime(id);
     return this.get(id);
   }
 

@@ -241,7 +241,10 @@ only to `/var/lib/gitcha`.
   invisible to outsiders.
 - ✅ **Project task tracking**, mirrored into NextTime-Dev as timebank
   requests when it is configured: created, cancelled, and completed when a
-  task is done (a toggle, on by default).
+  task is done (a toggle, on by default). Only tasks of public projects are
+  mirrored; a private project's tasks never leave this server. A task closes
+  once: closing it again tells NextTime nothing, and NextTime's refusal text is
+  shown to the project's maintainers only.
 
 **Hosting and compute**
 
