@@ -26,6 +26,7 @@ export const DEFAULT_PLANS = {
 
 const month = (t) => new Date(t).toISOString().slice(0, 7);
 const GRACE_MS = 7 * 86_400_000; // a failed payment keeps the paid limits this long
+const EVENT_KEEP_MS = 30 * 86_400_000; // a delivered event is remembered this long (providers retry for days); an older one is refused
 const READONLY_GRACE_MS = 14 * 86_400_000; // after the paid limits end, sites over the new limit keep taking changes this long
 const GONE = '(gone)'; // the binding of an account whose owner no longer exists
 
@@ -404,10 +405,11 @@ export class BillingService {
     }
   }
 
+  /** Remember an event id for EVENT_KEEP_MS. By age, not by count: a flood of other events must not make an old one replayable. Only verified events get here. */
   markSeen(d, seen) {
-    d.billing.events[seen] = this.clock();
-    const ids = Object.keys(d.billing.events);
-    if (ids.length > 5000) for (const k of ids.slice(0, ids.length - 5000)) delete d.billing.events[k];
+    const now = this.clock();
+    d.billing.events[seen] = now;
+    for (const [k, at] of Object.entries(d.billing.events)) if (!(now - at <= EVENT_KEEP_MS)) delete d.billing.events[k];
   }
 
   /** Who should find a money row in their trail: the people who manage the account, and whoever acted. */
@@ -615,6 +617,8 @@ export class BillingService {
     const seen = `${provider}:${ev.id}`;
     if (this.data.events[seen]) return { duplicate: true };
     const named = typeof ev.owner === 'string' && /^(user|team):/.test(ev.owner);
+    // Once an id has aged out of the table it could be replayed; the provider's own time on the event closes that (Stripe's signature also carries a 5 minute tolerance).
+    if (ev.at != null && this.clock() - ev.at > EVENT_KEEP_MS) return this.ignore(provider, ev, seen, named ? ev.owner : null, 'too_old', named);
     const hit = this.accountFor(provider, ev);
     if (!hit) return this.ignore(provider, ev, seen, named ? ev.owner : null, 'unknown_subscription', named);
     if (named && ev.owner !== hit.key) return this.ignore(provider, ev, seen, hit.key, 'owner_mismatch', true);
