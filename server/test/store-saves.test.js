@@ -2,15 +2,13 @@
 // SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // A change is saved whole or not at all, and nothing the server counts or marks waits in memory
-// where a crash would lose it. Each test reads db.json itself: memory is not the proof.
+// where a crash would lose it. Each test reads the saved database itself (db.json, or the Cassandra rows): memory is not the proof.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { startServer, createUser, unsavedPaths } from './helpers.js';
+import { startServer, createUser, unsavedPaths, persisted } from './helpers.js';
 import { createApp } from '../src/app.js';
 
-const disk = (srv) => JSON.parse(fs.readFileSync(path.join(srv.config.dataDir, 'db.json'), 'utf8'));
+const disk = (srv) => persisted(srv.store);
 const ciJob = (id, extra = {}) => ({
   id, kind: 'ci', status: 'queued', createdAt: 1, labels: [], owner: { type: 'user', name: 'alice' }, createdBy: 'alice',
   timeoutMs: 60_000, trigger: 'manual', reservedMinutes: 1, ...extra,
@@ -89,7 +87,7 @@ test('a CI log is capped by the size of its file, and writing it changes nothing
   const srv = await startServer();
   try {
     srv.store.tx((d) => { d.jobs.job_log1 = ciJob('job_log1', { status: 'running' }); });
-    const before = fs.readFileSync(path.join(srv.config.dataDir, 'db.json'), 'utf8');
+    const before = JSON.stringify(disk(srv));
     const job = srv.jobs.get('job_log1');
     srv.jobs.appendLog(job, 'x'.repeat(3 * 1024 * 1024));
     srv.jobs.appendLog(job, 'y'.repeat(3 * 1024 * 1024));
@@ -98,7 +96,7 @@ test('a CI log is capped by the size of its file, and writing it changes nothing
     assert.ok(log.length <= 5 * 1024 * 1024 + 100, 'the log stops at 5 MB');
     assert.match(log, /log truncated at 5 MB/);
     assert.doesNotMatch(log, /never written/);
-    assert.equal(fs.readFileSync(path.join(srv.config.dataDir, 'db.json'), 'utf8'), before, 'nothing about the log is written to the database');
+    assert.equal(JSON.stringify(disk(srv)), before, 'nothing about the log is written to the database');
     assert.deepEqual(unsavedPaths(srv.store), [], 'and nothing is left in memory that the disk does not have');
   } finally { await srv.close(); }
 });

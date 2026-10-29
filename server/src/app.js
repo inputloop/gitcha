@@ -53,7 +53,7 @@ const MIME = { '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png
  * Returns the HTTP server, every service, the router and the version.
  */
 export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}) {
-  const store = new Store(config.dataDir);
+  const store = new Store(config.dataDir, { backend: config.store, secretKey: config.secretKey });
   const auth = new AuthService({ store, config, clock });
   const teams = new TeamService({ store, clock });
   const packages = new PackageService({ store, config, teams, clock });
@@ -160,7 +160,7 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
   // and sessions. unref() means this
   // timer alone does not keep the process running.
   // Save once now that every service has added its collections (jobs, keys, ops and the rest). From here
-  // on, db.json always holds every collection, so a change that fails and is rolled back (store.tx) can
+  // on, the database always holds every collection, so a change that fails and is rolled back (store.tx) can
   // go back to the file without losing a collection that had never been written.
   store.tx(() => {});
   const sweeper = setInterval(() => { services.jobs.sweep(); auth.sweep(); }, 30_000);

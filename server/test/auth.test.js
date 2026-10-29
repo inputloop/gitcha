@@ -3,9 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { startServer, createUser, api, deviceLogin } from './helpers.js';
+import { startServer, createUser, api, deviceLogin, persisted } from './helpers.js';
 import { totp } from '../src/totp.js';
 import { sha256 } from '../src/crypto.js';
 
@@ -29,7 +27,7 @@ test('passwords and TOTP secrets are never stored in plaintext', async () => {
   const srv = await startServer();
   try {
     const u = createUser(srv, 'carol', 'super secret passphrase');
-    const db = fs.readFileSync(path.join(srv.config.dataDir, 'db.json'), 'utf8');
+    const db = JSON.stringify(persisted(srv.store));
     assert.ok(!db.includes('super secret passphrase'));
     assert.ok(!db.includes(u.secret), 'TOTP secret is encrypted');
     assert.ok(!db.includes('scrypt$'), 'password hash is itself encrypted at rest');
@@ -51,7 +49,7 @@ test('registration: confirm password; optional email with confirmation, stored e
     assert.equal(reg({ username: 'nomail' }).user.email, null, 'email is optional');
     const u = reg({ username: 'dan', email: ' Dan@Example.org', emailConfirm: 'dan@example.org ' }).user;
     assert.match(u.email, /^v1\./);
-    assert.ok(!fs.readFileSync(path.join(srv.config.dataDir, 'db.json'), 'utf8').includes('Dan@Example.org'), 'email is encrypted at rest');
+    assert.ok(!JSON.stringify(persisted(srv.store)).includes('Dan@Example.org'), 'email is encrypted at rest');
     assert.equal(srv.auth.emailOf(u), 'Dan@Example.org');
     srv.auth.updateEmail(u, { email: 'dan@new.example', emailConfirm: 'dan@new.example' }, 'x');
     assert.equal(srv.auth.emailOf(srv.store.userByName('dan')), 'dan@new.example');

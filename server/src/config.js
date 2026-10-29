@@ -111,6 +111,52 @@ function loadSecretKey(dataDir, envKey) {
   }
 }
 
+// Cassandra's consistency levels Gitcha accepts for its reads and writes.
+const CONSISTENCIES = ['ONE', 'TWO', 'THREE', 'QUORUM', 'ALL', 'LOCAL_QUORUM', 'EACH_QUORUM', 'LOCAL_ONE'];
+
+/**
+ * Where the database lives (GITCHA_STORE and GITCHA_CASSANDRA_*). "file" is db.json in the data folder;
+ * "cassandra" is an Apache Cassandra keyspace (store-cassandra.js). Anything unclear stops the start.
+ */
+export function parseStore(env) {
+  const kind = String(env.GITCHA_STORE ?? 'file').trim().toLowerCase() || 'file';
+  if (!['file', 'cassandra'].includes(kind)) throw new StartupError(`GITCHA_STORE must be file or cassandra, not "${env.GITCHA_STORE}".`);
+  const name = (setting, value) => {
+    if (!/^[A-Za-z][A-Za-z0-9_]{0,47}$/.test(value)) throw new StartupError(`${setting} must be a letter then up to 47 letters, digits or _ (a Cassandra name), not "${value}".`);
+    return value;
+  };
+  const replication = String(env.GITCHA_CASSANDRA_REPLICATION ?? 'SimpleStrategy:1').trim();
+  if (!/^(SimpleStrategy:\d+|NetworkTopologyStrategy:[A-Za-z0-9_-]+=\d+(,[A-Za-z0-9_-]+=\d+)*)$/.test(replication)) {
+    throw new StartupError(`GITCHA_CASSANDRA_REPLICATION must look like SimpleStrategy:1 or NetworkTopologyStrategy:dc1=3,dc2=3, not "${replication}".`);
+  }
+  const consistency = String(env.GITCHA_CASSANDRA_CONSISTENCY ?? 'LOCAL_QUORUM').trim().toUpperCase();
+  if (!CONSISTENCIES.includes(consistency)) throw new StartupError(`GITCHA_CASSANDRA_CONSISTENCY must be one of ${CONSISTENCIES.join(', ')}.`);
+  const contactPoints = String(env.GITCHA_CASSANDRA_CONTACT_POINTS ?? '127.0.0.1').split(',').map((s) => s.trim()).filter(Boolean);
+  if (kind === 'cassandra' && !contactPoints.length) throw new StartupError('GITCHA_CASSANDRA_CONTACT_POINTS is empty: name at least one Cassandra node (host or host:port).');
+  return {
+    kind,
+    cassandra: {
+      contactPoints,
+      // Cassandra's own default data center name is datacenter1.
+      datacenter: env.GITCHA_CASSANDRA_DATACENTER || 'datacenter1',
+      keyspace: name('GITCHA_CASSANDRA_KEYSPACE', env.GITCHA_CASSANDRA_KEYSPACE || 'gitcha'),
+      // Several Gitcha servers may share one keyspace, each under its own instance name.
+      instance: name('GITCHA_CASSANDRA_INSTANCE', env.GITCHA_CASSANDRA_INSTANCE || 'main'),
+      // Used only to create the keyspace when it does not exist yet.
+      replication,
+      createKeyspace: bool(env.GITCHA_CASSANDRA_CREATE_KEYSPACE, true),
+      consistency,
+      // Lightweight transactions (the lease) use the serial level that matches: local to the data center or not.
+      serialConsistency: consistency.startsWith('LOCAL_') ? 'LOCAL_SERIAL' : 'SERIAL',
+      username: env.GITCHA_CASSANDRA_USERNAME || null,
+      password: env.GITCHA_CASSANDRA_PASSWORD || null,
+      tls: bool(env.GITCHA_CASSANDRA_TLS, false),
+      caFile: env.GITCHA_CASSANDRA_CA_FILE || null,
+      timeoutMs: duration(env.GITCHA_CASSANDRA_TIMEOUT, 15_000),
+    },
+  };
+}
+
 /**
  * Build the config object from environment variables. `overrides` (used by tests) replace any value,
  * and nested groups such as `policy` are merged one level deep. Also creates the data folder.
@@ -129,6 +175,7 @@ export function loadConfig(env = process.env, overrides = {}) {
     trustProxy: bool(env.GITCHA_TRUST_PROXY, false),
     trustedProxies: parseTrustedProxies(env.GITCHA_TRUSTED_PROXIES),
     dataDir,
+    store: parseStore(env),
     secretKey: loadSecretKey(dataDir, env.GITCHA_SECRET_KEY),
     issuer: env.GITCHA_ISSUER ?? 'Gitcha',
     openRegistration: bool(env.GITCHA_OPEN_REGISTRATION, true),
@@ -230,5 +277,6 @@ export function loadConfig(env = process.env, overrides = {}) {
     git: { ...config.git, ...overrides.git },
     nexttime: { ...config.nexttime, ...overrides.nexttime },
     social: { ...config.social, ...overrides.social },
+    store: { ...config.store, ...overrides.store, cassandra: { ...config.store.cassandra, ...overrides.store?.cassandra } },
   };
 }

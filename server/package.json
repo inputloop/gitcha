@@ -21,5 +21,8 @@
   "dependencies": {
     "graphql": "^16.9.0",
     "qrcode": "^1.5.4"
+  },
+  "optionalDependencies": {
+    "cassandra-driver": "^4.10.0"
   }
 }
