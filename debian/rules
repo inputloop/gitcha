@@ -6,7 +6,7 @@
 #   dpkg-buildpackage -us -uc -b                              with Cassandra (the default)
 #   dpkg-buildpackage -us -uc -b -P pkg.gitcha.nocassandra    without: no driver, the database in db.json
 #
-# deploy/build-debian.sh runs this with a +git<sha7> snapshot version; deploy/lay-out.sh says which files go where.
+# deploy/build-debian.sh runs this with a +gitYYYYMMDDHHMMSS.<sha7> snapshot version (deploy/version.sh); deploy/lay-out.sh says which files go where.
 
 ifneq (,$(filter pkg.gitcha.nocassandra,$(DEB_BUILD_PROFILES)))
 CASSANDRA := --without-cassandra

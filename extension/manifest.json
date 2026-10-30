@@ -2,7 +2,7 @@
   "manifest_version": "0.2",
   "name": "gitcha",
   "display_name": "Gitcha",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Search, install, publish and share packages with teams on a self-hosted Gitcha registry, with mandatory two-factor authentication.",
   "long_description": "Connects Claude Desktop to a Gitcha package registry. Run `gitcha login` once in a terminal (password + authenticator code); the extension reuses that device token and asks you for a fresh 2FA code when the registry requires one.",
   "author": {

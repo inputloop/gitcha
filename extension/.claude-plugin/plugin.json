@@ -1,6 +1,6 @@
 {
   "name": "gitcha",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Search, install, publish and share packages with teams on a self-hosted Gitcha registry, with mandatory two-factor authentication.",
   "author": { "name": "Gitcha contributors" },
   "homepage": "https://github.com/inputloop/gitcha",

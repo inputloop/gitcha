@@ -16,7 +16,7 @@
 # the cassandra package; --without-cassandra leaves the driver out and ships GITCHA_STORE=file.
 # deploy/lay-out.sh is the recipe for which files go where; debian/ (dpkg-buildpackage) uses it too.
 # As in alphaOS, no package starts or enables a service by itself: a person turns each one on
-# (README.Debian says how).  The version is X.Y.Z+git<sha7> (the first 7 characters of the git commit).
+# (README.Debian says how).  The version is X.Y.Z+gitYYYYMMDDHHMMSS.<sha7>: the commit's time, then its hash.
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 OUT=${1:?usage: build-debs.sh OUT_DIR [--without-cassandra]}
@@ -28,8 +28,14 @@ case ${2:-} in
 esac
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 MAINT="inputloop <nathanielfrankford@gmail.com>"
-REV=$(git -C "$here" rev-parse --short=7 HEAD 2>/dev/null || echo nogit)
-VER=$(node -p "require('$here/package.json').version")+git$REV
+# X.Y.Z+gitYYYYMMDDHHMMSS.<sha7>: the commit's time first, so apt sees every newer commit as newer (deploy/version.sh).
+if git -C "$here" rev-parse HEAD >/dev/null 2>&1; then
+  VER=$(sh "$here/deploy/version.sh")
+  # This script packs the working tree as it is, so uncommitted changes would ship under the commit's version.
+  [ -z "$(git -C "$here" status --porcelain --untracked-files=no)" ] || echo "build-debs.sh: warning: uncommitted changes are in this build, but not in its version ($VER)" >&2
+else
+  VER=$(node -p "require('$here/package.json').version")+nogit
+fi
 
 # A stage folder of our own, where each package's files are laid out before packing.
 # alphaOS's other parts share $OUT/.stage, which this script must not remove.

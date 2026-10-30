@@ -44,10 +44,22 @@ sh deploy/build-debian.sh out/                 # the full packaging: debian/, de
 sh deploy/build-debs.sh out/                   # alphaOS's idiom: plain dpkg-deb, no root, asks nothing
 ```
 
-Both build `inputloop-gitcha` and `inputloop-gitcha-runner`, version `X.Y.Z+git<sha7>`, maintainer
-`inputloop`, and neither enables or starts a service unless asked to. The server's npm
-dependencies come from the committed lockfile at build time (so the build needs the npm registry,
-or a filled npm cache).
+Both build `inputloop-gitcha` and `inputloop-gitcha-runner`, maintainer `inputloop`, and neither
+enables or starts a service unless asked to. The server's npm dependencies come from the committed
+lockfile at build time (so the build needs the npm registry, or a filled npm cache).
+
+**Versions.** A package's version is `X.Y.Z+gitYYYYMMDDHHMMSS.<sha7>`: `package.json`'s version, the
+commit's time (UTC), then the first seven characters of its hash, for example
+`0.2.0+git20261030010555.cb60617` (`sh deploy/version.sh` prints it). The time comes first because
+apt compares versions piece by piece: the hash alone (the scheme before 0.2.0) sorted by its letters,
+so a newer commit could look older and apt would not upgrade to it. Two things follow:
+
+- **Build the branch you mean.** The version names the commit that was checked out, so build `main`
+  after `git pull` has brought the work in; `git log -1 --oneline` says which commit that is.
+- **The same commit gives the same version.** apt then says `is already the newest version` and
+  installs nothing: `apt install --reinstall ./inputloop-gitcha_*.deb` installs a rebuild anyway.
+  `build-debs.sh` packs the working tree as it is and warns when it holds uncommitted changes;
+  `build-debian.sh` builds only what is committed.
 
 - **`build-debian.sh`** exports the committed tree (`git archive HEAD`), gives `debian/changelog` a
   snapshot entry and runs `dpkg-buildpackage`. It needs `debhelper` (13), `devscripts`, git and

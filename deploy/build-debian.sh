@@ -6,7 +6,7 @@
 # usage:  sh deploy/build-debian.sh OUT_DIR [--without-cassandra]
 #
 # Exports HEAD (git archive, so only committed files ship) into a scratch folder, gives it a snapshot
-# version X.Y.Z+git<sha7> in debian/changelog, the same scheme as build-debs.sh, and runs
+# version X.Y.Z+gitYYYYMMDDHHMMSS.<sha7> in debian/changelog (deploy/version.sh, as build-debs.sh), and runs
 # dpkg-buildpackage there.  Cassandra is the build option on by default; --without-cassandra builds with
 # the pkg.gitcha.nocassandra profile.  The .deb, .buildinfo and .changes files land in OUT_DIR.
 # Needs: dpkg-dev, debhelper (>= 13), devscripts (for dch), git, and Node.js 20+ with npm.
@@ -21,7 +21,7 @@ case ${2:-} in
 esac
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 REV=$(git -C "$here" rev-parse --short=7 HEAD)
-VER=$(node -p "require('$here/package.json').version")+git$REV
+VER=$(sh "$here/deploy/version.sh")
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 git -C "$here" archive --format=tar --prefix=gitcha/ HEAD | tar -x -C "$WORK"
 cd "$WORK/gitcha"

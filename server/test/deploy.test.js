@@ -112,3 +112,12 @@ test('PROXY-1: every reverse proxy example keeps Host, sets the client address a
     assert.ok(read('deploy/lay-out.sh').includes(path.basename(file)), `${file} is installed with the package docs`);
   }
 });
+
+test('VER-1: package versions put the commit time before the hash, so apt sees a newer commit as newer', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const v = execFileSync('sh', [path.join(root, 'deploy/version.sh')], { encoding: 'utf8' }).trim();
+  assert.match(v, /^\d+\.\d+\.\d+\+git\d{14}\.[0-9a-f]{7}$/, v);
+  for (const script of ['deploy/build-debs.sh', 'deploy/build-debian.sh']) assert.match(read(script), /deploy\/version\.sh/, `${script} uses version.sh`);
+  // The last X.Y.Z+git<sha7> build (0.1.0) must sort below every new one, which a higher X.Y.Z guarantees.
+  assert.notEqual(JSON.parse(read('package.json')).version, '0.1.0');
+});
