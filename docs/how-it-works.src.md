@@ -88,14 +88,39 @@ with [[extension/lib/manifest.js]].
    social feed listens for pushes from projects.
 4. `createApp` then registers the routes (the URL patterns each part answers),
    starting at [[server/src/app.js#"registerApi(router"]].
-5. The server listens on `127.0.0.1:4873` by default. Only a TLS proxy (such as
-   Caddy) should face the internet.
+5. The server listens on `127.0.0.1:4873` by default, in plain HTTP. Only a TLS
+   proxy (such as Caddy) should face the internet: see "The reverse proxy"
+   below.
 6. A timer runs every 30 seconds to clean up: it ends old jobs and expired
    sign-ups ([[server/src/app.js#"setInterval"]]).
 
 If something goes badly wrong later, [[server/src/http.js#installLastResort]]
 logs the error and keeps serving, instead of letting one bad request stop the
 whole server.
+
+### The reverse proxy
+
+The server never does TLS. It uses Node's plain `http` module
+([[server/src/app.js#"http.createServer"]]), and the reverse proxy in front of
+it (Caddy, nginx, Apache or HAProxy) does the https, holds the certificates
+and owns ports 80 and 443. The server reads three things the proxy tells it:
+
+- the **`Host` header**, to tell its own pages from hosted sites
+  ([[server/src/hosting/sites.js#isHostingHost]]) and to check where a form
+  came from ([[server/src/web.js#"const checkOrigin"]]);
+- **`X-Forwarded-For`**, the caller's address, believed only with
+  `GITCHA_TRUST_PROXY=true` ([[server/src/http.js#clientIp]]);
+- **`X-Forwarded-Proto`**: when it says `https`, cookies get the `Secure` flag
+  ([[server/src/web.js#"const secureOf"]]).
+
+And the proxy asks the server one question before it orders a certificate for
+a name: [[server/src/hosting/domains.js#tlsAllowed]].
+
+Nothing else depends on the proxy, so the server also runs without one, in
+plain HTTP, on your own machine or a network you trust. Then
+`GITCHA_TRUST_PROXY` must be off, or anyone could choose their own address by
+sending `X-Forwarded-For`. [[DEPLOY.md]] has the examples for each proxy and
+the settings for running without one.
 
 ## 3. How a request is handled
 
@@ -134,7 +159,7 @@ All data lives in one folder, `GITCHA_DATA_DIR`:
 
 | Path | What |
 |---|---|
-| `db.json` | The database: every account, session, package record, team, project, site, job, post, ticket and so on, as one JSON file |
+| `db.json` | The database: every account, session, package record, team, project, site, job, post, ticket and so on, as one JSON file (only with `GITCHA_STORE=file`; with `cassandra` it lives in Apache Cassandra) |
 | `secret.key` | The server key (see above). Back it up apart from `db.json` |
 | `blobs/` | Files named by their SHA-256 hash: package tarballs, uploads, function code |
 | `git/` | Bare git repositories |
@@ -147,11 +172,22 @@ The database code is [[server/src/store.js#Store]]. The whole database stays in
 memory, and every change goes through [[server/src/store.js#tx]]:
 
 1. The change runs on the in-memory data.
-2. [[server/src/store.js#flush]] writes the whole file again with
-   [[server/src/store.js#writeFileDurably]]. That writes a temporary file, forces
-   it to disk (fsync), and then renames it over `db.json`. A rename is
-   all-or-nothing, so a crash leaves either the old file or the new one, never
-   half of each.
+2. [[server/src/store.js#flush]] hands the data to the store's backend, which
+   saves it. There are two:
+   - [[server/src/store.js#FileBackend]] writes the whole file again with
+     [[server/src/store.js#writeFileDurably]]. That writes a temporary file,
+     forces it to disk (fsync), and then renames it over `db.json`. A rename is
+     all-or-nothing, so a crash leaves either the old file or the new one,
+     never half of each.
+   - [[server/src/store-cassandra.js#CassandraBackend]] keeps the database in
+     Apache Cassandra. [[server/src/store-cassandra.js#toRows]] cuts it into
+     one row per entry (one user, one session), and
+     [[server/src/store-cassandra.js#save]] sends only the rows that changed,
+     as one batch that Cassandra applies whole or not at all. The Cassandra
+     driver only works asynchronously, so it runs in a worker thread
+     ([[server/src/store-cassandra-worker.js]]) and
+     [[server/src/store-cassandra.js#call]] waits for its answer. That way
+     `store.tx` still returns only once the change is saved.
 3. If the change throws partway through, or the write fails,
    [[server/src/store.js#restore]] reloads the last good copy, so memory and
    disk agree again. A half-made change can never be saved by a later write.
@@ -177,7 +213,11 @@ without saving it ([[server/test/helpers.js#watchUnsavedWrites]]).
 
 When the server starts, [[server/src/store.js#acquireLock]] creates `db.lock`.
 A second server on the same folder is refused, because two servers writing one
-file would erase each other's changes.
+file would erase each other's changes. Cassandra has the same rule with a
+lease row ([[server/src/store-cassandra-worker.js#acquire]]): every save checks
+that the lease is still this server's, so a server that lost it cannot write.
+A check value of `secret.key` is kept there too, so a server started with the
+wrong key stops instead of locking everyone out.
 
 Blobs are written once and checked when read: [[server/src/store.js#readBlob]]
 refuses a file whose hash no longer matches its name.
@@ -186,9 +226,10 @@ The **audit log** (the security activity people see on their Account page) is
 kept per person by [[server/src/store.js#audit]], with a cap for each person.
 That way nobody can push someone else's rows out by making noise.
 
-The store is built for small and medium communities. It is the only code that
-touches `db.json`, so it is the place to start if Gitcha ever needs a real
-database.
+The store is built for small and medium communities: one server holds the
+whole database in memory, whichever backend saves it. It is the only code that
+saves the database, so a new backend goes beside the two in
+[[server/src/store.js#Store]].
 
 ## 5. Accounts and two-factor login
 
@@ -650,10 +691,24 @@ Both live in [[extension]] and share the same library.
 
 ## 16. Packaging and deployment
 
-[[deploy/build-debs.sh]] builds two Debian packages, `inputloop-gitcha` and
-`inputloop-gitcha-runner`. The systemd units in [[deploy]] run each program as
+Two recipes build the two Debian packages, `inputloop-gitcha` and
+`inputloop-gitcha-runner`, and both put the files in place with
+[[deploy/lay-out.sh]], so they install the same thing:
+
+- [[debian/rules]] is the full packaging, run by [[deploy/build-debian.sh]].
+  debconf asks for the settings ([[debian/inputloop-gitcha.templates]]), and
+  [[debian/inputloop-gitcha.postinst]] writes the answers to `debconf.env`.
+  So a preseed file ([[deploy/preseed.example.cfg]]) can install many hosts
+  with no questions: [[deploy/apt-repo.sh]] makes a signed apt repository
+  and [[deploy/mass-install.sh]] installs on a list of hosts over SSH.
+- [[deploy/build-debs.sh]] is the plain `dpkg-deb` recipe that alphaOS's
+  image build calls. Its packages ask nothing.
+
+Cassandra is a build option, on by default: `--without-cassandra` (the
+`pkg.gitcha.nocassandra` build profile) leaves the driver out and ships
+`GITCHA_STORE=file`. The systemd units in [[deploy]] run each program as
 its own unprivileged user, with systemd's sandboxing on. Neither package starts
-anything by itself. [[DEPLOY.md]] is the full guide, and the README's
+anything unless asked to. [[DEPLOY.md]] is the full guide, and the README's
 "Securing your deployment" section is the checklist.
 
 ## 17. Tests

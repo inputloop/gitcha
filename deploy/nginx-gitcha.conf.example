@@ -1,0 +1,88 @@
+# nginx-gitcha.conf.example -- nginx as the TLS reverse proxy in front of Gitcha.
+# Copyright 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Corwin Brust <corwin@bru.st> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+#
+# Put it in /etc/nginx/conf.d/gitcha.conf (or sites-available + a link), replace the names, then: nginx -t && systemctl reload nginx
+# Gitcha itself: GITCHA_PUBLIC_URL=https://gitcha.example.org, GITCHA_TRUST_PROXY=true, listening on 127.0.0.1:4873.
+#
+# Certificates (nginx cannot order them by itself; certbot does):
+#   the UI:             certbot certonly --webroot -w /var/www/letsencrypt -d gitcha.example.org
+#   a hosting domain:   certbot certonly --dns-PROVIDER -d '*.pages.example.net'     (a wildcard needs the DNS challenge)
+#   a custom domain:    curl -fsS 'http://127.0.0.1:4873/api/v1/hosting/tls-allowed?domain=NAME' \
+#                         && certbot certonly --webroot -w /var/www/letsencrypt -d NAME
+#                       (once the site's owner has verified it in Gitcha; the last server block finds it by name)
+# Caddy orders custom domains' certificates on its own (Caddyfile.example); prefer it if many people bring domains.
+
+# Port 80: certificate challenges for every name, and a redirect to https for everything else.
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    location /.well-known/acme-challenge/ { root /var/www/letsencrypt; }
+    location / { return 301 https://$host$request_uri; }
+}
+
+# The Gitcha UI, API and git over HTTPS.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name gitcha.example.org;
+    ssl_certificate     /etc/letsencrypt/live/gitcha.example.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/gitcha.example.org/privkey.pem;
+    client_max_body_size 200m;                      # site deploys are base64 in JSON: 100 MiB of site is ~140 MB (nginx's default: 1 MB)
+    proxy_request_buffering off;                    # stream git pushes and uploads instead of spooling them to disk
+    proxy_read_timeout 120s;                        # runners wait up to 30 s for a job; big clones take longer than 60 s
+    proxy_send_timeout 120s;
+    location / {
+        proxy_pass http://127.0.0.1:4873;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;                    # Gitcha tells the UI from hosted sites by the Host header
+        proxy_set_header X-Forwarded-For $remote_addr;  # replace, never append to, what the client sent
+        proxy_set_header X-Forwarded-Proto $scheme;     # https: Gitcha marks its cookies Secure
+    }
+}
+
+# Hosted sites on a hosting domain (GITCHA_HOSTING_DOMAINS): one wildcard certificate. Repeat per hosting domain.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name .pages.example.net;
+    ssl_certificate     /etc/letsencrypt/live/pages.example.net/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/pages.example.net/privkey.pem;
+    client_max_body_size 200m;                      # site deploys are base64 in JSON: 100 MiB of site is ~140 MB (nginx's default: 1 MB)
+    proxy_request_buffering off;                    # stream git pushes and uploads instead of spooling them to disk
+    proxy_read_timeout 120s;                        # runners wait up to 30 s for a job; big clones take longer than 60 s
+    proxy_send_timeout 120s;
+    location / {
+        proxy_pass http://127.0.0.1:4873;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;                    # Gitcha tells the UI from hosted sites by the Host header
+        proxy_set_header X-Forwarded-For $remote_addr;  # replace, never append to, what the client sent
+        proxy_set_header X-Forwarded-Proto $scheme;     # https: Gitcha marks its cookies Secure
+    }
+}
+
+# Verified custom domains: each name's own certificate, picked by the name the browser asked for.
+# nginx reads these files when a browser connects, as its worker user (www-data), not as root at start-up, and certbot
+# keeps keys readable by root only. So let that group read them, once and after each new certificate (a deploy hook):
+#   chgrp -R www-data /etc/letsencrypt/live /etc/letsencrypt/archive && chmod -R g+rX /etc/letsencrypt/live /etc/letsencrypt/archive
+#   (as /etc/letsencrypt/renewal-hooks/deploy/gitcha-nginx, an executable sh script)
+# A name with no certificate yet fails its handshake; every other name is unaffected.
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    server_name _;
+    ssl_certificate     /etc/letsencrypt/live/$ssl_server_name/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$ssl_server_name/privkey.pem;
+    client_max_body_size 200m;                      # site deploys are base64 in JSON: 100 MiB of site is ~140 MB (nginx's default: 1 MB)
+    proxy_request_buffering off;                    # stream git pushes and uploads instead of spooling them to disk
+    proxy_read_timeout 120s;                        # runners wait up to 30 s for a job; big clones take longer than 60 s
+    proxy_send_timeout 120s;
+    location / {
+        proxy_pass http://127.0.0.1:4873;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;                    # Gitcha tells the UI from hosted sites by the Host header
+        proxy_set_header X-Forwarded-For $remote_addr;  # replace, never append to, what the client sent
+        proxy_set_header X-Forwarded-Proto $scheme;     # https: Gitcha marks its cookies Secure
+    }
+}

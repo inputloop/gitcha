@@ -1,7 +1,7 @@
 {
   "name": "gitcha-monorepo",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Gitcha: a free, self-hosted software package registry with mandatory 2FA, plus a Claude extension.",
   "license": "GPL-3.0-or-later OR LGPL-3.0-or-later",
   "type": "module",

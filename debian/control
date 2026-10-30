@@ -1,0 +1,38 @@
+# debian/control -- the two binary packages Gitcha's source builds.
+# Copyright 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Corwin Brust <corwin@bru.st> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+Source: gitcha
+Section: misc
+Priority: optional
+Maintainer: inputloop <nathanielfrankford@gmail.com>
+# npm fetches the server's dependencies from the committed lockfile at build time (network, or a filled npm cache).
+Build-Depends: debhelper-compat (= 13), nodejs (>= 20), npm
+Standards-Version: 4.6.2
+Homepage: https://github.com/inputloop/gitcha
+Vcs-Git: https://github.com/inputloop/gitcha.git
+Rules-Requires-Root: no
+
+Package: inputloop-gitcha
+Architecture: all
+Depends: ${misc:Depends}, nodejs (>= 20), git, adduser
+# ${gitcha:Recommends} is "cassandra" unless built with the pkg.gitcha.nocassandra profile.
+Recommends: ${gitcha:Recommends}, gnupg, openssh-server, caddy
+Description: Gitcha: forge, registry, hosting and community for inputloop
+ Self-hosted packages, git repositories (HTTPS and SSH), static sites with
+ custom domains, CI and lambda functions run by separate runners, billing with
+ Stripe and PayPal, agents and Second Reader reviews, a social crawl, and
+ operations tickets.  Every account uses a password and an authenticator app.
+ .
+ Its database lives in Apache Cassandra or in one file.  debconf asks for the
+ settings, so a preseed file can install many servers unattended.  It starts
+ only when that is asked for.
+
+Package: inputloop-gitcha-runner
+Architecture: all
+Depends: ${misc:Depends}, nodejs (>= 20), adduser
+Recommends: bcontain
+Description: Gitcha runner: CI jobs and functions in bContain VMs
+ Registers with a Gitcha server, takes jobs, runs each in its own throwaway
+ bContain VM, streams the log back and reports the result.  debconf can take
+ the server and a registration token, so a preseed file registers it
+ unattended.  It starts only when that is asked for.

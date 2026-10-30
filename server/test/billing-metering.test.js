@@ -9,7 +9,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { setup, DAY } from './billing-fixtures.js';
-import { tmpDir } from './helpers.js';
+import { tmpDir, persisted } from './helpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const src = (f) => path.join(here, '..', 'src', f);
@@ -75,7 +75,7 @@ test('BIL-7d: a failed write in the usage timer is logged and retried, and the p
     for (let i = 0; i < 100 && calls < 3; i++) await sleep(20);
     assert.ok(calls >= 3, `the timer tried again (${calls} attempts)`);
     assert.ok(log.lines.some((l) => /disk full/.test(l)), 'the failure is logged');
-    const onDisk = JSON.parse(fs.readFileSync(path.join(srv.config.dataDir, 'db.json'), 'utf8'));
+    const onDisk = persisted(srv.store);
     assert.equal(Object.values(onDisk.billing.usage['user:alice'])[0].fn_invocations, 3, 'and the count reached the disk in the end');
   } finally { await srv.close(); }
 });

@@ -1,0 +1,2 @@
+# The commands are small wrappers around the server; gitcha-server --help is not a thing, DEPLOY.md is the manual.
+inputloop-gitcha: no-manual-page [usr/bin/gitcha-*]

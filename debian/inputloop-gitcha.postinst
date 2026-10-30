@@ -1,0 +1,75 @@
+#!/bin/sh
+# postinst for inputloop-gitcha: the gitcha user, debconf.env from the debconf answers, and (only when
+# asked) enabling and starting the service.  An upgrade restarts a service that is running.
+# Copyright 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Corwin Brust <corwin@bru.st> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+set -e
+. /usr/share/debconf/confmodule
+WITH_CASSANDRA=@WITH_CASSANDRA@
+ETC=/etc/inputloop/gitcha
+start=no
+
+# quote VALUE: a double-quoted value for a systemd EnvironmentFile line.
+quote() { printf '"%s"' "$(printf '%s' "$1" | sed 's/[\\"]/\\&/g')"; }
+
+if [ "$1" = configure ]; then
+  getent group gitcha >/dev/null || addgroup --system gitcha
+  getent passwd gitcha >/dev/null || adduser --system --ingroup gitcha --home /var/lib/gitcha --shell /bin/sh gitcha
+  chown root:gitcha "$ETC/gitcha.env"; chmod 640 "$ETC/gitcha.env"
+
+  # debconf.env: what debconf was told, read by the unit after gitcha.env.  The answers are collected first
+  # (db_get talks to debconf over stdout, so never inside a redirect), then the file is written whole and moved.
+  db_get inputloop-gitcha/public_url; lines="GITCHA_PUBLIC_URL=$(quote "${RET%/}")"
+  db_get inputloop-gitcha/hosting_domains; [ -z "$RET" ] || lines="$lines
+GITCHA_HOSTING_DOMAINS=$(quote "$RET")"
+  store='file'
+  if [ "$WITH_CASSANDRA" = yes ]; then db_get inputloop-gitcha/store; store=$RET; fi
+  lines="$lines
+GITCHA_STORE=$store"
+  if [ "$store" = cassandra ]; then
+    for q in contact_points datacenter keyspace instance replication username; do
+      db_get "inputloop-gitcha/cassandra_$q"
+      [ -z "$RET" ] || lines="$lines
+GITCHA_CASSANDRA_$(echo "$q" | tr a-z A-Z)=$(quote "$RET")"
+    done
+    db_get inputloop-gitcha/cassandra_username
+    if [ -n "$RET" ]; then
+      db_get inputloop-gitcha/cassandra_password
+      if [ -n "$RET" ]; then lines="$lines
+GITCHA_CASSANDRA_PASSWORD=$(quote "$RET")"
+      elif [ -f "$ETC/debconf.env" ] && old=$(grep '^GITCHA_CASSANDRA_PASSWORD=' "$ETC/debconf.env"); then lines="$lines
+$old"
+      fi
+    fi
+  fi
+  new="$ETC/debconf.env.dpkg-new"
+  (umask 077; {
+    echo "# debconf.env -- written from the debconf answers; change them with: dpkg-reconfigure inputloop-gitcha"
+    echo "# The unit reads this after gitcha.env, so these win.  Edits made here by hand are lost at the next configure."
+    printf '%s\n' "$lines"
+  } > "$new")
+  # The password now lives only in debconf.env, readable by root and the gitcha group.
+  db_set inputloop-gitcha/cassandra_password ""
+  chown root:gitcha "$new"; chmod 640 "$new"; mv "$new" "$ETC/debconf.env"
+
+  db_get inputloop-gitcha/enable
+  if [ "$RET" = true ]; then start=yes; fi
+fi
+# debconf talks over stdout; it is done before systemctl and the debhelper snippets print anything.
+db_stop
+
+#DEBHELPER#
+
+if [ "$1" = configure ]; then
+  [ -d /run/systemd/system ] && systemctl --system daemon-reload >/dev/null 2>&1 || true
+  if [ "$start" = yes ]; then
+    deb-systemd-helper enable gitcha.service >/dev/null || true
+    # restart, not start: a running server must read a changed debconf.env.  A failed start (Cassandra not up yet)
+    # leaves the package installed; systemd keeps retrying (Restart=on-failure) and journalctl -u gitcha says why.
+    deb-systemd-invoke restart gitcha.service >/dev/null 2>&1 || echo "inputloop-gitcha: gitcha did not start yet; see journalctl -u gitcha" >&2
+  else
+    # Nothing starts by itself, but a service that is running keeps the old code until it restarts.
+    deb-systemd-invoke try-restart gitcha.service >/dev/null 2>&1 || true
+  fi
+fi
+exit 0

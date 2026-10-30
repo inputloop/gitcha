@@ -1,0 +1,28 @@
+gitcha (0.2.0) unstable; urgency=medium
+
+  * Apache Cassandra as the database (GITCHA_STORE=cassandra), the build
+    option on by default: rows per entry, one atomic batch per change, a
+    lease so one server owns an instance, a check of the secret key, and a
+    one-time import of an existing db.json.  --without-cassandra (the build
+    profile pkg.gitcha.nocassandra) leaves the driver out.
+  * Full Debian packaging (debian/, deploy/build-debian.sh) with debconf, a
+    preseed example, a signed apt repository builder (deploy/apt-repo.sh) and
+    deploy/mass-install.sh for many hosts over SSH.
+  * Reverse proxy examples for Caddy, nginx, Apache httpd and HAProxy, and
+    how to run without a proxy on a trusted network.
+  * Versions are now X.Y.Z+gitYYYYMMDDHHMMSS.<sha7>: the commit's time comes
+    before its hash, so apt always sees a newer commit as newer.  The old
+    X.Y.Z+git<sha7> sorted by the hash's letters and could hide an upgrade;
+    the move to 0.2.0 puts every new build above the old ones.
+
+ -- inputloop <nathanielfrankford@gmail.com>  Fri, 30 Oct 2026 01:30:00 +0000
+
+gitcha (0.1.0) unstable; urgency=medium
+
+  * Full Debian packaging (debian/, dpkg-buildpackage): debconf questions so
+    a preseed file installs and configures Gitcha with no prompts, an apt
+    repository builder, and a mass-install script for many hosts.
+  * Apache Cassandra as the database, the build option on by default; the
+    build profile pkg.gitcha.nocassandra leaves it out (db.json instead).
+
+ -- inputloop <nathanielfrankford@gmail.com>  Thu, 29 Oct 2026 22:00:00 +0000

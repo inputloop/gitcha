@@ -1,10 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// The server's database: one JSON file (db.json) in the data folder, kept in memory and written back
-// whole after every change. Each write is atomic (all or nothing): write a temporary file, fsync it
-// (force it onto the disk), rename it into place, then fsync the folder. So a crash never leaves a
-// half-written database. Only one process at a time may own the data folder (the db.lock file).
+// The server's database, kept in memory and saved after every change. Where it is saved is the backend:
+// - "file" (GITCHA_STORE=file): one JSON file (db.json) in the data folder, written back whole. Each write
+//   is atomic (all or nothing): write a temporary file, fsync it (force it onto the disk), rename it into
+//   place, then fsync the folder. So a crash never leaves a half-written database.
+// - "cassandra" (GITCHA_STORE=cassandra): rows in an Apache Cassandra keyspace (store-cassandra.js), only
+//   the rows a change touched, each save one atomic batch.
+// Only one process at a time may own the data folder (the db.lock file).
 // Package tarballs (and other stored files, such as CI artifacts and media) live in a blob folder, named by the
 // hash of their bytes ("content-addressed").
 // They are written the same way and checked when read.
@@ -13,6 +16,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { StartupError } from './config.js';
 import { HttpError } from './errors.js';
+import { CassandraBackend } from './store-cassandra.js';
 
 // The shape of a brand-new database. Other services add their own collections (such as agents or jobs) as needed.
 const EMPTY = () => ({
@@ -116,40 +120,12 @@ function writeFileDurably(file, data, mode = 0o600) {
   fsyncPath(path.dirname(file));
 }
 
-/**
- * The database. Services read `store.data` directly and change it inside tx(), which saves to disk.
- * It also stores blobs and keeps the per-user audit log.
- */
-export class Store {
-  constructor(dataDir, { auditCeiling = AUDIT_CEILING } = {}) {
-    this.auditCeiling = auditCeiling;
-    this.file = path.join(dataDir, 'db.json');
-    this.blobDir = path.join(dataDir, 'blobs');
-    this.lockFile = path.join(dataDir, 'db.lock');
-    fs.mkdirSync(this.blobDir, { recursive: true, mode: 0o700 });
-    this.lockNonce = acquireLock(this.lockFile, dataDir);
-    try {
-      // We hold the lock, so any half-written temporary file belongs to a process that died (STORE-6).
-      for (const dir of [dataDir, this.blobDir]) {
-        for (const f of fs.readdirSync(dir)) if (f.endsWith('.tmp')) fs.rmSync(path.join(dir, f), { force: true });
-      }
-      this.verifiedBlobs = new Set(); // blobs whose bytes matched their name once in this process
-      this.data = { ...EMPTY(), ...this.readDisk() };
-      if (Array.isArray(this.data.audit)) this.data.audit = splitLegacyAudit(this.data.audit, this.data.users);
-      this.auditRows = this.countAuditRows();
-    } catch (err) {
-      this.close();
-      throw err;
-    }
-  }
-
-  /** Count every audit row in every list. */
-  countAuditRows() {
-    return Object.values(this.data.audit).reduce((n, s) => n + s.security.length + s.others.length + s.traffic.length, 0);
-  }
+/** The "file" backend: db.json, read whole at start and written whole (durably) on every save. */
+class FileBackend {
+  constructor(file) { this.file = file; }
 
   /** What db.json holds ({} on a first start). A file that cannot be read is named in the error, never overwritten. */
-  readDisk() {
+  load() {
     if (!fs.existsSync(this.file)) return {};
     let parsed;
     try {
@@ -163,8 +139,57 @@ export class Store {
     return parsed;
   }
 
-  /** Let go of the data directory (the next process may start). */
+  /** What restore() goes back to: the file as it is now. */
+  reload() { return this.load(); }
+
+  save(data) { writeFileDurably(this.file, JSON.stringify(data)); }
+
+  close() {}
+}
+
+/**
+ * The database. Services read `store.data` directly and change it inside tx(), which saves to disk.
+ * It also stores blobs and keeps the per-user audit log.
+ */
+export class Store {
+  /**
+   * `backend` is config.store ({ kind: 'file' } or { kind: 'cassandra', cassandra: {...} }); with none, db.json.
+   * `secretKey` lets the Cassandra backend check that the key matches the data it holds.
+   */
+  constructor(dataDir, { auditCeiling = AUDIT_CEILING, backend, secretKey } = {}) {
+    this.auditCeiling = auditCeiling;
+    this.file = path.join(dataDir, 'db.json');
+    this.blobDir = path.join(dataDir, 'blobs');
+    this.lockFile = path.join(dataDir, 'db.lock');
+    fs.mkdirSync(this.blobDir, { recursive: true, mode: 0o700 });
+    this.lockNonce = acquireLock(this.lockFile, dataDir);
+    try {
+      // We hold the lock, so any half-written temporary file belongs to a process that died (STORE-6).
+      for (const dir of [dataDir, this.blobDir]) {
+        for (const f of fs.readdirSync(dir)) if (f.endsWith('.tmp')) fs.rmSync(path.join(dir, f), { force: true });
+      }
+      this.verifiedBlobs = new Set(); // blobs whose bytes matched their name once in this process
+      this.backend = backend?.kind === 'cassandra'
+        ? new CassandraBackend({ dataDir, settings: backend.cassandra, secretKey })
+        : new FileBackend(this.file);
+      this.data = { ...EMPTY(), ...this.backend.load() };
+      if (Array.isArray(this.data.audit)) this.data.audit = splitLegacyAudit(this.data.audit, this.data.users);
+      this.auditRows = this.countAuditRows();
+    } catch (err) {
+      this.close();
+      throw err;
+    }
+  }
+
+  /** Count every audit row in every list. */
+  countAuditRows() {
+    return Object.values(this.data.audit).reduce((n, s) => n + s.security.length + s.others.length + s.traffic.length, 0);
+  }
+
+  /** Let go of the database and the data directory (the next process may start). */
   close() {
+    try { this.backend?.close(); } catch (err) { console.error(`gitcha: closing the database: ${err.message}`); }
+    this.backend = null;
     if (this.lockNonce) releaseLock(this.lockFile, this.lockNonce);
     this.lockNonce = null;
   }
@@ -187,10 +212,10 @@ export class Store {
     return result;
   }
 
-  /** Write the whole database to disk now. */
+  /** Save the whole database now (the Cassandra backend sends only the rows that changed). */
   flush() {
     try {
-      writeFileDurably(this.file, JSON.stringify(this.data));
+      this.backend.save(this.data);
     } catch (err) {
       this.restore();
       throw err;
@@ -198,15 +223,15 @@ export class Store {
   }
 
   /**
-   * A write failed (disk full, I/O error), or a change threw partway through. Memory now holds changes that the
-   * disk does not, and a later write would save them as if they had been accepted (STORE-5). So put memory back
+   * A write failed (disk full, I/O error, Cassandra unreachable), or a change threw partway through. Memory now
+   * holds changes that the disk does not, and a later write would save them as if they had been accepted (STORE-5). So put memory back
    * to the last file, in place. Other services keep a reference to the top-level `data` object, so it is emptied
    * and refilled, not replaced. Services must read their collections through the store each time (as getters),
    * never keep a reference to one, because the collections themselves are replaced.
    */
   restore() {
     let disk;
-    try { disk = { ...EMPTY(), ...this.readDisk() }; } catch { return; } // cannot even read it: leave memory, the error is already on its way up
+    try { disk = { ...EMPTY(), ...this.backend.reload() }; } catch { return; } // cannot even read it: leave memory, the error is already on its way up
     if (Array.isArray(disk.audit)) disk.audit = splitLegacyAudit(disk.audit, disk.users);
     for (const k of Object.keys(this.data)) delete this.data[k];
     Object.assign(this.data, disk);

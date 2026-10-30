@@ -1,0 +1,32 @@
+Template: inputloop-gitcha-runner/server_url
+Type: string
+Default:
+Description: Gitcha server this runner takes jobs from (empty: register by hand later):
+ The server's public URL, for example https://gitcha.example.org.  With a
+ registration token below, the runner registers itself during installation.
+
+Template: inputloop-gitcha-runner/registration_token
+Type: password
+Description: Registration token from that server:
+ An administrator makes one for instance-wide runners, a team owner for a
+ team's.  A token made with "uses" greater than one can register a whole
+ fleet.  It is used once, here, and not kept: the runner keeps the runner token
+ it is given instead, in /var/lib/gitcha-runner/runner.json (mode 600).
+
+Template: inputloop-gitcha-runner/name
+Type: string
+Default:
+Description: Name for this runner (empty: the host name):
+
+Template: inputloop-gitcha-runner/labels
+Type: string
+Default:
+Description: Extra labels for this runner (comma list, may be empty):
+ Pipelines and functions can ask for runners by label.
+
+Template: inputloop-gitcha-runner/enable
+Type: boolean
+Default: false
+Description: Enable and start the gitcha-runner service now?
+ It needs a registered runner and bContain.  If not now, later:
+ systemctl enable --now gitcha-runner

@@ -2,12 +2,14 @@
 // SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { createApp } from '../src/app.js';
 import { totp } from '../src/totp.js';
+import { CassandraBackend, fromRows } from '../src/store-cassandra.js';
 
 /** A controllable clock so tests can fast-forward past 2FA intervals. */
 export function fakeClock(start = Date.now()) {
@@ -21,8 +23,20 @@ export function tmpDir(prefix = 'gitcha-test-') {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
+/**
+ * GITCHA_TEST_STORE=cassandra (with GITCHA_TEST_CASSANDRA=host:port) runs a test's servers on that Cassandra
+ * cluster, each in an instance of its own. Tests that read db.json themselves only make sense on the file store.
+ */
+function testStoreEnv() {
+  if (process.env.GITCHA_TEST_STORE !== 'cassandra') return {};
+  return {
+    GITCHA_STORE: 'cassandra', GITCHA_CASSANDRA_CONTACT_POINTS: process.env.GITCHA_TEST_CASSANDRA ?? '127.0.0.1',
+    GITCHA_CASSANDRA_KEYSPACE: 'gitcha_test', GITCHA_CASSANDRA_INSTANCE: `t${crypto.randomBytes(6).toString('hex')}`,
+  };
+}
+
 export async function startServer({ env = {}, overrides = {}, clock = fakeClock(), appOpts = {} } = {}) {
-  const config = loadConfig({ GITCHA_PORT: '0', ...env }, { dataDir: tmpDir(), ...overrides });
+  const config = loadConfig({ GITCHA_PORT: '0', ...testStoreEnv(), ...env }, { dataDir: tmpDir(), ...overrides });
   const app = createApp(config, { clock, ...appOpts });
   const watch = process.env.GITCHA_UNSAVED_LOG || process.env.GITCHA_STRICT_STORE ? watchUnsavedWrites(app.store, process.env.GITCHA_UNSAVED_LOG) : null;
   await new Promise((r) => app.server.listen(0, '127.0.0.1', r));
@@ -38,9 +52,15 @@ export async function startServer({ env = {}, overrides = {}, clock = fakeClock(
   return { ...app, url, clock, close };
 }
 
-/** Paths where memory and db.json disagree: a change that was made but never saved. */
+/** What the store's backend holds now, read back from db.json or, on Cassandra, from the cluster: memory is not the proof. */
+export function persisted(store) {
+  if (store.backend instanceof CassandraBackend) return fromRows(new Map(store.backend.call('load', {}).rows));
+  return JSON.parse(fs.readFileSync(store.file, 'utf8'));
+}
+
+/** Paths where memory and the saved database disagree: a change that was made but never saved. */
 export function unsavedPaths(store) {
-  const disk = JSON.parse(fs.readFileSync(store.file, 'utf8'));
+  const disk = persisted(store);
   const mem = JSON.parse(JSON.stringify(store.data));
   const out = [];
   const walk = (a, b, at) => {

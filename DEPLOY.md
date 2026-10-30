@@ -21,6 +21,10 @@ builds on alphaOS VMs on the ghostwheel, and then for anyone who self-hosts and 
    gitcha-runner on a separate VM                 each job in its own bContain VM
 ```
 
+- **The TLS proxy** (Caddy, nginx, Apache or HAProxy) is the only thing on ports 80 and 443. It
+  does the https, the certificates and the client's address, and passes everything else to the
+  server unchanged; "The reverse proxy" below says why and how. On a network you trust, Gitcha
+  also runs without it ("Running without a reverse proxy").
 - **The server** keeps accounts, repositories, packages, sites, tickets and the queue. It
   serves static sites itself (files only), and it never executes anything a user wrote.
 - **Runners** take CI jobs and function invocations from the queue and run each in a fresh
@@ -32,14 +36,87 @@ builds on alphaOS VMs on the ghostwheel, and then for anyone who self-hosts and 
 
 ## Packages
 
+There are two recipes. Both lay the files out with `deploy/lay-out.sh`, so they install the same
+programs in the same places; they differ in what the package does when it is installed.
+
 ```sh
-sh deploy/build-debs.sh out/
+sh deploy/build-debian.sh out/                 # the full packaging: debian/, debhelper, debconf
+sh deploy/build-debs.sh out/                   # alphaOS's idiom: plain dpkg-deb, no root, asks nothing
 ```
 
-This builds `inputloop-gitcha` and `inputloop-gitcha-runner` with plain `dpkg-deb`, no root,
-in alphaOS's idiom: version `X.Y.Z+git<sha7>`, maintainer `inputloop`, and no service started
-or enabled by the package. The server's two npm dependencies come from the committed
-lockfile at build time.
+Both build `inputloop-gitcha` and `inputloop-gitcha-runner`, maintainer `inputloop`, and neither
+enables or starts a service unless asked to. The server's npm dependencies come from the committed
+lockfile at build time (so the build needs the npm registry, or a filled npm cache).
+
+**Versions.** A package's version is `X.Y.Z+gitYYYYMMDDHHMMSS.<sha7>`: `package.json`'s version, the
+commit's time (UTC), then the first seven characters of its hash, for example
+`0.2.0+git20261030010555.cb60617` (`sh deploy/version.sh` prints it). The time comes first because
+apt compares versions piece by piece: the hash alone (the scheme before 0.2.0) sorted by its letters,
+so a newer commit could look older and apt would not upgrade to it. Two things follow:
+
+- **Build the branch you mean.** The version names the commit that was checked out, so build `main`
+  after `git pull` has brought the work in; `git log -1 --oneline` says which commit that is.
+- **The same commit gives the same version.** apt then says `is already the newest version` and
+  installs nothing: `apt install --reinstall ./inputloop-gitcha_*.deb` installs a rebuild anyway.
+  `build-debs.sh` packs the working tree as it is and warns when it holds uncommitted changes;
+  `build-debian.sh` builds only what is committed.
+
+- **`build-debian.sh`** exports the committed tree (`git archive HEAD`), gives `debian/changelog` a
+  snapshot entry and runs `dpkg-buildpackage`. It needs `debhelper` (13), `devscripts`, git and
+  Node.js 20+ with npm. The packages ask their settings with **debconf** (below), keep them in
+  `/etc/inputloop/gitcha/debconf.env`, and are lintian-clean. This is the one to put in an apt
+  repository and install on many hosts.
+- **`build-debs.sh`** is what alphaOS's image build calls. Its packages ask nothing: edit
+  `gitcha.env` by hand.
+
+**The build option: Apache Cassandra, on by default.** A default build carries the Cassandra
+driver (`cassandra-driver`, Apache-2.0), ships `GITCHA_STORE=cassandra` and recommends the
+`cassandra` package. To build without it, so the database is `db.json` and the driver is not in
+the package:
+
+```sh
+sh deploy/build-debian.sh out/ --without-cassandra      # = dpkg-buildpackage -P pkg.gitcha.nocassandra
+sh deploy/build-debs.sh out/ --without-cassandra
+docker build --build-arg GITCHA_WITH_CASSANDRA=no .
+npm ci --omit=optional                                   # from a checkout
+```
+
+Both packages depend on `nodejs (>= 20)`. Debian 12 and Ubuntu 24.04 ship Node 18, so those hosts
+need Node from NodeSource (or Debian 13, which has 20).
+
+### Installing many hosts
+
+Three pieces, all in `deploy/`:
+
+1. **An apt repository.** `sh deploy/apt-repo.sh REPO_DIR --sign KEYID out/*.deb` makes a signed
+   flat repository (Packages, Release, InRelease and the public key as
+   `inputloop-archive-keyring.gpg`). Serve `REPO_DIR` over HTTPS; run it again to add new builds.
+2. **A preseed file.** `deploy/preseed.example.cfg` answers every debconf question of both
+   packages: the public URL, hosting domains, the database (Cassandra nodes, data center,
+   keyspace, this host's instance name, replication, credentials), whether to start the service,
+   and for runners the server and a registration token. `@HOST@` and `@INSTANCE@` are filled in per
+   host.
+3. **`mass-install.sh`.** Given a hosts file (one SSH destination per line, optionally followed by
+   that host's Cassandra instance name) it runs, on each host over one SSH connection, as root:
+   `debconf-set-selections` with that host's answers, then `apt-get install` with no prompts. It
+   works through 8 hosts at a time (`--parallel N`), keeps a log per host and prints ok or failed
+   for each.
+
+```sh
+sh deploy/mass-install.sh servers.txt preseed.cfg \
+  --repo https://apt.example.org/gitcha --keyring repo/inputloop-archive-keyring.gpg --package inputloop-gitcha
+sh deploy/mass-install.sh runners.txt preseed.cfg --deb out/inputloop-gitcha-runner_*.deb
+```
+
+A runner fleet registers itself during installation: make one registration token with `uses` of
+at least the number of runners, put it in the preseed file, and each runner trades it for its own
+runner token (the registration token is used once and kept nowhere: not in debconf, not on the
+command line). Change any answer later on one host with `dpkg-reconfigure inputloop-gitcha`.
+
+Status: built and installed here from the signed repository, configured from a preseed file, run
+on Cassandra 5.0.9, and a runner registered itself through `mass-install.sh` (with a stand-in
+`ssh` that ran locally). **Not yet run over real SSH against separate hosts, nor under systemd**
+(the machine had none), so the enable-and-start answer is untried.
 
 ### Putting them in alphaOS
 
@@ -67,10 +144,15 @@ be named as such in alphaOS's security model.
 
 ## The server
 
-1. `apt install ./inputloop-gitcha_*.deb`
+1. `apt install ./inputloop-gitcha_*.deb`. The full packaging asks for the public URL, the
+   hosting domains, the database and whether to start now (`dpkg-reconfigure inputloop-gitcha`
+   asks again).
 2. Edit `/etc/inputloop/gitcha/gitcha.env` (a conffile, readable by root and the `gitcha`
-   group). At least `GITCHA_PUBLIC_URL`, and `GITCHA_HOSTING_DOMAINS` for hosting.
-3. `systemctl enable --now gitcha`
+   group) for everything else. With `build-debs.sh` packages, set at least `GITCHA_PUBLIC_URL`
+   there, `GITCHA_HOSTING_DOMAINS` for hosting, and the database settings.
+3. `systemctl enable --now gitcha` (unless debconf already did), and put a reverse proxy in
+   front ("The reverse proxy" below), or, on a trusted network only, run without one ("Running
+   without a reverse proxy").
 4. Open the public URL and register. **The first account becomes the administrator.**
 5. Set `GITCHA_OPEN_REGISTRATION=false` afterwards if sign-up should be closed.
 
@@ -79,29 +161,214 @@ be named as such in alphaOS's security model.
 - **Firewall:** open 443 and 80 for the proxy, and 22 if you offer git over SSH; nothing else (4873 stays on loopback).
 - **`GITCHA_TRUST_PROXY=true`** makes Gitcha believe `X-Forwarded-For`; turn it on only when the proxy on this host is the one way in, or anyone can choose the address that rate limits and the new-network check see.
 - **Upgrades:** the package restarts a running `gitcha` itself (`systemctl try-restart`); if you installed the new code any other way, run `systemctl restart gitcha`, or a security fix is installed and not live.
-- **One process per data directory:** the database is one file held in memory, so a second server on the same directory (a hand-started `gitcha-server` beside the unit, a second container on the volume) silently loses accounts.
+- **One process per data directory, and per Cassandra instance:** the database is held in memory and saved whole or row by row, so a second server on the same data (a hand-started `gitcha-server` beside the unit, a second container on the volume) would silently lose accounts. `db.lock` and the Cassandra lease stop it (see "The database").
 - **`GITCHA_LOCKED_CHECKS`** is a comma list of the two-factor checks people cannot turn off (`interval`, `new_network`, `sensitive`); it is empty unless you set it.
 - **Limits in the units:** the server unit caps memory at 2G and tasks at 512, the runner's at 6G and 1024, and both allow only `AF_UNIX`, `AF_INET` and `AF_INET6`. They are the keepers' numbers: change them with `systemctl edit`. The runner's unit also drops every capability, which has not been tried against a real bContain job yet.
 - **Settings:** `gitcha.env` lists every setting the server reads, with its default on a `#` line.
 - **Docker:** the image has `git` and `gpg`, no sshd, so there is no git over SSH there.
 
+### The database: Cassandra or a file
+
+`GITCHA_STORE` chooses. Either way the server holds the whole database in memory, serves every
+read from there, and saves after every change before it answers; blobs, git repositories, sites,
+logs and `secret.key` stay in `/var/lib/gitcha`.
+
+- **`cassandra`** (the packages' default): rows in an Apache Cassandra keyspace. Each collection is
+  split one row per entry (one user, one session, one package), and a save sends only the rows it
+  changed, as one batch in one partition, which Cassandra applies whole or not at all. One table,
+  `gitcha_db`, one partition per instance (`GITCHA_CASSANDRA_INSTANCE`), so many Gitcha servers can
+  share a keyspace, one instance each. The keyspace and table are made at the first start
+  (`GITCHA_CASSANDRA_REPLICATION`, `SimpleStrategy:1` by default; set
+  `NetworkTopologyStrategy:dc1=3` for a real cluster, or `GITCHA_CASSANDRA_CREATE_KEYSPACE=no` and
+  make it yourself). Reads and writes use `LOCAL_QUORUM` (`GITCHA_CASSANDRA_CONSISTENCY`).
+- **`file`**: `/var/lib/gitcha/db.json`, written whole and synced on every change.
+
+**Moving to Cassandra.** Point a server that has a `db.json` at an empty instance and start it: it
+imports the file once and renames it `db.json.imported-to-cassandra`. Keep the same `secret.key`.
+
+**One owner.** A server takes a lease row on its instance (60 s, renewed every 15 s), and every save
+is a compare-and-set on that lease. A second server on the same instance waits up to 90 s for the
+lease to lapse, then stops with `another Gitcha server (HOST, pid N) owns instance ...`; a lease left
+by a dead process on the same machine is taken over at once. A server that loses its lease refuses
+every change from then on and says so in its log; restart it.
+
+**The key.** The instance remembers a check value of the `secret.key` that wrote it, so a server
+started with another key stops (`... was written with a different secret key`) instead of
+locking every account out.
+
+**What it costs.** Each save waits for Cassandra (a few milliseconds on a local node; it was about
+7 ms per change against Cassandra 5.0.9 here), during which that server answers nothing else, as it
+waits for fsync with `db.json`. A save that takes longer than `GITCHA_CASSANDRA_TIMEOUT` (15 s) fails
+and the change is undone. A change larger than 4 MB is sent as several batches, which are not atomic
+together; only importing a big `db.json` comes near that. The whole instance is one partition, read
+once at start: fine for the size of database one server holds in memory, and deletions (expired
+sessions) leave tombstones in it until `gc_grace_seconds` (10 days) passes, so run `nodetool repair`
+on the usual schedule.
+
+### The reverse proxy: what it is for
+
+Gitcha speaks plain HTTP only, on `127.0.0.1:4873`. It has no TLS code of its own, and its unit
+gives it no capabilities, so it cannot open ports 80 or 443 either. A **reverse proxy** is the web
+server that sits in front of it and does the parts of being on the internet that Gitcha leaves out:
+
+- **TLS (https).** Passwords, two-factor codes, session cookies and device tokens cross the network
+  encrypted. Over plain http anyone on the path can read them and act as the person.
+- **Certificates.** The proxy holds a certificate for Gitcha's name, a wildcard for each hosting
+  domain, and one for each verified custom domain. Caddy orders all of them by itself.
+- **Ports 80 and 443,** with http redirected to https, so people type no port number.
+- **The client's address,** passed on in `X-Forwarded-For`. Gitcha's rate limits and its
+  new-network two-factor check need the address of the person, not of the proxy.
+
+Gitcha needs five things from it, whichever proxy it is:
+
+| The proxy must | Because |
+|---|---|
+| pass the **`Host` header** on unchanged | Gitcha tells its own UI from hosted sites and custom domains by `Host`, and the form check compares it with `GITCHA_PUBLIC_URL` |
+| **replace** `X-Forwarded-For` with the client's address (or append it last) | Gitcha, with `GITCHA_TRUST_PROXY=true`, believes only the entry the nearest proxy added; a proxy that passes the client's own header through lets anyone pick their address |
+| set **`X-Forwarded-Proto: https`** | with it Gitcha marks its cookies `Secure` (so does an `https://` public URL) |
+| accept request bodies of **at least 150 MB** | a site deploy is base64 inside JSON: the 100 MiB `GITCHA_MAX_SITE_BYTES` is about 140 MB on the wire. nginx's own limit is 1 MB |
+| wait **at least 120 s** for an answer | runners hold a request open up to 30 s waiting for a job, and big clones and deploys take longer than the usual 60 s |
+
+and send every name to Gitcha: its own, each hosting domain's wildcard, and custom domains (any
+other name), all to `127.0.0.1:4873`. Then set, in `gitcha.env`:
+
+```sh
+GITCHA_PUBLIC_URL=https://gitcha.example.org
+GITCHA_TRUST_PROXY=true
+GITCHA_TRUSTED_PROXIES=1      # one proxy; 2 if a CDN or load balancer stands before it, or their addresses
+```
+
+The examples, in `/usr/share/doc/inputloop-gitcha/` (and `deploy/` in the source), are ready to edit;
+each was run in front of Gitcha with a forged `X-Forwarded-For` and a 150 MB upload:
+
+| Proxy | File | Certificates | Custom domains |
+|---|---|---|---|
+| **Caddy** (recommended) | `Caddyfile.example` | ordered and renewed by Caddy | automatic: Caddy asks Gitcha first (on-demand TLS) |
+| **nginx** | `nginx-gitcha.conf.example` | certbot | one `certbot` run per domain; nginx picks the file by name (its worker must be able to read the keys: the file says how) |
+| **Apache httpd** | `apache-gitcha.conf.example` | certbot, or mod_md | a VirtualHost (or mod_md `MDomain`) per domain |
+| **HAProxy** | `haproxy-gitcha.cfg.example` | certbot, one `.pem` per name in a folder | one `certbot` run per domain; HAProxy picks the `.pem` by name |
+
+The smallest working setups, for the UI alone:
+
+```caddy
+gitcha.example.org {
+	reverse_proxy 127.0.0.1:4873
+}
+```
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name gitcha.example.org;
+    ssl_certificate     /etc/letsencrypt/live/gitcha.example.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/gitcha.example.org/privkey.pem;
+    client_max_body_size 200m;
+    proxy_request_buffering off;
+    proxy_read_timeout 120s;
+    location / {
+        proxy_pass http://127.0.0.1:4873;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+```apache
+<VirtualHost *:443>
+    ServerName gitcha.example.org
+    SSLEngine on
+    SSLCertificateFile    /etc/letsencrypt/live/gitcha.example.org/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/gitcha.example.org/privkey.pem
+    ProxyPreserveHost On
+    ProxyPass        / http://127.0.0.1:4873/ timeout=120
+    ProxyPassReverse / http://127.0.0.1:4873/
+    RequestHeader set X-Forwarded-Proto "https"
+    LimitRequestBody 209715200
+</VirtualHost>
+```
+
+```haproxy
+frontend gitcha_www
+    bind :443 ssl crt /etc/haproxy/certs/
+    http-request del-header X-Forwarded-For
+    option forwardfor
+    http-request set-header X-Forwarded-Proto https
+    timeout client 120s
+    default_backend gitcha
+backend gitcha
+    timeout server 120s
+    server gitcha 127.0.0.1:4873
+```
+
+Apache appends the client's address to the `X-Forwarded-For` it was sent instead of replacing it;
+that is safe, because Gitcha reads only the last entry. Check a setup with `curl -H
+'X-Forwarded-For: 6.6.6.6' https://gitcha.example.org/register -D -`: the `Set-Cookie` line must say
+`Secure`, and a failed sign-in afterwards must show your real address in the security log, not
+6.6.6.6.
+
+Git over SSH does not go through the proxy at all: sshd on port 22 hands it to Gitcha directly (see
+"Git over SSH").
+
+### Running without a reverse proxy
+
+Gitcha runs without one: everything works over plain http, the web UI, the API, the CLI, the Claude
+extension, git over HTTP, runners and hosted sites. What you lose is the encryption, the
+certificates and ports 80/443. So it is fine where nobody untrusted can see the traffic, and **not
+on the open internet**: there, every password, two-factor code and session cookie crosses in the
+clear, and a session cookie or device token read off the wire is as good as the account (a
+two-factor code cannot be replayed, but the session it opened can).
+
+**On your own machine** (trying it out, developing): nothing to set. `npm start` (or the package
+with the defaults) listens on `127.0.0.1:4873`; open `http://localhost:4873`.
+
+**On a network you trust** (a home or office LAN, or a VPN such as WireGuard or Tailscale):
+
+```sh
+GITCHA_HOST=0.0.0.0                       # or only the LAN/VPN address, e.g. 10.8.0.1
+GITCHA_PORT=4873                          # not 80: the unit gives Gitcha no right to ports under 1024
+GITCHA_PUBLIC_URL=http://gitcha.lan:4873  # exactly what people type, port included
+GITCHA_TRUST_PROXY=false                  # gitcha.env ships true, for a proxy: turn it off
+```
+
+then open port 4873 to that network only (`ufw allow from 192.168.1.0/24 to any port 4873`).
+`GITCHA_TRUST_PROXY=false` matters: with it left on and no proxy, anyone can put any address in
+`X-Forwarded-For` and walk past the rate limits. The start-up lines say which it is
+(`client address  the socket (X-Forwarded-For ignored ...)`). Cookies are not marked `Secure`,
+because the public URL is http. Clients take the same URL: `gitcha login --server
+http://gitcha.lan:4873`, `gitcha-runner register --server http://gitcha.lan:4873 ...`, and git
+remotes `http://gitcha.lan:4873/git/OWNER/REPO.git`. Hosted sites work too, with the port in the
+address (`http://mysite.pages.lan:4873`), if your DNS or `/etc/hosts` points the hosting domain's
+names at the server; custom domains get no certificates, so only http.
+With Docker, publish the port to the network: change `127.0.0.1:4873:4873` in
+`docker-compose.yml` to `4873:4873` (and set the environment above).
+
+**For one person, from anywhere:** leave Gitcha on loopback and tunnel to it over SSH:
+
+```sh
+ssh -N -L 4873:127.0.0.1:4873 you@gitcha-host
+```
+
+and use `http://localhost:4873` on your own machine (set `GITCHA_PUBLIC_URL=http://localhost:4873`).
+SSH encrypts the traffic, and nothing new is open on the server.
+
+To move from one of these to a proxy later, put the proxy in front, set `GITCHA_PUBLIC_URL` to the
+https address and `GITCHA_TRUST_PROXY=true`, and go back to `GITCHA_HOST=127.0.0.1`. Accounts and data
+stay as they are; people sign in again, because their cookies were for the old address.
+
 ### TLS and DNS
 
-`/usr/share/doc/inputloop-gitcha/Caddyfile.example` puts Caddy in front: a wildcard
-certificate for each hosting domain, and on-demand certificates for everything else. Caddy
-asks `GET /api/v1/hosting/tls-allowed?domain=NAME` before ordering one, and Gitcha says yes
-only for its own name, custom domains whose DNS check passed and still passes (Gitcha looks
-again every six hours and drops a domain after three misses in a row), and, as a stopgap for
-instances without a wildcard certificate, a site's subdomain while its owner has ordered fewer
-than ten new ones this week. A public CA caps how many certificates one registered domain may
-order per week, so use the wildcard certificate (it needs the DNS challenge, so a Caddy build
-with your DNS provider's module); an account may also hold at most 25 sites whatever the
-billing setting.
-
-`gitcha.env` sets `GITCHA_TRUST_PROXY=true`, which is right for this Caddyfile: Caddy replaces
-`X-Forwarded-For` with the client's address and Gitcha trusts one proxy hop. With nginx instead,
-set `proxy_set_header X-Forwarded-For $remote_addr;` (the README has the whole block); if another
-proxy sits in front of yours, say how many with `GITCHA_TRUSTED_PROXIES`.
+With Caddy (`Caddyfile.example`), each hosting domain gets a wildcard certificate, and every
+other name gets an on-demand one. Caddy asks `GET /api/v1/hosting/tls-allowed?domain=NAME` before
+ordering one, and Gitcha says yes only for its own name, custom domains whose DNS check passed and
+still passes (Gitcha looks again every six hours and drops a domain after three misses in a row),
+and, as a stopgap for instances without a wildcard certificate, a site's subdomain while its owner
+has ordered fewer than ten new ones this week. With nginx, Apache or HAProxy, ask the same
+question yourself before running certbot for a custom domain (the example files show the
+command). A public CA caps how many certificates one registered domain may order per week, so use
+the wildcard certificate (it needs the DNS challenge: a Caddy build with your DNS provider's
+module, or certbot's `--dns-PROVIDER` plugin); an account may also hold at most 25 sites whatever
+the billing setting.
 
 DNS records to create:
 
@@ -163,6 +430,10 @@ accounts** (the machine this was written on had no sshd).
 
 ### Backups
 
+With `GITCHA_STORE=cassandra`, back up the keyspace (`nodetool snapshot gitcha` on each node, or
+your cluster's backup) **and** `/var/lib/gitcha` (repositories, sites, blobs, `secret.key`); the
+rest of this section is about `db.json`.
+
 Back up `/var/lib/gitcha`. Keep `secret.key` apart from the database backups: passwords
 (as AES-256-GCM-sealed scrypt hashes) and authenticator secrets are encrypted with it, so the
 database alone is useless to a thief, and the database without the key is useless to you.
@@ -186,7 +457,8 @@ file's name rather than being overwritten.
 1. Install bContain on the runner VM and check it: `bcontain doctor`. The runner VM needs
    `/dev/kvm`; inside a VM that means nested virtualization on the host, or bContain falls
    back to software emulation, which is slow.
-2. `apt install ./inputloop-gitcha-runner_*.deb`
+2. `apt install ./inputloop-gitcha-runner_*.deb`. The full packaging can do steps 3 and 4 for
+   you: give debconf the server URL and a registration token (or put them in the preseed file).
 3. In Gitcha, an administrator creates a registration token (`POST
    /api/v1/runners/registrations`; team owners can create one for a team runner). It works
    for one runner and for an hour (`{"uses": 5}` lets a fleet share one, up to 20);

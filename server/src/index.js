@@ -41,6 +41,8 @@ server.listen(config.port, config.host, () => {
   console.log(`  listening on   http://${config.host}:${config.port}`);
   console.log(`  public URL     ${config.publicUrl}`);
   console.log(`  data dir       ${config.dataDir}`);
+  const c = config.store.cassandra;
+  console.log(`  database       ${config.store.kind === 'cassandra' ? `Cassandra ${c.contactPoints.join(',')} (data center ${c.datacenter}), keyspace ${c.keyspace}, instance ${c.instance}` : `${config.dataDir}/db.json`}`);
   console.log(`  2FA re-check   every ${h(config.policy.stepUpInterval)}; sensitive actions within ${h(config.policy.sensitiveWindow)}`);
   console.log(`  locked checks  ${config.policy.lockedChecks.join(', ') || '(none: users may toggle follow-up checks)'}`);
   console.log(`  registration   ${config.openRegistration ? 'open' : 'closed'}`);

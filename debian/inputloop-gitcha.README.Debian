@@ -1,0 +1,27 @@
+Gitcha starts only when asked to.
+
+Packages built from debian/ (dpkg-buildpackage, deploy/build-debian.sh) ask with debconf for the public
+URL, the hosting domains and the database, and whether to start now; change the answers with
+  dpkg-reconfigure inputloop-gitcha
+They go to /etc/inputloop/gitcha/debconf.env, which the unit reads after gitcha.env.  For many hosts at
+once, answer them in a preseed file: /usr/share/doc/inputloop-gitcha/preseed.example.cfg.
+
+By hand (and for packages built with deploy/build-debs.sh, which ask nothing):
+
+  1. Edit /etc/inputloop/gitcha/gitcha.env (public URL, hosting domains, the database, and so on).
+  2. systemctl enable --now gitcha        (listens on 127.0.0.1:4873 only)
+  3. Put a TLS reverse proxy in front, from one of the examples beside this file: Caddyfile.example,
+     nginx-gitcha.conf.example, apache-gitcha.conf.example or haproxy-gitcha.cfg.example.
+     Without one, Gitcha speaks plain http: only on a network you trust, with GITCHA_HOST set to that
+     network's address and GITCHA_TRUST_PROXY=false (DEPLOY.md, "Running without a reverse proxy").
+  4. For git over SSH: /usr/share/doc/inputloop-gitcha/sshd-gitcha.conf.example.
+
+The database.  GITCHA_STORE=cassandra (the default, unless the package was built without Cassandra)
+keeps it in an Apache Cassandra keyspace: install Cassandra from https://cassandra.apache.org (its apt
+repository; it needs Java 17), or point GITCHA_CASSANDRA_CONTACT_POINTS at an existing cluster.
+GITCHA_STORE=file keeps it in /var/lib/gitcha/db.json.  An empty Cassandra instance that finds a
+db.json imports it once and renames it db.json.imported-to-cassandra.
+
+Everything else (git repositories, sites, blobs, logs, and the keys it encrypts with) is /var/lib/gitcha.
+Back up the database (db.json, or the keyspace with nodetool snapshot) and the repositories; keep
+secret.key apart from those backups.  DEPLOY.md, beside this file, is the full guide.

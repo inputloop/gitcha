@@ -71,7 +71,7 @@ with [`extension/lib/manifest.js`](extension/lib/manifest.js).
 `npm start` runs [`server/src/index.js`](server/src/index.js). Here is what happens, in order:
 
 1. [`index.js:16`](server/src/index.js#L16) reads every setting with
-   [`config.js:118`](server/src/config.js#L118). Settings come only from environment
+   [`config.js:164`](server/src/config.js#L164). Settings come only from environment
    variables. If one is wrong (for example an unknown name in
    `GITCHA_LOCKED_CHECKS`, read by [`config.js:27`](server/src/config.js#L27)),
    it throws a [`config.js:16`](server/src/config.js#L16), and the server prints one
@@ -88,14 +88,39 @@ with [`extension/lib/manifest.js`](extension/lib/manifest.js).
    social feed listens for pushes from projects.
 4. `createApp` then registers the routes (the URL patterns each part answers),
    starting at [`app.js:97`](server/src/app.js#L97).
-5. The server listens on `127.0.0.1:4873` by default. Only a TLS proxy (such as
-   Caddy) should face the internet.
+5. The server listens on `127.0.0.1:4873` by default, in plain HTTP. Only a TLS
+   proxy (such as Caddy) should face the internet: see "The reverse proxy"
+   below.
 6. A timer runs every 30 seconds to clean up: it ends old jobs and expired
    sign-ups ([`app.js:166`](server/src/app.js#L166)).
 
 If something goes badly wrong later, [`http.js:112`](server/src/http.js#L112)
 logs the error and keeps serving, instead of letting one bad request stop the
 whole server.
+
+### The reverse proxy
+
+The server never does TLS. It uses Node's plain `http` module
+([`app.js:156`](server/src/app.js#L156)), and the reverse proxy in front of
+it (Caddy, nginx, Apache or HAProxy) does the https, holds the certificates
+and owns ports 80 and 443. The server reads three things the proxy tells it:
+
+- the **`Host` header**, to tell its own pages from hosted sites
+  ([`sites.js:318`](server/src/hosting/sites.js#L318)) and to check where a form
+  came from ([`web.js:115`](server/src/web.js#L115));
+- **`X-Forwarded-For`**, the caller's address, believed only with
+  `GITCHA_TRUST_PROXY=true` ([`http.js:275`](server/src/http.js#L275));
+- **`X-Forwarded-Proto`**: when it says `https`, cookies get the `Secure` flag
+  ([`web.js:75`](server/src/web.js#L75)).
+
+And the proxy asks the server one question before it orders a certificate for
+a name: [`domains.js:241`](server/src/hosting/domains.js#L241).
+
+Nothing else depends on the proxy, so the server also runs without one, in
+plain HTTP, on your own machine or a network you trust. Then
+`GITCHA_TRUST_PROXY` must be off, or anyone could choose their own address by
+sending `X-Forwarded-For`. [`DEPLOY.md`](DEPLOY.md) has the examples for each proxy and
+the settings for running without one.
 
 ## 3. How a request is handled
 
@@ -134,7 +159,7 @@ All data lives in one folder, `GITCHA_DATA_DIR`:
 
 | Path | What |
 |---|---|
-| `db.json` | The database: every account, session, package record, team, project, site, job, post, ticket and so on, as one JSON file |
+| `db.json` | The database: every account, session, package record, team, project, site, job, post, ticket and so on, as one JSON file (only with `GITCHA_STORE=file`; with `cassandra` it lives in Apache Cassandra) |
 | `secret.key` | The server key (see above). Back it up apart from `db.json` |
 | `blobs/` | Files named by their SHA-256 hash: package tarballs, uploads, function code |
 | `git/` | Bare git repositories |
@@ -143,17 +168,28 @@ All data lives in one folder, `GITCHA_DATA_DIR`:
 | `internal.key` | The secret the SSH helpers use to talk to the server |
 | `db.lock` | Proof that one server owns this folder |
 
-The database code is [`store.js:123`](server/src/store.js#L123). The whole database stays in
-memory, and every change goes through [`store.js:178`](server/src/store.js#L178):
+The database code is [`store.js:154`](server/src/store.js#L154). The whole database stays in
+memory, and every change goes through [`store.js:203`](server/src/store.js#L203):
 
 1. The change runs on the in-memory data.
-2. [`store.js:191`](server/src/store.js#L191) writes the whole file again with
-   [`store.js:101`](server/src/store.js#L101). That writes a temporary file, forces
-   it to disk (fsync), and then renames it over `db.json`. A rename is
-   all-or-nothing, so a crash leaves either the old file or the new one, never
-   half of each.
+2. [`store.js:216`](server/src/store.js#L216) hands the data to the store's backend, which
+   saves it. There are two:
+   - [`store.js:124`](server/src/store.js#L124) writes the whole file again with
+     [`store.js:105`](server/src/store.js#L105). That writes a temporary file,
+     forces it to disk (fsync), and then renames it over `db.json`. A rename is
+     all-or-nothing, so a crash leaves either the old file or the new one,
+     never half of each.
+   - [`store-cassandra.js:90`](server/src/store-cassandra.js#L90) keeps the database in
+     Apache Cassandra. [`store-cassandra.js:46`](server/src/store-cassandra.js#L46) cuts it into
+     one row per entry (one user, one session), and
+     [`store-cassandra.js:148`](server/src/store-cassandra.js#L148) sends only the rows that changed,
+     as one batch that Cassandra applies whole or not at all. The Cassandra
+     driver only works asynchronously, so it runs in a worker thread
+     ([`server/src/store-cassandra-worker.js`](server/src/store-cassandra-worker.js)) and
+     [`store-cassandra.js:217`](server/src/store-cassandra.js#L217) waits for its answer. That way
+     `store.tx` still returns only once the change is saved.
 3. If the change throws partway through, or the write fails,
-   [`store.js:207`](server/src/store.js#L207) reloads the last good copy, so memory and
+   [`store.js:232`](server/src/store.js#L232) reloads the last good copy, so memory and
    disk agree again. A half-made change can never be saved by a later write.
    This is why `createApp` saves once at start-up
    ([`app.js:165`](server/src/app.js#L165)): from then on every collection
@@ -173,22 +209,27 @@ Two rules follow for code that uses the store:
 
 `npm run test:strict --workspace server` checks the first rule: it watches
 every write during the tests and fails a test whose server changed data
-without saving it ([`helpers.js:61`](server/test/helpers.js#L61)).
+without saving it ([`helpers.js:81`](server/test/helpers.js#L81)).
 
-When the server starts, [`store.js:68`](server/src/store.js#L68) creates `db.lock`.
+When the server starts, [`store.js:72`](server/src/store.js#L72) creates `db.lock`.
 A second server on the same folder is refused, because two servers writing one
-file would erase each other's changes.
+file would erase each other's changes. Cassandra has the same rule with a
+lease row ([`store-cassandra-worker.js:82`](server/src/store-cassandra-worker.js#L82)): every save checks
+that the lease is still this server's, so a server that lost it cannot write.
+A check value of `secret.key` is kept there too, so a server started with the
+wrong key stops instead of locking everyone out.
 
-Blobs are written once and checked when read: [`store.js:267`](server/src/store.js#L267)
+Blobs are written once and checked when read: [`store.js:292`](server/src/store.js#L292)
 refuses a file whose hash no longer matches its name.
 
 The **audit log** (the security activity people see on their Account page) is
-kept per person by [`store.js:286`](server/src/store.js#L286), with a cap for each person.
+kept per person by [`store.js:311`](server/src/store.js#L311), with a cap for each person.
 That way nobody can push someone else's rows out by making noise.
 
-The store is built for small and medium communities. It is the only code that
-touches `db.json`, so it is the place to start if Gitcha ever needs a real
-database.
+The store is built for small and medium communities: one server holds the
+whole database in memory, whichever backend saves it. It is the only code that
+saves the database, so a new backend goes beside the two in
+[`store.js:154`](server/src/store.js#L154).
 
 ## 5. Accounts and two-factor login
 
@@ -328,7 +369,7 @@ Downloads ([`packages.js:191`](server/src/packages.js#L191)) send the hash in th
 owner, compared by [`teams.js:14`](server/src/teams.js#L14). Owners manage members.
 A team always keeps at least one owner
 ([`teams.js:135`](server/src/teams.js#L135)). Usernames, team names and agent
-handles share one set of names ([`store.js:224`](server/src/store.js#L224)), so a team
+handles share one set of names ([`store.js:249`](server/src/store.js#L249)), so a team
 cannot pretend to be a person.
 
 ## 8. Git hosting
@@ -650,10 +691,24 @@ Both live in [`extension`](extension) and share the same library.
 
 ## 16. Packaging and deployment
 
-[`deploy/build-debs.sh`](deploy/build-debs.sh) builds two Debian packages, `inputloop-gitcha` and
-`inputloop-gitcha-runner`. The systemd units in [`deploy`](deploy) run each program as
+Two recipes build the two Debian packages, `inputloop-gitcha` and
+`inputloop-gitcha-runner`, and both put the files in place with
+[`deploy/lay-out.sh`](deploy/lay-out.sh), so they install the same thing:
+
+- [`debian/rules`](debian/rules) is the full packaging, run by [`deploy/build-debian.sh`](deploy/build-debian.sh).
+  debconf asks for the settings ([`debian/inputloop-gitcha.templates`](debian/inputloop-gitcha.templates)), and
+  [`debian/inputloop-gitcha.postinst`](debian/inputloop-gitcha.postinst) writes the answers to `debconf.env`.
+  So a preseed file ([`deploy/preseed.example.cfg`](deploy/preseed.example.cfg)) can install many hosts
+  with no questions: [`deploy/apt-repo.sh`](deploy/apt-repo.sh) makes a signed apt repository
+  and [`deploy/mass-install.sh`](deploy/mass-install.sh) installs on a list of hosts over SSH.
+- [`deploy/build-debs.sh`](deploy/build-debs.sh) is the plain `dpkg-deb` recipe that alphaOS's
+  image build calls. Its packages ask nothing.
+
+Cassandra is a build option, on by default: `--without-cassandra` (the
+`pkg.gitcha.nocassandra` build profile) leaves the driver out and ships
+`GITCHA_STORE=file`. The systemd units in [`deploy`](deploy) run each program as
 its own unprivileged user, with systemd's sandboxing on. Neither package starts
-anything by itself. [`DEPLOY.md`](DEPLOY.md) is the full guide, and the README's
+anything unless asked to. [`DEPLOY.md`](DEPLOY.md) is the full guide, and the README's
 "Securing your deployment" section is the checklist.
 
 ## 17. Tests

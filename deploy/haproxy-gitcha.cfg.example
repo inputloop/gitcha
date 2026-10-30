@@ -1,0 +1,41 @@
+# haproxy-gitcha.cfg.example -- HAProxy as the TLS reverse proxy in front of Gitcha.
+# Copyright 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Corwin Brust <corwin@bru.st> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+#
+# Merge into /etc/haproxy/haproxy.cfg, then: haproxy -c -f /etc/haproxy/haproxy.cfg && systemctl reload haproxy
+# Gitcha itself: GITCHA_PUBLIC_URL=https://gitcha.example.org, GITCHA_TRUST_PROXY=true, listening on 127.0.0.1:4873.
+#
+# Certificates: one .pem per name (full chain, then the key) in /etc/haproxy/certs/; HAProxy picks one by the name the
+# browser asks for, so the UI, a wildcard per hosting domain and each verified custom domain all sit side by side.
+# certbot can make them (run it in standalone mode on 127.0.0.1:8888; the acme backend below sends it the challenges)
+# with a deploy hook that concatenates fullchain.pem and privkey.pem into that folder.
+# Before ordering one for a custom domain, ask Gitcha whether that name may have one:
+#   curl -fsS 'http://127.0.0.1:4873/api/v1/hosting/tls-allowed?domain=NAME'
+# Caddy (Caddyfile.example) does all of that by itself; prefer it if many people bring domains.
+
+defaults
+    mode http
+    timeout connect 5s
+    # Runners wait up to 30 s for a job; big clones and site deploys take longer.
+    timeout client 120s
+    timeout server 120s
+
+frontend gitcha_www
+    bind :80
+    bind :443 ssl crt /etc/haproxy/certs/
+    acl acme path_beg /.well-known/acme-challenge/
+    http-request redirect scheme https code 301 if !{ ssl_fc } !acme
+    # Gitcha reads the client's address from X-Forwarded-For: drop what the client sent, then add the real one.
+    http-request del-header X-Forwarded-For
+    option forwardfor
+    # https here: Gitcha marks its cookies Secure.
+    http-request set-header X-Forwarded-Proto https if { ssl_fc }
+    use_backend acme if acme
+    # The Host header passes through unchanged: Gitcha tells the UI from hosted sites by it.
+    default_backend gitcha
+
+backend gitcha
+    server gitcha 127.0.0.1:4873
+
+backend acme
+    server certbot 127.0.0.1:8888

@@ -1,0 +1,25 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: gitcha
+Upstream-Contact: inputloop <nathanielfrankford@gmail.com>
+Source: https://github.com/inputloop/gitcha
+Comment: Writing (README.md, DEPLOY.md and the other prose) is CC-BY-SA-4.0
+ (TERMS v2, 2026-10-10).  The inputloop-gitcha package also carries the server's
+ npm dependencies, from the committed lockfile, under
+ /usr/share/inputloop/gitcha/node_modules: graphql, qrcode and their
+ dependencies (MIT and ISC), and, unless built with the pkg.gitcha.nocassandra
+ profile, cassandra-driver and long (Apache-2.0) and adm-zip (MIT).  Each keeps
+ its own license file in its folder there.
+
+Files: *
+Copyright: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+           2026 Corwin Brust <corwin@bru.st>
+License: GPL-3.0-or-later OR LGPL-3.0-or-later
+
+License: GPL-3.0-or-later OR LGPL-3.0-or-later
+ You may use, share and change this software under the terms of the GNU General
+ Public License, version 3 or (at your option) any later version, or under the
+ terms of the GNU Lesser General Public License, version 3 or (at your option)
+ any later version, as you choose.
+ .
+ On Debian systems the full texts are in /usr/share/common-licenses/GPL-3
+ and /usr/share/common-licenses/LGPL-3.

@@ -1,0 +1,13 @@
+#!/bin/sh
+# The installed server starts as the gitcha user on a scratch data directory (file store), answers /health, and stops.
+# Copyright 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Corwin Brust <corwin@bru.st> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+set -eu
+dir=$(mktemp -d); chown gitcha:gitcha "$dir"
+runuser -u gitcha -- env GITCHA_STORE=file GITCHA_DATA_DIR="$dir" GITCHA_PORT=48731 gitcha-server > "$dir.log" 2>&1 &
+pid=$!
+trap 'kill $pid 2>/dev/null || true; rm -rf "$dir" "$dir.log"' EXIT
+for _ in $(seq 1 50); do curl -fsS http://127.0.0.1:48731/api/v1/health >/dev/null 2>&1 && break; sleep 0.2; done
+curl -fsS http://127.0.0.1:48731/api/v1/health
+echo
+grep -q 'database       ' "$dir.log"

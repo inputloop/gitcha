@@ -69,3 +69,28 @@ SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> 
 SPDX-License-Identifier = "CC-BY-SA-4.0"
 
 # colophon: end
+
+# debian/: files whose formats leave no room for a header (written by hand, outside colophon's block above).
+[[annotations]]
+path = [
+  "debian/changelog",
+  "debian/copyright",
+  "debian/source/format",
+  "debian/tests/control",
+  "debian/inputloop-gitcha.templates",
+  "debian/inputloop-gitcha-runner.templates",
+  "debian/inputloop-gitcha.lintian-overrides",
+  "debian/inputloop-gitcha-runner.lintian-overrides",
+]
+precedence = "closest"
+SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors", "2026 Corwin Brust <corwin@bru.st>"]
+SPDX-License-Identifier = "GPL-3.0-or-later OR LGPL-3.0-or-later"
+
+[[annotations]]
+path = [
+  "debian/inputloop-gitcha.README.Debian",
+  "debian/inputloop-gitcha-runner.README.Debian",
+]
+precedence = "closest"
+SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors", "2026 Corwin Brust <corwin@bru.st>"]
+SPDX-License-Identifier = "CC-BY-SA-4.0"
