@@ -97,3 +97,18 @@ test('DEB-3: the debconf answers become settings the server reads, and the build
   assert.match(read('deploy/gitcha.service'), /^EnvironmentFile=-\/etc\/inputloop\/gitcha\/debconf\.env$/m, 'debconf.env is optional, and read after gitcha.env');
   assert.match(read('debian/rules'), /pkg\.gitcha\.nocassandra/);
 });
+
+test('PROXY-1: every reverse proxy example keeps Host, sets the client address and https, and allows big, slow requests', () => {
+  const need = {
+    'deploy/nginx-gitcha.conf.example': [/proxy_set_header Host \$host;/, /proxy_set_header X-Forwarded-For \$remote_addr;/, /proxy_set_header X-Forwarded-Proto \$scheme;/, /client_max_body_size 200m;/, /proxy_read_timeout 120s;/],
+    'deploy/apache-gitcha.conf.example': [/ProxyPreserveHost On/, /RequestHeader set X-Forwarded-Proto "https"/, /LimitRequestBody 209715200/, /timeout=120/],
+    'deploy/haproxy-gitcha.cfg.example': [/http-request del-header X-Forwarded-For/, /option forwardfor/, /X-Forwarded-Proto https/, /timeout server 120s/],
+    'deploy/Caddyfile.example': [/reverse_proxy 127\.0\.0\.1:4873/, /ask http:\/\/127\.0\.0\.1:4873\/api\/v1\/hosting\/tls-allowed/],
+  };
+  for (const [file, lines] of Object.entries(need)) {
+    const text = read(file);
+    for (const re of lines) assert.match(text, re, `${file} has ${re}`);
+    if (!file.endsWith('Caddyfile.example')) assert.match(text, /:4873/, `${file} sends to Gitcha`);
+    assert.ok(read('deploy/lay-out.sh').includes(path.basename(file)), `${file} is installed with the package docs`);
+  }
+});

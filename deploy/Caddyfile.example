@@ -6,6 +6,11 @@
 # check passed (and are still re-checked), and a few new site subdomains per owner per week ever get one.
 # A public CA limits how many certificates one registered domain may order in a week, so give each hosting domain a
 # wildcard certificate (the block below); Caddy then never asks about sites' subdomains at all.
+#
+# Caddy already does what Gitcha needs from a proxy, with nothing more written here: it passes the Host header on,
+# sets X-Forwarded-For to the client's address (ignoring the one the client sent) and X-Forwarded-Proto, has no
+# limit on request size or time, and redirects http to https. Gitcha: GITCHA_PUBLIC_URL=https://gitcha.example.org,
+# GITCHA_TRUST_PROXY=true. Put this in /etc/caddy/Caddyfile, replace the names, then: systemctl reload caddy
 {
 	on_demand_tls {
 		ask http://127.0.0.1:4873/api/v1/hosting/tls-allowed

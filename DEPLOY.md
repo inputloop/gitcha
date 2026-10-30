@@ -21,6 +21,10 @@ builds on alphaOS VMs on the ghostwheel, and then for anyone who self-hosts and 
    gitcha-runner on a separate VM                 each job in its own bContain VM
 ```
 
+- **The TLS proxy** (Caddy, nginx, Apache or HAProxy) is the only thing on ports 80 and 443. It
+  does the https, the certificates and the client's address, and passes everything else to the
+  server unchanged; "The reverse proxy" below says why and how. On a network you trust, Gitcha
+  also runs without it ("Running without a reverse proxy").
 - **The server** keeps accounts, repositories, packages, sites, tickets and the queue. It
   serves static sites itself (files only), and it never executes anything a user wrote.
 - **Runners** take CI jobs and function invocations from the queue and run each in a fresh
@@ -134,7 +138,9 @@ be named as such in alphaOS's security model.
 2. Edit `/etc/inputloop/gitcha/gitcha.env` (a conffile, readable by root and the `gitcha`
    group) for everything else. With `build-debs.sh` packages, set at least `GITCHA_PUBLIC_URL`
    there, `GITCHA_HOSTING_DOMAINS` for hosting, and the database settings.
-3. `systemctl enable --now gitcha` (unless debconf already did)
+3. `systemctl enable --now gitcha` (unless debconf already did), and put a reverse proxy in
+   front ("The reverse proxy" below), or, on a trusted network only, run without one ("Running
+   without a reverse proxy").
 4. Open the public URL and register. **The first account becomes the administrator.**
 5. Set `GITCHA_OPEN_REGISTRATION=false` afterwards if sign-up should be closed.
 
@@ -187,23 +193,170 @@ once at start: fine for the size of database one server holds in memory, and del
 sessions) leave tombstones in it until `gc_grace_seconds` (10 days) passes, so run `nodetool repair`
 on the usual schedule.
 
+### The reverse proxy: what it is for
+
+Gitcha speaks plain HTTP only, on `127.0.0.1:4873`. It has no TLS code of its own, and its unit
+gives it no capabilities, so it cannot open ports 80 or 443 either. A **reverse proxy** is the web
+server that sits in front of it and does the parts of being on the internet that Gitcha leaves out:
+
+- **TLS (https).** Passwords, two-factor codes, session cookies and device tokens cross the network
+  encrypted. Over plain http anyone on the path can read them and act as the person.
+- **Certificates.** The proxy holds a certificate for Gitcha's name, a wildcard for each hosting
+  domain, and one for each verified custom domain. Caddy orders all of them by itself.
+- **Ports 80 and 443,** with http redirected to https, so people type no port number.
+- **The client's address,** passed on in `X-Forwarded-For`. Gitcha's rate limits and its
+  new-network two-factor check need the address of the person, not of the proxy.
+
+Gitcha needs five things from it, whichever proxy it is:
+
+| The proxy must | Because |
+|---|---|
+| pass the **`Host` header** on unchanged | Gitcha tells its own UI from hosted sites and custom domains by `Host`, and the form check compares it with `GITCHA_PUBLIC_URL` |
+| **replace** `X-Forwarded-For` with the client's address (or append it last) | Gitcha, with `GITCHA_TRUST_PROXY=true`, believes only the entry the nearest proxy added; a proxy that passes the client's own header through lets anyone pick their address |
+| set **`X-Forwarded-Proto: https`** | with it Gitcha marks its cookies `Secure` (so does an `https://` public URL) |
+| accept request bodies of **at least 150 MB** | a site deploy is base64 inside JSON: the 100 MiB `GITCHA_MAX_SITE_BYTES` is about 140 MB on the wire. nginx's own limit is 1 MB |
+| wait **at least 120 s** for an answer | runners hold a request open up to 30 s waiting for a job, and big clones and deploys take longer than the usual 60 s |
+
+and send every name to Gitcha: its own, each hosting domain's wildcard, and custom domains (any
+other name), all to `127.0.0.1:4873`. Then set, in `gitcha.env`:
+
+```sh
+GITCHA_PUBLIC_URL=https://gitcha.example.org
+GITCHA_TRUST_PROXY=true
+GITCHA_TRUSTED_PROXIES=1      # one proxy; 2 if a CDN or load balancer stands before it, or their addresses
+```
+
+The examples, in `/usr/share/doc/inputloop-gitcha/` (and `deploy/` in the source), are ready to edit;
+each was run in front of Gitcha with a forged `X-Forwarded-For` and a 150 MB upload:
+
+| Proxy | File | Certificates | Custom domains |
+|---|---|---|---|
+| **Caddy** (recommended) | `Caddyfile.example` | ordered and renewed by Caddy | automatic: Caddy asks Gitcha first (on-demand TLS) |
+| **nginx** | `nginx-gitcha.conf.example` | certbot | one `certbot` run per domain; nginx picks the file by name (its worker must be able to read the keys: the file says how) |
+| **Apache httpd** | `apache-gitcha.conf.example` | certbot, or mod_md | a VirtualHost (or mod_md `MDomain`) per domain |
+| **HAProxy** | `haproxy-gitcha.cfg.example` | certbot, one `.pem` per name in a folder | one `certbot` run per domain; HAProxy picks the `.pem` by name |
+
+The smallest working setups, for the UI alone:
+
+```caddy
+gitcha.example.org {
+	reverse_proxy 127.0.0.1:4873
+}
+```
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name gitcha.example.org;
+    ssl_certificate     /etc/letsencrypt/live/gitcha.example.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/gitcha.example.org/privkey.pem;
+    client_max_body_size 200m;
+    proxy_request_buffering off;
+    proxy_read_timeout 120s;
+    location / {
+        proxy_pass http://127.0.0.1:4873;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+```apache
+<VirtualHost *:443>
+    ServerName gitcha.example.org
+    SSLEngine on
+    SSLCertificateFile    /etc/letsencrypt/live/gitcha.example.org/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/gitcha.example.org/privkey.pem
+    ProxyPreserveHost On
+    ProxyPass        / http://127.0.0.1:4873/ timeout=120
+    ProxyPassReverse / http://127.0.0.1:4873/
+    RequestHeader set X-Forwarded-Proto "https"
+    LimitRequestBody 209715200
+</VirtualHost>
+```
+
+```haproxy
+frontend gitcha_www
+    bind :443 ssl crt /etc/haproxy/certs/
+    http-request del-header X-Forwarded-For
+    option forwardfor
+    http-request set-header X-Forwarded-Proto https
+    timeout client 120s
+    default_backend gitcha
+backend gitcha
+    timeout server 120s
+    server gitcha 127.0.0.1:4873
+```
+
+Apache appends the client's address to the `X-Forwarded-For` it was sent instead of replacing it;
+that is safe, because Gitcha reads only the last entry. Check a setup with `curl -H
+'X-Forwarded-For: 6.6.6.6' https://gitcha.example.org/register -D -`: the `Set-Cookie` line must say
+`Secure`, and a failed sign-in afterwards must show your real address in the security log, not
+6.6.6.6.
+
+Git over SSH does not go through the proxy at all: sshd on port 22 hands it to Gitcha directly (see
+"Git over SSH").
+
+### Running without a reverse proxy
+
+Gitcha runs without one: everything works over plain http, the web UI, the API, the CLI, the Claude
+extension, git over HTTP, runners and hosted sites. What you lose is the encryption, the
+certificates and ports 80/443. So it is fine where nobody untrusted can see the traffic, and **not
+on the open internet**: there, every password, two-factor code and session cookie crosses in the
+clear, and a session cookie or device token read off the wire is as good as the account (a
+two-factor code cannot be replayed, but the session it opened can).
+
+**On your own machine** (trying it out, developing): nothing to set. `npm start` (or the package
+with the defaults) listens on `127.0.0.1:4873`; open `http://localhost:4873`.
+
+**On a network you trust** (a home or office LAN, or a VPN such as WireGuard or Tailscale):
+
+```sh
+GITCHA_HOST=0.0.0.0                       # or only the LAN/VPN address, e.g. 10.8.0.1
+GITCHA_PORT=4873                          # not 80: the unit gives Gitcha no right to ports under 1024
+GITCHA_PUBLIC_URL=http://gitcha.lan:4873  # exactly what people type, port included
+GITCHA_TRUST_PROXY=false                  # gitcha.env ships true, for a proxy: turn it off
+```
+
+then open port 4873 to that network only (`ufw allow from 192.168.1.0/24 to any port 4873`).
+`GITCHA_TRUST_PROXY=false` matters: with it left on and no proxy, anyone can put any address in
+`X-Forwarded-For` and walk past the rate limits. The start-up lines say which it is
+(`client address  the socket (X-Forwarded-For ignored ...)`). Cookies are not marked `Secure`,
+because the public URL is http. Clients take the same URL: `gitcha login --server
+http://gitcha.lan:4873`, `gitcha-runner register --server http://gitcha.lan:4873 ...`, and git
+remotes `http://gitcha.lan:4873/git/OWNER/REPO.git`. Hosted sites work too, with the port in the
+address (`http://mysite.pages.lan:4873`), if your DNS or `/etc/hosts` points the hosting domain's
+names at the server; custom domains get no certificates, so only http.
+With Docker, publish the port to the network: change `127.0.0.1:4873:4873` in
+`docker-compose.yml` to `4873:4873` (and set the environment above).
+
+**For one person, from anywhere:** leave Gitcha on loopback and tunnel to it over SSH:
+
+```sh
+ssh -N -L 4873:127.0.0.1:4873 you@gitcha-host
+```
+
+and use `http://localhost:4873` on your own machine (set `GITCHA_PUBLIC_URL=http://localhost:4873`).
+SSH encrypts the traffic, and nothing new is open on the server.
+
+To move from one of these to a proxy later, put the proxy in front, set `GITCHA_PUBLIC_URL` to the
+https address and `GITCHA_TRUST_PROXY=true`, and go back to `GITCHA_HOST=127.0.0.1`. Accounts and data
+stay as they are; people sign in again, because their cookies were for the old address.
+
 ### TLS and DNS
 
-`/usr/share/doc/inputloop-gitcha/Caddyfile.example` puts Caddy in front: a wildcard
-certificate for each hosting domain, and on-demand certificates for everything else. Caddy
-asks `GET /api/v1/hosting/tls-allowed?domain=NAME` before ordering one, and Gitcha says yes
-only for its own name, custom domains whose DNS check passed and still passes (Gitcha looks
-again every six hours and drops a domain after three misses in a row), and, as a stopgap for
-instances without a wildcard certificate, a site's subdomain while its owner has ordered fewer
-than ten new ones this week. A public CA caps how many certificates one registered domain may
-order per week, so use the wildcard certificate (it needs the DNS challenge, so a Caddy build
-with your DNS provider's module); an account may also hold at most 25 sites whatever the
-billing setting.
-
-`gitcha.env` sets `GITCHA_TRUST_PROXY=true`, which is right for this Caddyfile: Caddy replaces
-`X-Forwarded-For` with the client's address and Gitcha trusts one proxy hop. With nginx instead,
-set `proxy_set_header X-Forwarded-For $remote_addr;` (the README has the whole block); if another
-proxy sits in front of yours, say how many with `GITCHA_TRUSTED_PROXIES`.
+With Caddy (`Caddyfile.example`), each hosting domain gets a wildcard certificate, and every
+other name gets an on-demand one. Caddy asks `GET /api/v1/hosting/tls-allowed?domain=NAME` before
+ordering one, and Gitcha says yes only for its own name, custom domains whose DNS check passed and
+still passes (Gitcha looks again every six hours and drops a domain after three misses in a row),
+and, as a stopgap for instances without a wildcard certificate, a site's subdomain while its owner
+has ordered fewer than ten new ones this week. With nginx, Apache or HAProxy, ask the same
+question yourself before running certbot for a custom domain (the example files show the
+command). A public CA caps how many certificates one registered domain may order per week, so use
+the wildcard certificate (it needs the DNS challenge: a Caddy build with your DNS provider's
+module, or certbot's `--dns-PROVIDER` plugin); an account may also hold at most 25 sites whatever
+the billing setting.
 
 DNS records to create:
 

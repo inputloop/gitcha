@@ -88,14 +88,39 @@ with [`extension/lib/manifest.js`](extension/lib/manifest.js).
    social feed listens for pushes from projects.
 4. `createApp` then registers the routes (the URL patterns each part answers),
    starting at [`app.js:97`](server/src/app.js#L97).
-5. The server listens on `127.0.0.1:4873` by default. Only a TLS proxy (such as
-   Caddy) should face the internet.
+5. The server listens on `127.0.0.1:4873` by default, in plain HTTP. Only a TLS
+   proxy (such as Caddy) should face the internet: see "The reverse proxy"
+   below.
 6. A timer runs every 30 seconds to clean up: it ends old jobs and expired
    sign-ups ([`app.js:166`](server/src/app.js#L166)).
 
 If something goes badly wrong later, [`http.js:112`](server/src/http.js#L112)
 logs the error and keeps serving, instead of letting one bad request stop the
 whole server.
+
+### The reverse proxy
+
+The server never does TLS. It uses Node's plain `http` module
+([`app.js:156`](server/src/app.js#L156)), and the reverse proxy in front of
+it (Caddy, nginx, Apache or HAProxy) does the https, holds the certificates
+and owns ports 80 and 443. The server reads three things the proxy tells it:
+
+- the **`Host` header**, to tell its own pages from hosted sites
+  ([`sites.js:318`](server/src/hosting/sites.js#L318)) and to check where a form
+  came from ([`web.js:115`](server/src/web.js#L115));
+- **`X-Forwarded-For`**, the caller's address, believed only with
+  `GITCHA_TRUST_PROXY=true` ([`http.js:275`](server/src/http.js#L275));
+- **`X-Forwarded-Proto`**: when it says `https`, cookies get the `Secure` flag
+  ([`web.js:75`](server/src/web.js#L75)).
+
+And the proxy asks the server one question before it orders a certificate for
+a name: [`domains.js:241`](server/src/hosting/domains.js#L241).
+
+Nothing else depends on the proxy, so the server also runs without one, in
+plain HTTP, on your own machine or a network you trust. Then
+`GITCHA_TRUST_PROXY` must be off, or anyone could choose their own address by
+sending `X-Forwarded-For`. [`DEPLOY.md`](DEPLOY.md) has the examples for each proxy and
+the settings for running without one.
 
 ## 3. How a request is handled
 

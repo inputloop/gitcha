@@ -88,14 +88,39 @@ with [[extension/lib/manifest.js]].
    social feed listens for pushes from projects.
 4. `createApp` then registers the routes (the URL patterns each part answers),
    starting at [[server/src/app.js#"registerApi(router"]].
-5. The server listens on `127.0.0.1:4873` by default. Only a TLS proxy (such as
-   Caddy) should face the internet.
+5. The server listens on `127.0.0.1:4873` by default, in plain HTTP. Only a TLS
+   proxy (such as Caddy) should face the internet: see "The reverse proxy"
+   below.
 6. A timer runs every 30 seconds to clean up: it ends old jobs and expired
    sign-ups ([[server/src/app.js#"setInterval"]]).
 
 If something goes badly wrong later, [[server/src/http.js#installLastResort]]
 logs the error and keeps serving, instead of letting one bad request stop the
 whole server.
+
+### The reverse proxy
+
+The server never does TLS. It uses Node's plain `http` module
+([[server/src/app.js#"http.createServer"]]), and the reverse proxy in front of
+it (Caddy, nginx, Apache or HAProxy) does the https, holds the certificates
+and owns ports 80 and 443. The server reads three things the proxy tells it:
+
+- the **`Host` header**, to tell its own pages from hosted sites
+  ([[server/src/hosting/sites.js#isHostingHost]]) and to check where a form
+  came from ([[server/src/web.js#"const checkOrigin"]]);
+- **`X-Forwarded-For`**, the caller's address, believed only with
+  `GITCHA_TRUST_PROXY=true` ([[server/src/http.js#clientIp]]);
+- **`X-Forwarded-Proto`**: when it says `https`, cookies get the `Secure` flag
+  ([[server/src/web.js#"const secureOf"]]).
+
+And the proxy asks the server one question before it orders a certificate for
+a name: [[server/src/hosting/domains.js#tlsAllowed]].
+
+Nothing else depends on the proxy, so the server also runs without one, in
+plain HTTP, on your own machine or a network you trust. Then
+`GITCHA_TRUST_PROXY` must be off, or anyone could choose their own address by
+sending `X-Forwarded-For`. [[DEPLOY.md]] has the examples for each proxy and
+the settings for running without one.
 
 ## 3. How a request is handled
 

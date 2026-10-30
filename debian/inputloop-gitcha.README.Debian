@@ -10,7 +10,10 @@ By hand (and for packages built with deploy/build-debs.sh, which ask nothing):
 
   1. Edit /etc/inputloop/gitcha/gitcha.env (public URL, hosting domains, the database, and so on).
   2. systemctl enable --now gitcha        (listens on 127.0.0.1:4873 only)
-  3. Put a TLS proxy in front: /usr/share/doc/inputloop-gitcha/Caddyfile.example.
+  3. Put a TLS reverse proxy in front, from one of the examples beside this file: Caddyfile.example,
+     nginx-gitcha.conf.example, apache-gitcha.conf.example or haproxy-gitcha.cfg.example.
+     Without one, Gitcha speaks plain http: only on a network you trust, with GITCHA_HOST set to that
+     network's address and GITCHA_TRUST_PROXY=false (DEPLOY.md, "Running without a reverse proxy").
   4. For git over SSH: /usr/share/doc/inputloop-gitcha/sshd-gitcha.conf.example.
 
 The database.  GITCHA_STORE=cassandra (the default, unless the package was built without Cassandra)

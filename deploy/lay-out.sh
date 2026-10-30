@@ -63,7 +63,7 @@ server)
     sed -i '3a # The settings debconf asks about (public URL, hosting domains, the database) are in debconf.env, written by\n# "dpkg-reconfigure inputloop-gitcha"; that file is read after this one, so it wins.' "$env"
   fi
   cp "$here/deploy/gitcha.service" "$D/usr/lib/systemd/system/gitcha.service"
-  cp "$here/deploy/Caddyfile.example" "$here/deploy/sshd-gitcha.conf.example" "$here/deploy/preseed.example.cfg" "$here/DEPLOY.md" "$D/usr/share/doc/inputloop-gitcha/"
+  cp "$here/deploy/Caddyfile.example" "$here/deploy/nginx-gitcha.conf.example" "$here/deploy/apache-gitcha.conf.example" "$here/deploy/haproxy-gitcha.cfg.example" "$here/deploy/sshd-gitcha.conf.example" "$here/deploy/preseed.example.cfg" "$here/DEPLOY.md" "$D/usr/share/doc/inputloop-gitcha/"
   ;;
 runner)
   # The runner needs only its own code and extension/lib (for tar.js). It has no npm dependencies.

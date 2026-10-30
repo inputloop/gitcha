@@ -1,0 +1,54 @@
+# apache-gitcha.conf.example -- Apache httpd as the TLS reverse proxy in front of Gitcha.
+# Copyright 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Corwin Brust <corwin@bru.st> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+#
+# a2enmod proxy proxy_http headers ssl rewrite
+# Put it in /etc/apache2/sites-available/gitcha.conf, replace the names, a2ensite gitcha, apache2ctl configtest && systemctl reload apache2
+# Gitcha itself: GITCHA_PUBLIC_URL=https://gitcha.example.org, GITCHA_TRUST_PROXY=true, listening on 127.0.0.1:4873.
+#
+# X-Forwarded-For: mod_proxy_http adds the client's address at the END of whatever the client sent. Gitcha, trusting
+# one proxy (GITCHA_TRUSTED_PROXIES=1, the default), reads only that last entry, so a forged header changes nothing.
+# Certificates: certbot, as in nginx-gitcha.conf.example (a wildcard per hosting domain needs the DNS challenge).
+# Custom domains each need a certificate and, in Apache, a VirtualHost of their own (or mod_md with an MDomain line
+# per name); Caddy (Caddyfile.example) does that by itself, so prefer it if many people bring domains.
+
+# Port 80: certificate challenges for every name, and a redirect to https for everything else.
+<VirtualHost *:80>
+    ServerName gitcha.example.org
+    ServerAlias *
+    Alias /.well-known/acme-challenge/ /var/www/letsencrypt/.well-known/acme-challenge/
+    RewriteEngine on
+    RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/
+    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+</VirtualHost>
+
+# The Gitcha UI, API and git over HTTPS.
+<VirtualHost *:443>
+    ServerName gitcha.example.org
+    SSLEngine on
+    SSLCertificateFile    /etc/letsencrypt/live/gitcha.example.org/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/gitcha.example.org/privkey.pem
+    # Gitcha tells the UI from hosted sites by the Host header: pass the client's on.
+    ProxyPreserveHost On
+    # Runners wait up to 30 s for a job; big clones and site deploys take longer than Apache's 60 s.
+    ProxyPass        / http://127.0.0.1:4873/ timeout=120
+    ProxyPassReverse / http://127.0.0.1:4873/
+    # https here: Gitcha marks its cookies Secure.
+    RequestHeader set X-Forwarded-Proto "https"
+    # Site deploys are base64 in JSON: 100 MiB of site is about 140 MB on the wire.
+    LimitRequestBody 209715200
+</VirtualHost>
+
+# Hosted sites on a hosting domain (GITCHA_HOSTING_DOMAINS): one wildcard certificate. Repeat per hosting domain.
+<VirtualHost *:443>
+    ServerName pages.example.net
+    ServerAlias *.pages.example.net
+    SSLEngine on
+    SSLCertificateFile    /etc/letsencrypt/live/pages.example.net/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/pages.example.net/privkey.pem
+    ProxyPreserveHost On
+    ProxyPass        / http://127.0.0.1:4873/ timeout=120
+    ProxyPassReverse / http://127.0.0.1:4873/
+    RequestHeader set X-Forwarded-Proto "https"
+    LimitRequestBody 209715200
+</VirtualHost>
