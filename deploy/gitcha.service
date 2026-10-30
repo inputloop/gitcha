@@ -6,6 +6,8 @@ Description=Gitcha: forge, registry, hosting and community (loopback; put a TLS 
 After=network.target
 # With GITCHA_STORE=cassandra on the same machine, start after it (harmless when it is not installed).
 After=cassandra.service
+# Keep trying for as long as it takes (see RestartSec): a database that is not up yet must not leave Gitcha given up for good.
+StartLimitIntervalSec=0
 [Service]
 User=gitcha
 Group=gitcha
@@ -16,7 +18,12 @@ Environment=GITCHA_DATA_DIR=/var/lib/gitcha
 StateDirectory=gitcha
 StateDirectoryMode=0700
 ExecStart=/usr/bin/gitcha-server
+# The start is finished only once Gitcha answers on its port, so "systemctl start" waits for that and reports a
+# failed start. Why it failed is in: journalctl -u gitcha     (gitcha-check tests the same settings by hand.)
+ExecStartPost=/usr/bin/gitcha-wait-ready
+TimeoutStartSec=180
 Restart=on-failure
+RestartSec=5s
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict

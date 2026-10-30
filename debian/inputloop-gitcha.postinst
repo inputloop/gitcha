@@ -7,7 +7,7 @@ set -e
 . /usr/share/debconf/confmodule
 WITH_CASSANDRA=@WITH_CASSANDRA@
 ETC=/etc/inputloop/gitcha
-start=no
+start=no setup_cassandra=no
 
 # quote VALUE: a double-quoted value for a systemd EnvironmentFile line.
 quote() { printf '"%s"' "$(printf '%s' "$1" | sed 's/[\\"]/\\&/g')"; }
@@ -54,6 +54,11 @@ $old"
 
   db_get inputloop-gitcha/enable
   if [ "$RET" = true ]; then start=yes; fi
+  # Set up Cassandra here? Only after this apt run: a package cannot install another while dpkg runs.
+  db_get inputloop-gitcha/cassandra_setup
+  if [ "$store" = cassandra ] && [ "$RET" = true ] && ! dpkg-query -W -f='${Status}' cassandra 2>/dev/null | grep -q 'install ok installed'; then
+    setup_cassandra=yes
+  fi
 fi
 # debconf talks over stdout; it is done before systemctl and the debhelper snippets print anything.
 db_stop
@@ -62,7 +67,25 @@ db_stop
 
 if [ "$1" = configure ]; then
   [ -d /run/systemd/system ] && systemctl --system daemon-reload >/dev/null 2>&1 || true
-  if [ "$start" = yes ]; then
+  if [ "$setup_cassandra" = yes ]; then
+    # The apt run that is installing this package: the outermost apt, aptitude or dpkg above this script.
+    top=$PPID p=$PPID
+    while [ "$p" -gt 1 ] 2>/dev/null; do
+      case $(cat "/proc/$p/comm" 2>/dev/null) in apt|apt-get|aptitude|dpkg|unattended-upgr*|packagekitd) top=$p ;; esac
+      p=$(awk '/^PPid:/ {print $2}' "/proc/$p/status" 2>/dev/null || echo 0)
+    done
+    if [ -d /run/systemd/system ] && systemd-run --unit=gitcha-setup-cassandra --description="Set up Apache Cassandra for Gitcha" \
+         --no-block /usr/sbin/gitcha-setup-cassandra --wait-pid "$top" >/dev/null 2>&1; then
+      echo "inputloop-gitcha: Cassandra will be installed once this apt run ends; follow it with: journalctl -u gitcha-setup-cassandra -f" >&2
+    else
+      echo "inputloop-gitcha: to set up Cassandra here, run once this apt run ends: sudo gitcha-setup-cassandra" >&2
+    fi
+  fi
+  if [ "$start" = yes ] && [ "$setup_cassandra" = yes ]; then
+    # Its database is not there yet: start without waiting; it retries every 5 s and is up once Cassandra is.
+    deb-systemd-helper enable gitcha.service >/dev/null || true
+    [ -d /run/systemd/system ] && systemctl --no-block restart gitcha.service >/dev/null 2>&1 || true
+  elif [ "$start" = yes ]; then
     deb-systemd-helper enable gitcha.service >/dev/null || true
     # restart, not start: a running server must read a changed debconf.env.  A failed start (Cassandra not up yet)
     # leaves the package installed; systemd keeps retrying (Restart=on-failure) and journalctl -u gitcha says why.

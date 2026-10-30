@@ -60,7 +60,10 @@ async function connect() {
   try {
     await client.connect();
   } catch (err) {
-    throw fail(`cannot reach Cassandra at ${settings.contactPoints.join(', ')} (data center ${settings.datacenter}): ${err.message}`, { startup: true });
+    // The driver's message carries a dump of every host's error; one short reason per host is what an operator needs.
+    const why = Object.entries(err.innerErrors ?? {}).map(([host, e]) => `${host} ${e?.code ?? String(e?.message ?? e).split('\n')[0]}`).join(', ')
+      || String(err.message).split('\n')[0];
+    throw fail(`cannot reach Cassandra at ${settings.contactPoints.join(', ')} (data center ${settings.datacenter}): ${why}. Is Cassandra running there (systemctl status cassandra)? To use one file instead, set GITCHA_STORE=file (packages: in /etc/inputloop/gitcha/gitcha.env, or dpkg-reconfigure inputloop-gitcha).`, { startup: true });
   }
   const ks = settings.keyspace;
   if (settings.createKeyspace) await client.execute(`CREATE KEYSPACE IF NOT EXISTS ${ks} WITH replication = ${replication(settings.replication)}`);

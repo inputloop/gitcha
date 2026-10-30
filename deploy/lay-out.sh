@@ -53,6 +53,24 @@ server)
   wrapper usr/bin/gitcha-server "node /usr/share/inputloop/gitcha/server/src/index.js"
   wrapper usr/bin/gitcha-ssh-keys "node /usr/share/inputloop/gitcha/server/bin/gitcha-ssh-keys.js"
   wrapper usr/bin/gitcha-git-shell "node /usr/share/inputloop/gitcha/server/bin/gitcha-git-shell.js"
+  wrapper usr/bin/gitcha-wait-ready "node /usr/share/inputloop/gitcha/server/bin/gitcha-wait-ready.js"
+  # gitcha-check: "could the service start, and if not, why?", with the unit's settings and as the unit's user.
+  cat > "$D/usr/bin/gitcha-check" <<'CHECK'
+#!/bin/sh
+# gitcha-check -- test what gitcha.service needs (settings, database, port) the way the unit would run it.
+set -eu
+[ "$(id -u)" = 0 ] || { echo "gitcha-check: run it as root (sudo gitcha-check): it reads gitcha.env and then runs as the gitcha user" >&2; exit 2; }
+set -a
+. /etc/inputloop/gitcha/gitcha.env
+if [ -r /etc/inputloop/gitcha/debconf.env ]; then . /etc/inputloop/gitcha/debconf.env; fi
+set +a
+export GITCHA_DATA_DIR=/var/lib/gitcha
+install -d -o gitcha -g gitcha -m 700 "$GITCHA_DATA_DIR"
+echo "service:  $(systemctl is-active gitcha 2>/dev/null || true) (systemctl status gitcha; journalctl -u gitcha -e)"
+exec runuser -u gitcha -p -- node /usr/share/inputloop/gitcha/server/src/index.js --check
+CHECK
+  chmod 755 "$D/usr/bin/gitcha-check"
+  install -D -m 755 "$here/deploy/gitcha-setup-cassandra" "$D/usr/sbin/gitcha-setup-cassandra"
   mkdir -p "$D/etc/inputloop/gitcha" "$D/usr/lib/systemd/system" "$D/usr/share/doc/inputloop-gitcha"
   env=$D/etc/inputloop/gitcha/gitcha.env
   cp "$here/deploy/gitcha.env" "$env"

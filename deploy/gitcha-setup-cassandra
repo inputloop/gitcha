@@ -1,0 +1,85 @@
+#!/bin/sh
+# gitcha-setup-cassandra -- install Apache Cassandra on this machine, start it, and start Gitcha on it.
+# Copyright 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Corwin Brust <corwin@bru.st> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+#
+# usage:  sudo gitcha-setup-cassandra [--series 50x] [--wait-pid PID]
+#
+# 1. Adds Apache's apt repository for Cassandra (debian.cassandra.apache.org, release series 50x = Cassandra 5.0,
+#    or 41x) with Apache's signing key, as /etc/apt/sources.list.d/cassandra.sources.list, signed-by
+#    /etc/apt/keyrings/apache-cassandra.asc (the steps Cassandra's own install guide gives).
+# 2. Installs the cassandra package (apt brings a Java runtime it needs), enables and starts it.
+# 3. Waits until it answers on 127.0.0.1:9042, then restarts Gitcha if Gitcha is enabled or trying to start.
+# Gitcha's own settings are not changed: the packaged defaults (GITCHA_STORE=cassandra, 127.0.0.1, datacenter1) are
+# what a single local Cassandra needs.  Running it again is harmless: what is done already is skipped.
+#
+# The inputloop-gitcha package runs this after its installation when debconf was told to set Cassandra up
+# (inputloop-gitcha/cassandra_setup).  A package cannot install another package while dpkg runs, so it starts this
+# as its own systemd job that first waits for that apt run to end (--wait-pid).  Follow it with:
+#   journalctl -u gitcha-setup-cassandra -f
+set -eu
+SERIES=50x
+WAIT_PID=
+while [ $# -gt 0 ]; do
+  case $1 in
+    --series) SERIES=${2:?--series needs 41x or 50x}; shift 2 ;;
+    --wait-pid) WAIT_PID=${2:?}; shift 2 ;;
+    -h|--help) sed -n '/^# usage:/,/^set -eu/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
+    *) echo "gitcha-setup-cassandra: unknown option $1" >&2; exit 2 ;;
+  esac
+done
+case $SERIES in 41x|50x) ;; *) echo "gitcha-setup-cassandra: --series is 41x or 50x" >&2; exit 2 ;; esac
+[ "$(id -u)" = 0 ] || { echo "gitcha-setup-cassandra: run it as root (sudo)" >&2; exit 2; }
+say() { echo "gitcha-setup-cassandra: $*"; }
+# For tests against a stand-in repository only.
+REPO=${GITCHA_CASSANDRA_APT_URL:-https://debian.cassandra.apache.org}
+KEY_URL=${GITCHA_CASSANDRA_KEY_URL:-https://downloads.apache.org/cassandra/KEYS}
+export DEBIAN_FRONTEND=noninteractive
+
+if [ -n "$WAIT_PID" ]; then
+  say "waiting for the apt run that installed Gitcha (pid $WAIT_PID) to end"
+  while kill -0 "$WAIT_PID" 2>/dev/null; do sleep 2; done
+fi
+
+installed() { dpkg-query -W -f='${Status}' cassandra 2>/dev/null | grep -q 'install ok installed'; }
+if installed; then
+  say "cassandra is installed already"
+else
+  mem=$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)
+  [ "$mem" -ge 3500 ] || say "warning: this machine has $mem MB of memory; Cassandra wants at least 4 GB beside Gitcha"
+  install -d -m 755 /etc/apt/keyrings
+  say "fetching Apache's Cassandra signing keys from $KEY_URL"
+  tmp=$(mktemp)
+  if command -v curl >/dev/null; then curl -fsSL "$KEY_URL" -o "$tmp"; else wget -q -O "$tmp" "$KEY_URL"; fi
+  grep -q 'BEGIN PGP PUBLIC KEY BLOCK' "$tmp" || { rm -f "$tmp"; say "that is not a PGP key file; nothing changed"; exit 1; }
+  install -m 644 "$tmp" /etc/apt/keyrings/apache-cassandra.asc; rm -f "$tmp"
+  echo "deb [signed-by=/etc/apt/keyrings/apache-cassandra.asc] $REPO $SERIES main" > /etc/apt/sources.list.d/cassandra.sources.list
+  say "added $REPO $SERIES to apt; installing cassandra"
+  apt-get -o DPkg::Lock::Timeout=600 update -q
+  apt-get -o DPkg::Lock::Timeout=600 install -y -q cassandra
+fi
+
+if [ -d /run/systemd/system ]; then
+  systemctl enable --now cassandra >/dev/null 2>&1 || systemctl start cassandra
+else
+  service cassandra start >/dev/null 2>&1 || true
+fi
+say "waiting for Cassandra to answer on 127.0.0.1:9042 (its first start takes a minute or two)"
+if ! node -e '
+  const net = require("node:net");
+  const end = Date.now() + 300000;
+  (function tryOnce() {
+    const s = net.connect(9042, "127.0.0.1", () => { s.end(); process.exit(0); });
+    s.on("error", () => { if (Date.now() > end) process.exit(1); setTimeout(tryOnce, 2000); });
+  })();'; then
+  say "Cassandra did not answer within 5 minutes; see journalctl -u cassandra and /var/log/cassandra/system.log"
+  exit 1
+fi
+say "Cassandra is up"
+
+if [ -d /run/systemd/system ] && { systemctl is-enabled --quiet gitcha 2>/dev/null || systemctl is-active --quiet gitcha 2>/dev/null || [ "$(systemctl show -P ActiveState gitcha 2>/dev/null)" = activating ]; }; then
+  say "restarting gitcha"
+  systemctl restart gitcha && say "gitcha is up: systemctl status gitcha" || say "gitcha did not start; sudo gitcha-check says why"
+else
+  say "done. Start Gitcha with: systemctl enable --now gitcha"
+fi
