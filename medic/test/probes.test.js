@@ -30,6 +30,7 @@ function machine({ cassandraUp = false, gitchaUp = false } = {}) {
     '/var/log/cassandra/system.log': cassandraUp ? 'INFO  [main] Startup complete' : 'ERROR [main] CassandraDaemon.java:897 - Exception encountered during startup\norg.apache.cassandra.exceptions.ConfigurationException: Saved cluster name Test Cluster != configured name com.inputloop.gitcha',
     '/proc/meminfo': 'MemTotal:        8126464 kB\nMemFree:         100 kB\nMemAvailable:    5120000 kB\n',
     '/etc/nginx/sites-enabled/gitcha': 'server { location / { proxy_pass http://127.0.0.1:4873; } }',
+    '/etc/inputloop/omni/members.json': '{"members":{}}',
   };
   const dirs = { '/var/lib/cassandra/data': ['system', 'system_schema', 'system_auth'], '/etc/nginx/sites-enabled': ['gitcha'], '/var/lib/gitcha': [], '/var/lib/cassandra': ['data'], '/var/log': [] };
   const run = tableRunner({
@@ -41,13 +42,16 @@ function machine({ cassandraUp = false, gitchaUp = false } = {}) {
     'dpkg-query -W -f=${Status} cassandra': 'install ok installed',
     'dpkg-query -W -f=${Status} nginx': 'install ok installed',
     'dpkg-query -W -f=${Status} caddy': { code: 1, err: 'dpkg-query: no packages found matching caddy' },
+    'dpkg-query -W -f=${Status} inputloop-gitcha-omni-gateway': 'install ok installed',
+    'systemctl show -p LoadState,ActiveState,SubState,UnitFileState,NRestarts,Result,ExecMainStatus,ActiveEnterTimestamp omni-gateway.service': show({ LoadState: 'loaded', ActiveState: 'active', SubState: 'running', UnitFileState: 'enabled', NRestarts: 0, Result: 'success', ExecMainStatus: 0 }),
+    'journalctl -u omni-gateway -n 40 --no-pager -o cat': 'omni-gateway: listening on http://127.0.0.1:8769/mcp/{seat,tavern}\nomni-gateway: tavern: exited (1)',
     'nginx -t': { code: 0, err: 'nginx: configuration file /etc/nginx/nginx.conf syntax is ok\nnginx: configuration file /etc/nginx/nginx.conf test is successful' },
     'curl -sS -o /dev/null -w %{http_code} --max-time 8 --resolve gitcha.inputloop.com:443:127.0.0.1 https://gitcha.inputloop.com/api/v1/health': gitchaUp ? '200' : { code: 22, out: '502', err: 'curl: (22) The requested URL returned error: 502' },
     'df -Pk /var/lib/gitcha': 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 100000000 31000000 69000000 31% /',
     'df -Pk /var/lib/cassandra': 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 100000000 31000000 69000000 31% /',
     'df -Pk /var/log': 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 100000000 31000000 69000000 31% /',
   });
-  const open = new Set([...(cassandraUp ? ['127.0.0.1:9042'] : []), ...(gitchaUp ? ['127.0.0.1:4873'] : [])]);
+  const open = new Set(['127.0.0.1:8769', ...(cassandraUp ? ['127.0.0.1:9042'] : []), ...(gitchaUp ? ['127.0.0.1:4873'] : [])]);
   const io = {
     run,
     readFile: (p) => { if (p in files) return files[p]; throw new Error(`ENOENT ${p}`); },
@@ -55,7 +59,7 @@ function machine({ cassandraUp = false, gitchaUp = false } = {}) {
     exists: (p) => p in files || p in dirs,
     hostname: () => 'gw19', now: () => new Date('2026-10-30T03:50:00Z'),
     portOpen: async (h, port) => open.has(`${h}:${port}`),
-    fetchJson: async (url) => (url.includes(':4873/') && gitchaUp ? { status: 200, body: { service: 'gitcha', version: '0.2.0' } } : { status: 503, body: {} }),
+    fetchJson: async (url) => (url.includes(':8769/health') ? { status: 200, body: { ok: true, members: ['seat', 'tavern'] } } : url.includes(':4873/') && gitchaUp ? { status: 200, body: { service: 'gitcha', version: '0.2.0' } } : { status: 503, body: {} }),
   };
   return { run, io, files, dirs };
 }
@@ -90,6 +94,10 @@ test('gather: all up; health read from the port', async () => {
   assert.equal(facts.cassandra.anyPortOpen, true);
   assert.equal(facts.cassandra.savedClusterName, undefined);
   assert.equal(facts.proxy.publicHealth.ok, true);
+  assert.equal(facts.omni.installed, true);
+  assert.equal(facts.omni.membersFile, true);
+  assert.deepEqual(facts.omni.health, { ok: true, status: 200, members: ['seat', 'tavern'] });
+  assert.deepEqual(facts.omni.memberFaults, ['omni-gateway: tavern: exited (1)']);
 });
 
 test('gather: a probe that throws leaves a note and the others still answer', async () => {

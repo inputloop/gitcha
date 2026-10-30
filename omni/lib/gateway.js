@@ -17,18 +17,46 @@ import fs from 'node:fs';
 import http from 'node:http';
 import readline from 'node:readline';
 
-/** Read the members file: { "members": { NAME: { "command": [...], "env": {...}, "tokenFile": PATH, "cwd": DIR } } }. */
-export function readMembers(path, { readFile = (p) => fs.readFileSync(p, 'utf8') } = {}) {
+/**
+ * Read the members file: { "members": { NAME: { "command": [...], "env": {...}, "tokenFile": PATH, "cwd": DIR, "user": NAME } } }.
+ * tokenFile defaults to TOKENS_DIR/NAME when `tokensDir` is given (the package's /etc/inputloop/omni/tokens).
+ */
+export function readMembers(path, { readFile = (p) => fs.readFileSync(p, 'utf8'), tokensDir } = {}) {
   const cfg = JSON.parse(readFile(path));
   const members = cfg.members ?? {};
   const problems = [];
   for (const [name, m] of Object.entries(members)) {
     if (!/^[a-z][a-z0-9_-]*$/.test(name)) problems.push(`${name}: a member name is lower-case letters, digits, _ and -`);
     if (!Array.isArray(m.command) || !m.command.length) problems.push(`${name}: command must be a non-empty list`);
+    if (!m.tokenFile && !m.token && tokensDir) m.tokenFile = `${tokensDir}/${name}`;
     if (!m.tokenFile && !m.token) problems.push(`${name}: needs tokenFile (a file holding the bearer token, mode 600)`);
+    if (m.user !== undefined && !/^[a-z_][a-z0-9_-]*$/.test(m.user)) problems.push(`${name}: user must be a Unix user name`);
   }
   if (problems.length) throw new Error(`members file ${path}: ${problems.join('; ')}`);
   return members;
+}
+
+/** A Unix user from /etc/passwd: {name, uid, gid, home}. Throws when there is no such user. */
+export function resolveUser(name, { readFile = (p) => fs.readFileSync(p, 'utf8') } = {}) {
+  for (const line of readFile('/etc/passwd').split('\n')) {
+    const f = line.split(':');
+    if (f[0] === name && f.length >= 6) return { name, uid: Number(f[2]), gid: Number(f[3]), home: f[5] };
+  }
+  throw new Error(`no user named ${name} in /etc/passwd`);
+}
+
+/**
+ * mintToken(dir, name): write a fresh random token to dir/name (mode 600) unless one is there, and return it. The one
+ * time it is shown is when the keeper carries it to the cloud environment's secrets; it is never logged.
+ */
+export function mintToken(dir, name, { fsx = fs } = {}) {
+  if (!/^[a-z][a-z0-9_-]*$/.test(name)) throw new Error(`${name}: a member name is lower-case letters, digits, _ and -`);
+  const file = `${dir}/${name}`;
+  fsx.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (fsx.existsSync(file)) return { file, token: fsx.readFileSync(file, 'utf8').trim(), fresh: false };
+  const token = crypto.randomBytes(32).toString('base64url');
+  fsx.writeFileSync(file, `${token}\n`, { mode: 0o600 });
+  return { file, token, fresh: true };
 }
 
 /** One stdio MCP child, with requests serialised and ids remapped. */
@@ -40,7 +68,12 @@ export class Member {
   start() {
     if (this.child) return;
     const [cmd, ...args] = this.spec.command;
-    this.child = this.spawnFn(cmd, args, { cwd: this.spec.cwd, env: { ...process.env, ...(this.spec.env ?? {}) }, stdio: ['pipe', 'pipe', 'pipe'] });
+    // A member may run as another user (its seat, its data folder): only when the gateway itself is root, which
+    // the unit arranges; otherwise it is refused here, loudly, rather than run as the wrong user.
+    if (this.spec.user && process.getuid?.() !== 0) throw new Error(`${this.name}: "user": "${this.spec.user}" needs the gateway to run as root (the omni-gateway unit does)`);
+    const asUser = this.spec.user ? resolveUser(this.spec.user) : null;
+    const env = { ...process.env, ...(asUser ? { HOME: asUser.home, USER: asUser.name, LOGNAME: asUser.name } : {}), ...(this.spec.env ?? {}) };
+    this.child = this.spawnFn(cmd, args, { cwd: this.spec.cwd ?? asUser?.home, env, stdio: ['pipe', 'pipe', 'pipe'], ...(asUser ? { uid: asUser.uid, gid: asUser.gid } : {}) });
     this.child.on('exit', (code) => {
       this.log(`${this.name}: exited (${code})`);
       for (const [, w] of this.waiting) w.reject(new Error(`${this.name} exited (${code})`));

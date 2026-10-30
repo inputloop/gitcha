@@ -1,0 +1,32 @@
+{
+  "_comment": [
+    "omni-members.example.json -- the members an Omni gateway offers, shaped for a ghostwheel node such as gw19.",
+    "Copy to /etc/inputloop/omni/members.json and edit the paths and users. Each member is one stdio MCP server,",
+    "started as 'user' (the gateway runs as root and drops to it), with 'env' added to that user's environment.",
+    "Its bearer token is /etc/inputloop/omni/tokens/NAME (omni-gateway --mint NAME writes one and prints it once).",
+    "Only what is named here runs; the gateway is not a shell. omni-gateway --check starts each and lists its tools."
+  ],
+  "members": {
+    "seat": {
+      "_comment": "vibrobeast's memory seat (mentcached), as the person whose seat it is; MENTCACHED_SEAT names it.",
+      "user": "gw19",
+      "command": ["python3", "-I", "/home/gw19/vibrobeast/plugins/vibrobeast-servers/servers/launch.py", "mentcached"],
+      "env": { "MENTCACHED_SEAT": "/home/gw19/.mentcached" }
+    },
+    "persona": {
+      "user": "gw19",
+      "command": ["python3", "-I", "/home/gw19/vibrobeast/plugins/vibrobeast-servers/servers/launch.py", "persona"]
+    },
+    "tavern": {
+      "_comment": "Tavern's own MCP face, as the tavern service user, on the node's data folder; --as is the handle it speaks under.",
+      "user": "tavern",
+      "command": ["python3", "-I", "/usr/share/inputloop/tavern/tavern.py", "--data", "/var/lib/tavern", "mcp", "--as", "omni"]
+    },
+    "gitcha": {
+      "_comment": "Gitcha's extension server, as a user who has run `gitcha login` once (the device token lives in that home).",
+      "user": "gw19",
+      "command": ["node", "/usr/share/inputloop/gitcha-omni/extension/bin/gitcha-mcp.js"],
+      "env": { "GITCHA_SERVER": "https://gitcha.inputloop.com" }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+omni-gateway puts the stdio MCP servers you name behind HTTP on 127.0.0.1:8769, one URL per member
+(/mcp/NAME), each behind its own bearer token, so a Claude session in a cloud sandbox (the "omni" plugin from
+inputloop/gitcha's marketplace, or Claude Code's own remote-MCP support) can reach your memory seat, persona
+sheets, Tavern and Gitcha where they live. Nothing runs but what the members file names.
+
+Setting it up, once, as root:
+
+  1. cp /usr/share/doc/inputloop-gitcha-omni-gateway/omni-members.example.json /etc/inputloop/omni/members.json
+     and edit it: each member's command, the user it runs as (the seat's owner, tavern, gitcha), its env.
+  2. omni-gateway --check            each member starts, says its name, and lists its tools; fix what fails
+  3. omni-gateway --mint seat        a token for member "seat", written to /etc/inputloop/omni/tokens/seat (mode 600)
+                                     and printed once: it goes to the cloud environment's secrets as OMNI_TOKEN_SEAT.
+                                     One per member.
+  4. nginx with TLS in front: /usr/share/doc/inputloop-gitcha-omni-gateway/nginx-omni.conf.example, a name of yours.
+  5. systemctl enable --now omni-gateway          (or answer yes to dpkg-reconfigure inputloop-gitcha-omni-gateway)
+     curl -s https://omni.example.org/health      says ok and the member names (no token needed for that)
+
+In the cloud environment: the OMNI_TOKEN_* secrets; OMNI_ROSTER_JSON, for example
+  {"members":{"seat":{"url":"https://omni.example.org/mcp/seat","tokenEnv":"OMNI_TOKEN_SEAT"}, ...}}
+(or a roster file named by OMNI_ROSTER); OMNI_SKILLS naming checkouts of vibrobeast-skills or jarvis; the host
+under allowed domains; and the omni plugin. Then, in a session: omni_status.
+
+The gateway runs as root so a member can run as the user whose files it serves ("user" in members.json); the
+unit keeps the rest of the system read-only to it. It holds no key of its own: the token files are the members'
+doors, mode 600, and the members' own programs keep their own secrets where they always did.
+
+journalctl -u omni-gateway shows what it and each member printed. gitcha-medic watches the unit and /health.

@@ -4,9 +4,10 @@
 
 # Omni: continuity for Claude in a cloud sandbox
 
-*Status 2026-10-30: the gateway, the hub, the skills reader and their tests are in `omni/`; the plugin is listed
-in the marketplace. Not yet run against a real vibrobeast server or a real cloud session. The gateway's Debian
-package and its nginx example are the next step.*
+*Status 2026-10-30, later: the gateway, the hub, the skills reader and their tests are in `omni/`; the plugin is
+listed in the marketplace; the gateway is packaged (`inputloop-gitcha-omni-gateway`: unit, conffile, token minting,
+a members file shaped for gw19, the nginx example) and the medic watches it. Not yet run against a real vibrobeast
+server or a real cloud session: the first real run is the open item.*
 
 ## The fault this is for
 

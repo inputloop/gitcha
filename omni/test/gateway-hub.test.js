@@ -102,6 +102,30 @@ test('hub: with no roster at all it still serves its own tools and says so in th
   assert.equal(out.at(-1).result.tools.length, 4);
 });
 
+test('tokens: mintToken writes once (mode 600) and reads back; readMembers fills tokenFile from the tokens folder', async () => {
+  const { mintToken, resolveUser, Member } = await import('../lib/gateway.js');
+  const fsx = await import('node:fs');
+  const os = await import('node:os');
+  const dir = fsx.mkdtempSync(path.join(os.tmpdir(), 'omni-tokens-'));
+  const a = mintToken(dir, 'seat');
+  const b = mintToken(dir, 'seat');
+  assert.equal(a.fresh, true); assert.equal(b.fresh, false); assert.equal(a.token, b.token);
+  assert.match(a.token, /^[A-Za-z0-9_-]{40,}$/);
+  assert.equal((fsx.statSync(a.file).mode & 0o777), 0o600);
+  assert.throws(() => mintToken(dir, '../x'), /lower-case/);
+  fsx.rmSync(dir, { recursive: true });
+  const m = readMembers('/x', { readFile: () => JSON.stringify({ members: { seat: { command: ['a'], user: 'gw19' } } }), tokensDir: '/etc/inputloop/omni/tokens' });
+  assert.equal(m.seat.tokenFile, '/etc/inputloop/omni/tokens/seat');
+  assert.throws(() => readMembers('/x', { readFile: () => JSON.stringify({ members: { seat: { command: ['a'], token: 't', user: 'Bad User' } } }) }), /Unix user name/);
+  // resolveUser reads /etc/passwd; a member with "user" is refused loudly when the gateway is not root.
+  assert.deepEqual(resolveUser('alice', { readFile: () => 'root:x:0:0:root:/root:/bin/sh\nalice:x:1001:1001:Alice:/home/alice:/bin/sh\n' }), { name: 'alice', uid: 1001, gid: 1001, home: '/home/alice' });
+  assert.throws(() => resolveUser('nobody-here', { readFile: () => 'root:x:0:0:root:/root:/bin/sh\n' }), /no user named/);
+  if (process.getuid?.() !== 0) {
+    const mem = new Member('seat', { command: ['true'], user: 'root', token: 't' }, { spawnFn: () => { throw new Error('must not spawn'); } });
+    await assert.rejects(mem.request('ping', {}), /needs the gateway to run as root/);
+  }
+});
+
 test('readMembers and readRoster refuse the shapes that would be mistakes', () => {
   assert.throws(() => readMembers('/x', { readFile: () => JSON.stringify({ members: { Seat: { command: ['a'], token: 't' } } }) }), /lower-case/);
   assert.throws(() => readMembers('/x', { readFile: () => JSON.stringify({ members: { seat: { command: [], token: 't' } } }) }), /command/);

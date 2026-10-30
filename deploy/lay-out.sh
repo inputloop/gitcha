@@ -3,7 +3,7 @@
 # Copyright 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Corwin Brust <corwin@bru.st> and Contributors.
 # SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 #
-# usage:  sh deploy/lay-out.sh server|runner|medic DESTDIR [--without-cassandra] [--debconf]
+# usage:  sh deploy/lay-out.sh server|runner|medic|omni DESTDIR [--without-cassandra] [--debconf]
 #
 # The one recipe for what goes where: deploy/build-debs.sh (plain dpkg-deb, alphaOS) and debian/rules
 # (dpkg-buildpackage, the full packaging) both call it, so the two kinds of package hold the same files.
@@ -105,5 +105,20 @@ medic)
   cp "$here/deploy/medic.env" "$D/etc/inputloop/gitcha/medic.env"
   cp "$here/deploy/gitcha-medic.service" "$here/deploy/gitcha-medic.timer" "$D/usr/lib/systemd/system/"
   ;;
-*) echo "lay-out.sh: server, runner or medic, not $what" >&2; exit 2 ;;
+omni)
+  # The gateway and hub (Node's standard library only), and the extension's MCP server with its lib, so a host can
+  # offer Gitcha itself as a member without the server package's node_modules.
+  APP=$D/usr/share/inputloop/gitcha-omni
+  rm -rf "$APP"; mkdir -p "$APP/extension"
+  cp -R "$here/omni" "$APP/omni"; rm -rf "$APP/omni/test"
+  cp -R "$here/extension/bin" "$here/extension/lib" "$here/extension/package.json" "$APP/extension/"
+  chmod 755 "$APP/omni/bin/"*.js "$APP/extension/bin/"*.js
+  wrapper usr/bin/omni-gateway "node /usr/share/inputloop/gitcha-omni/omni/bin/omni-gateway.js"
+  wrapper usr/bin/omni-hub "node /usr/share/inputloop/gitcha-omni/omni/bin/omni-hub.js"
+  mkdir -p "$D/etc/inputloop/omni" "$D/usr/lib/systemd/system" "$D/usr/share/doc/inputloop-gitcha-omni-gateway"
+  cp "$here/deploy/omni-gateway.env" "$D/etc/inputloop/omni/gateway.env"
+  cp "$here/deploy/omni-gateway.service" "$D/usr/lib/systemd/system/omni-gateway.service"
+  cp "$here/deploy/omni-members.example.json" "$here/deploy/nginx-omni.conf.example" "$here/docs/proposals/omni-cloud.md" "$D/usr/share/doc/inputloop-gitcha-omni-gateway/"
+  ;;
+*) echo "lay-out.sh: server, runner, medic or omni, not $what" >&2; exit 2 ;;
 esac

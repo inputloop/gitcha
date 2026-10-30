@@ -1,0 +1,3 @@
+# The commands are small wrappers; --help and README.Debian are the manual.
+inputloop-gitcha-omni-gateway: no-manual-page [usr/bin/omni-gateway]
+inputloop-gitcha-omni-gateway: no-manual-page [usr/bin/omni-hub]

@@ -132,6 +132,24 @@ export function diagnose(facts) {
     out.push(f('no-proxy', 'warn', `No nginx or Caddy is installed here, yet the public URL is ${set.publicUrl}.`, 'Gitcha listens on loopback only; without a TLS proxy on this machine nobody reaches it.', 'manual-proxy'));
   }
 
+  // ---- the Omni gateway, when its package is here ---------------------------------------------------------------
+  const o = facts.omni;
+  if (o?.installed) {
+    if (!o.membersFile) {
+      out.push(f('omni-no-members', 'info', 'The Omni gateway is installed but has no members file yet, so it has nothing to serve.', 'No /etc/inputloop/omni/members.json; the example is beside the package docs.', 'manual-omni'));
+    } else if (o.unit?.known && o.unit.active !== 'active' && o.unit.active !== 'activating') {
+      out.push(f('omni-gateway-stopped', o.unit.enabled === 'enabled' ? 'bad' : 'info',
+        o.unit.enabled === 'enabled' ? `The Omni gateway is enabled but not running (${o.unit.active}/${o.unit.sub}).` : 'The Omni gateway is installed with a members file, and not enabled.',
+        o.unit.enabled === 'enabled' ? 'Cloud sessions cannot reach the memory seat or Tavern through it until it runs.' : 'systemctl enable --now omni-gateway starts it, once omni-gateway --check is clean.',
+        o.unit.enabled === 'enabled' ? 'start-omni-gateway' : undefined));
+    } else if (o.unit?.active === 'active' && !o.health?.ok) {
+      out.push(f('omni-gateway-silent', 'bad', 'The Omni gateway runs but /health on 127.0.0.1:8769 does not answer.', `port ${o.portOpen ? 'open' : 'closed'}; ${o.health?.error ?? `HTTP ${o.health?.status ?? '?'}`}. OMNI_LISTEN in gateway.env may name another address.`, 'restart-omni-gateway'));
+    } else if (o.health?.ok) {
+      out.push(f('omni-gateway-up', 'ok', `The Omni gateway answers, with members ${o.health.members.join(', ') || '(none)'}.`, 'GET /health on 127.0.0.1:8769 said ok.'));
+      if (o.memberFaults?.length) out.push(f('omni-member-faults', 'warn', 'One or more Omni members failed recently (their program exited or did not answer).', `Journal: ${o.memberFaults.join(' | ')}`, 'manual-omni'));
+    }
+  }
+
   // ---- the machine --------------------------------------------------------------------------------------------
   for (const d of s.disks ?? []) {
     if (d.usedPct >= 95 || d.availMB < 512) out.push(f(`disk-${d.path}`, 'bad', `The disk under ${d.path} is ${d.usedPct}% full (${d.availMB} MB left).`, 'Cassandra stops writing and Gitcha cannot save when it runs out.', 'manual-disk'));

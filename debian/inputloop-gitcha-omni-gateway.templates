@@ -1,0 +1,8 @@
+Template: inputloop-gitcha-omni-gateway/enable
+Type: boolean
+Default: false
+Description: Enable and start the omni-gateway service now?
+ It serves the members in /etc/inputloop/omni/members.json on 127.0.0.1:8769
+ (put nginx with TLS in front: nginx-omni.conf.example).  Say no until that
+ file names your servers; then: systemctl enable --now omni-gateway
+ Check them first with: omni-gateway --check

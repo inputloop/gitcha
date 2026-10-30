@@ -50,3 +50,16 @@ Description: Gitcha medic: diagnose Gitcha, its Cassandra and its proxy, and men
  (Tavern, chadgram, a webhook, a C4 folder).  An AI agent (the Claude API; a
  local model and inputloop's own agents are reserved names) can be asked for a
  second opinion over redacted facts; it cannot say yes for a person.
+
+Package: inputloop-gitcha-omni-gateway
+Architecture: all
+Depends: ${misc:Depends}, nodejs (>= 20)
+Recommends: nginx, inputloop-tavern
+Suggests: python3
+Description: Omni gateway: your MCP servers behind HTTP, one token each, for Claude in a cloud sandbox
+ Puts the stdio MCP servers named in /etc/inputloop/omni/members.json
+ (vibrobeast's memory seat and persona sheets, Tavern, Gitcha) behind HTTP on
+ loopback, one URL and one bearer token per member, each run as the user whose
+ files it serves; nginx with TLS goes in front.  A Claude session in a cloud
+ sandbox reaches them through the omni plugin (the hub, also here) or as remote
+ MCP servers.  It starts only when that is asked for.

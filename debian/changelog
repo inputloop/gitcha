@@ -20,6 +20,12 @@ gitcha (0.2.0) unstable; urgency=medium
     syslog, Tavern, chadgram, a webhook or a C4 folder.  An agent (the Claude
     API; local and inputloop vendors reserved) can be asked for a second
     opinion over redacted facts.
+  * A fourth package, inputloop-gitcha-omni-gateway: the stdio MCP servers a
+    host runs (vibrobeast's memory seat and persona sheets, Tavern, Gitcha)
+    behind HTTP on loopback, one URL and one bearer token per member, each
+    run as the user whose files it serves, for a Claude session in a cloud
+    sandbox to reach through the omni plugin; nginx with TLS goes in front.
+    The medic watches it.
 
  -- inputloop <nathanielfrankford@gmail.com>  Fri, 30 Oct 2026 01:30:00 +0000
 

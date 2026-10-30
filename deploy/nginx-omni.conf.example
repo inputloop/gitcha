@@ -1,0 +1,27 @@
+# nginx-omni.conf.example -- nginx as the TLS front for an Omni gateway (omni-gateway on 127.0.0.1:8769).
+# Copyright 2026 Corwin Brust <corwin@bru.st> and Bryant Frankford <nathanielfrankford@gmail.com> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+#
+# Put it in /etc/nginx/conf.d/omni.conf (or sites-available + a link), replace the name, then: nginx -t && systemctl reload nginx
+# The certificate: certbot certonly --webroot -w /var/www/letsencrypt -d omni.example.org   (port 80 is in nginx-gitcha.conf.example)
+# Each member is reached at https://omni.example.org/mcp/NAME with its own bearer token; the gateway checks the token,
+# nginx only carries it. Nothing else is served on this name.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name omni.example.org;
+    ssl_certificate     /etc/letsencrypt/live/omni.example.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/omni.example.org/privkey.pem;
+    client_max_body_size 8m;                        # one JSON-RPC message per POST; the gateway refuses more than 4 MB itself
+    proxy_read_timeout 300s;                        # a member's tool may take a while (a model, a long read)
+    proxy_send_timeout 300s;
+    location /health { proxy_pass http://127.0.0.1:8769; }
+    location /mcp/ {
+        proxy_pass http://127.0.0.1:8769;
+        proxy_http_version 1.1;
+        proxy_set_header Authorization $http_authorization;   # the member's bearer token, carried as sent
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location / { return 404; }
+}

@@ -134,4 +134,27 @@ Looks at the Gitcha server, its Cassandra node and the proxy in front; says in
 plain words what is wrong and why; runs the safe remedies when told it may; parks
 the rest for a person; tells syslog and the configured rooms.  The timer does not
 start by itself: systemctl enable --now gitcha-medic.timer" "curl"
+
+# ---- inputloop-gitcha-omni-gateway -----------------------------------------------------------------
+# The gateway, the hub and the extension's MCP server; gateway.env is a conffile; the service is not enabled.
+stage inputloop-gitcha-omni-gateway
+sh "$here/deploy/lay-out.sh" omni "$S"
+printf '/etc/inputloop/omni/gateway.env\n' > "$S/DEBIAN/conffiles"
+cp "$here/debian/inputloop-gitcha-omni-gateway.README.Debian" "$S/usr/share/doc/inputloop-gitcha-omni-gateway/README.Debian"
+cat > "$S/DEBIAN/postinst" <<'EOF'
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+  chown root:root /etc/inputloop/omni/gateway.env; chmod 600 /etc/inputloop/omni/gateway.env
+  install -d -m 700 /etc/inputloop/omni/tokens
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl try-restart omni-gateway.service >/dev/null 2>&1 || true
+fi
+EOF
+chmod 755 "$S/DEBIAN/postinst"
+finish inputloop-gitcha-omni-gateway "nodejs (>= 20)" "Omni gateway: your MCP servers behind HTTP, one token each, for Claude in a cloud sandbox
+Puts the stdio MCP servers named in /etc/inputloop/omni/members.json (vibrobeast's
+memory seat and persona sheets, Tavern, Gitcha) behind HTTP on loopback, one URL and
+one bearer token per member, each run as the user whose files it serves; nginx with
+TLS goes in front.  Also the omni-hub, the sandbox side.  Does not start by itself." "nginx, inputloop-tavern"
 rm -rf "$STAGE"

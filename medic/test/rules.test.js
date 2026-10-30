@@ -139,6 +139,22 @@ test('Cassandra on other machines and unreachable: no local remedy is offered', 
   assert.equal(remedyOf(found[0].remedy).class, 'manual');
 });
 
+test('the Omni gateway: absent is silence; stopped-but-enabled is a safe start; up is ok; a member fault is a warning', () => {
+  const base = () => { const f = gw19(); f.cassandra = { ...f.cassandra, unit: unit('active', 'running'), ports: { '127.0.0.1:9042': true }, anyPortOpen: true, savedClusterName: undefined, configuredClusterName: undefined, systemLog: [] }; f.gitcha = { ...f.gitcha, unit: unit('active', 'running'), journal: [], cannotStart: [], lastCannotStart: '', portOpen: true, health: { ok: true, status: 200, version: '0.2.0', service: 'gitcha' } }; f.proxy.publicHealth = { status: 200, ok: true, error: '' }; return f; };
+  assert.ok(!diagnose(base()).some((x) => x.id.startsWith('omni')), 'no omni package: no omni finding');
+  let f = base(); f.omni = { installed: true, membersFile: false };
+  assert.equal(diagnose(f).find((x) => x.id === 'omni-no-members').level, 'info');
+  f = base(); f.omni = { installed: true, membersFile: true, unit: unit('inactive', 'dead'), portOpen: false, health: { ok: false } };
+  const stopped = diagnose(f).find((x) => x.id === 'omni-gateway-stopped');
+  assert.equal(stopped.level, 'bad'); assert.equal(stopped.remedy, 'start-omni-gateway'); assert.equal(remedyOf(stopped.remedy).class, 'safe');
+  f = base(); f.omni = { installed: true, membersFile: true, unit: unit('active', 'running'), portOpen: true, health: { ok: true, status: 200, members: ['seat', 'tavern'] }, journal: ['omni-gateway: tavern: exited (1)'], memberFaults: ['omni-gateway: tavern: exited (1)'] };
+  const found = diagnose(f);
+  assert.ok(found.some((x) => x.id === 'omni-gateway-up' && x.level === 'ok' && /seat, tavern/.test(x.what)));
+  assert.ok(found.some((x) => x.id === 'omni-member-faults' && x.level === 'warn'));
+  f = base(); f.omni = { installed: true, membersFile: true, unit: unit('active', 'running'), portOpen: false, health: { ok: false } };
+  assert.equal(diagnose(f).find((x) => x.id === 'omni-gateway-silent').remedy, 'restart-omni-gateway');
+});
+
 test('every remedy a rule names exists and has a class', () => {
   // Walk the rules file for remedy names (the fifth argument of f(...)) and check each against the table.
   const src = fs.readFileSync(new URL('../lib/rules.js', import.meta.url), 'utf8');

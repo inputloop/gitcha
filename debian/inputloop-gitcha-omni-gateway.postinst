@@ -1,0 +1,32 @@
+#!/bin/sh
+# postinst for inputloop-gitcha-omni-gateway: the config folder (root only), and (only when asked) the service.
+# Copyright 2026 Corwin Brust <corwin@bru.st> and Bryant Frankford <nathanielfrankford@gmail.com> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+set -e
+. /usr/share/debconf/confmodule
+ETC=/etc/inputloop/omni
+start=no
+
+if [ "$1" = configure ]; then
+  chown root:root "$ETC/gateway.env"; chmod 600 "$ETC/gateway.env"
+  install -d -m 700 "$ETC/tokens"
+  # A members file is the keeper's to write; the example is beside the docs. None yet: the service would have nothing to serve.
+  db_get inputloop-gitcha-omni-gateway/enable
+  if [ "$RET" = true ]; then start=yes; fi
+fi
+db_stop
+
+#DEBHELPER#
+
+if [ "$1" = configure ]; then
+  [ -d /run/systemd/system ] && systemctl --system daemon-reload >/dev/null 2>&1 || true
+  if [ "$start" = yes ] && [ -f "$ETC/members.json" ]; then
+    deb-systemd-helper enable omni-gateway.service >/dev/null || true
+    deb-systemd-invoke restart omni-gateway.service >/dev/null 2>&1 || echo "inputloop-gitcha-omni-gateway: omni-gateway did not start; see journalctl -u omni-gateway and omni-gateway --check" >&2
+  elif [ "$start" = yes ]; then
+    echo "inputloop-gitcha-omni-gateway: no $ETC/members.json yet; copy omni-members.example.json (beside this package's docs) there, edit it, then: systemctl enable --now omni-gateway" >&2
+  else
+    deb-systemd-invoke try-restart omni-gateway.service >/dev/null 2>&1 || true
+  fi
+fi
+exit 0

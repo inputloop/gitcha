@@ -1,0 +1,32 @@
+# omni-gateway.service -- the stdio MCP servers named in /etc/inputloop/omni/members.json, behind HTTP on loopback.
+# Copyright 2026 Corwin Brust <corwin@bru.st> and Bryant Frankford <nathanielfrankford@gmail.com> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+# Not enabled by the package unless debconf is told to: systemctl enable --now omni-gateway
+[Unit]
+Description=Omni gateway: your MCP servers behind HTTP on loopback, one token each (put nginx with TLS in front)
+After=network.target
+[Service]
+# Root, so that each member can run as the user whose files it serves ("user" in members.json: the seat's owner,
+# tavern, gitcha); the gateway itself only reads members.json and the token files and starts those programs.
+EnvironmentFile=-/etc/inputloop/omni/gateway.env
+ExecStart=/usr/bin/omni-gateway
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# The members write where their own programs write: the seat under a home, Tavern's data folder, Gitcha's config.
+# ProtectHome=no for that reason; ReadWritePaths are the system places members may need. Add to it with systemctl edit.
+ProtectHome=no
+ReadWritePaths=/var/lib/tavern /var/lib/gitcha-omni
+StateDirectory=gitcha-omni
+MemoryMax=1G
+TasksMax=256
+[Install]
+WantedBy=multi-user.target

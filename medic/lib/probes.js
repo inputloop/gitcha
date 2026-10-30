@@ -175,6 +175,22 @@ export async function gather(settings, io) {
     }
   });
 
+  await step('omni', async () => {
+    // The Omni gateway, when its package is here: its unit, and /health on loopback (no token needed for that).
+    const o = facts.omni = { installed: await installed(io, 'inputloop-gitcha-omni-gateway') };
+    if (!o.installed) return;
+    o.unit = await unitState(io, 'omni-gateway.service');
+    o.membersFile = io.exists('/etc/inputloop/omni/members.json');
+    o.portOpen = await io.portOpen('127.0.0.1', 8769);
+    o.health = { ok: false };
+    if (o.portOpen) {
+      try { const { status, body } = await io.fetchJson('http://127.0.0.1:8769/health'); o.health = { ok: status === 200 && body?.ok === true, status, members: body?.members ?? [] }; }
+      catch (err) { o.health = { ok: false, error: String(err?.message ?? err) }; }
+    }
+    o.journal = o.unit?.known ? await journal(io, 'omni-gateway', 40) : [];
+    o.memberFaults = o.journal.filter((l) => /omni-gateway: \S+: (exited|no answer|not JSON)/.test(l)).slice(-5);
+  });
+
   await step('system', async () => {
     const s = facts.system;
     const mem = /^MemTotal:\s+(\d+)/m.exec(io.readFile('/proc/meminfo'));

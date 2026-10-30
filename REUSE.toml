@@ -84,10 +84,13 @@ path = [
   "debian/inputloop-gitcha.lintian-overrides",
   "debian/inputloop-gitcha-runner.lintian-overrides",
   "debian/inputloop-gitcha-medic.lintian-overrides",
+  "debian/inputloop-gitcha-omni-gateway.templates",
+  "debian/inputloop-gitcha-omni-gateway.lintian-overrides",
   "medic/package.json",
   "omni/package.json",
   "omni/.claude-plugin/plugin.json",
   "omni/.mcp.json",
+  "deploy/omni-members.example.json",
 ]
 precedence = "closest"
 SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors", "2026 Corwin Brust <corwin@bru.st>"]
@@ -98,6 +101,7 @@ path = [
   "debian/inputloop-gitcha.README.Debian",
   "debian/inputloop-gitcha-runner.README.Debian",
   "debian/inputloop-gitcha-medic.README.Debian",
+  "debian/inputloop-gitcha-omni-gateway.README.Debian",
 ]
 precedence = "closest"
 SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors", "2026 Corwin Brust <corwin@bru.st>"]

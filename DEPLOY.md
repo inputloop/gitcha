@@ -264,6 +264,26 @@ Status: the probes, rules, remedies, channels and the Claude adapter are covered
 against stand-ins (the first scenario is gw19 on 2026-10-30 as its keeper found it). **Not yet run on
 a real host**; the first is gw19.
 
+### The Omni gateway: your MCP servers, reachable from a cloud session
+
+`inputloop-gitcha-omni-gateway` is the fourth package. `omni-gateway` puts the stdio MCP servers named in
+`/etc/inputloop/omni/members.json` (vibrobeast's memory seat and persona sheets, Tavern's `mcp` face, Gitcha's
+own extension server, which this package carries) behind HTTP on `127.0.0.1:8769`, one URL per member
+(`/mcp/NAME`), each behind its own bearer token, each run as the user whose files it serves. nginx with TLS goes
+in front (`nginx-omni.conf.example`). A Claude session in a cloud sandbox then reaches them through the `omni`
+plugin from this repository's marketplace (the hub: one door, tokens from environment secrets, `omni_status`,
+`omni_reach`, `skill_read`), or adds a member directly as a remote MCP server. Nothing is rebuilt in the
+sandbox: one memory implementation stays the record, and consent does not move.
+
+```sh
+cp /usr/share/doc/inputloop-gitcha-omni-gateway/omni-members.example.json /etc/inputloop/omni/members.json   # then edit
+omni-gateway --check                  # each member starts and lists its tools, or says why not
+omni-gateway --mint seat              # a token for member "seat", printed once: OMNI_TOKEN_SEAT in the cloud environment
+systemctl enable --now omni-gateway   # then nginx in front; curl -s https://omni.example.org/health
+```
+
+The medic watches the unit and `/health`. `docs/proposals/omni-cloud.md` has the shape and what is open.
+
 ### The database: Cassandra or a file
 
 `GITCHA_STORE` chooses. Either way the server holds the whole database in memory, serves every

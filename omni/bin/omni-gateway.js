@@ -4,20 +4,35 @@
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // omni-gateway: run on a host you own; puts the stdio MCP servers named in a members file behind HTTP, each
 // behind its own bearer token, for the hub (or Claude directly) to reach.
-//   omni-gateway [--members FILE] [--listen 127.0.0.1:8769] [--check]
+//   omni-gateway [--members FILE] [--tokens DIR] [--listen 127.0.0.1:8769]
+//   omni-gateway --check            read the members file, start each member, list its tools, and exit
+//   omni-gateway --mint NAME        write a fresh token for member NAME to DIR/NAME (mode 600) unless one is there,
+//                                   and print it once: carry it to the cloud environment's secrets as OMNI_TOKEN_NAME
 //   OMNI_MEMBERS   the members file (default /etc/inputloop/omni/members.json)
+//   OMNI_TOKENS    the token files' folder (default /etc/inputloop/omni/tokens); a member with no tokenFile uses DIR/NAME
 //   OMNI_LISTEN    host:port (default 127.0.0.1:8769; put nginx with TLS in front, never expose this port)
-//   --check        read the members file, start each member, list its tools, and exit (a setup check)
-import { createGateway, readMembers, Member } from '../lib/gateway.js';
+import { createGateway, readMembers, Member, mintToken } from '../lib/gateway.js';
 
 const args = process.argv.slice(2);
 const opt = (name, dflt) => (args.includes(name) ? args[args.indexOf(name) + 1] : dflt);
 const membersFile = opt('--members', process.env.OMNI_MEMBERS || '/etc/inputloop/omni/members.json');
+const tokensDir = opt('--tokens', process.env.OMNI_TOKENS || '/etc/inputloop/omni/tokens');
 const listen = opt('--listen', process.env.OMNI_LISTEN || '127.0.0.1:8769');
 const log = (s) => process.stderr.write(`omni-gateway: ${s}\n`);
 
+if (args.includes('--mint')) {
+  const name = opt('--mint');
+  if (!name) { log('--mint needs a member name'); process.exit(2); }
+  try {
+    const { file, token, fresh } = mintToken(tokensDir, name);
+    process.stderr.write(`omni-gateway: ${fresh ? 'minted' : 'already there'}: ${file} (mode 600). The token, once; put it in the cloud environment as OMNI_TOKEN_${name.toUpperCase().replace(/[^A-Z0-9]/g, '_')}:\n`);
+    process.stdout.write(`${token}\n`);
+    process.exit(0);
+  } catch (err) { log(err.message); process.exit(1); }
+}
+
 let members;
-try { members = readMembers(membersFile); } catch (err) { log(err.message); process.exit(2); }
+try { members = readMembers(membersFile, { tokensDir }); } catch (err) { log(err.message); process.exit(2); }
 
 if (args.includes('--check')) {
   let bad = 0;

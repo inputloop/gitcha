@@ -78,7 +78,7 @@ test('DEB-2: every debconf question is asked by config and used by postinst, and
     }
     return [...out].sort();
   };
-  for (const pkg of ['inputloop-gitcha', 'inputloop-gitcha-runner', 'inputloop-gitcha-medic']) {
+  for (const pkg of ['inputloop-gitcha', 'inputloop-gitcha-runner', 'inputloop-gitcha-medic', 'inputloop-gitcha-omni-gateway']) {
     const templates = [...read(`debian/${pkg}.templates`).matchAll(/^Template: (\S+)$/gm)].map((m) => m[1]).sort();
     assert.deepEqual(questions(`debian/${pkg}.config`), templates, `${pkg}: config asks each template`);
     assert.deepEqual(questions(`debian/${pkg}.postinst`), templates, `${pkg}: postinst reads each answer`);
@@ -120,6 +120,25 @@ test('DEB-3: the debconf answers become settings the server reads, and the build
   for (const name of ['GITCHA_PUBLIC_URL', 'GITCHA_CASSANDRA_CONTACT_POINTS']) assert.match(env, new RegExp(`^${name}=`, 'm'));
   assert.match(read('deploy/gitcha.service'), /^EnvironmentFile=-\/etc\/inputloop\/gitcha\/debconf\.env$/m, 'debconf.env is optional, and read after gitcha.env');
   assert.match(read('debian/rules'), /pkg\.gitcha\.nocassandra/);
+});
+
+test('OMNI-1: the gateway package is built both ways, ships its unit, conffile, example members and nginx example, and the medic watches it', () => {
+  assert.match(read('debian/control'), /^Package: inputloop-gitcha-omni-gateway$/m);
+  assert.match(read('debian/rules'), /lay-out\.sh omni debian\/inputloop-gitcha-omni-gateway/);
+  assert.match(read('debian/rules'), /dh_installsystemd -pinputloop-gitcha-omni-gateway --name=omni-gateway --no-enable --no-start --no-stop-on-upgrade/);
+  assert.match(read('deploy/build-debs.sh'), /lay-out\.sh" omni/);
+  const layout = read('deploy/lay-out.sh');
+  for (const f of ['omni-gateway.service', 'omni-gateway.env', 'omni-members.example.json', 'nginx-omni.conf.example', 'usr/bin/omni-gateway', 'usr/bin/omni-hub', 'extension/bin']) assert.ok(layout.includes(f), `lay-out.sh installs ${f}`);
+  const unit = read('deploy/omni-gateway.service');
+  assert.match(unit, /^ExecStart=\/usr\/bin\/omni-gateway$/m);
+  for (const d of ['ProtectSystem=strict', 'NoNewPrivileges=yes', 'MemoryMax', 'TasksMax', 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6']) assert.ok(unit.includes(d), `omni-gateway.service has ${d}`);
+  const example = JSON.parse(read('deploy/omni-members.example.json'));
+  for (const [name, m] of Object.entries(example.members)) { assert.match(name, /^[a-z][a-z0-9_-]*$/); assert.ok(Array.isArray(m.command) && m.command.length, `${name} has a command`); assert.ok(m.user, `${name} names its user`); }
+  assert.ok(example.members.gitcha.command[1].startsWith('/usr/share/inputloop/gitcha-omni/extension/bin/'), 'the example reaches the extension server where this package puts it');
+  assert.match(read('deploy/nginx-omni.conf.example'), /proxy_pass http:\/\/127\.0\.0\.1:8769/);
+  assert.match(read('medic/lib/probes.js'), /inputloop-gitcha-omni-gateway/, 'the medic probes the gateway');
+  assert.match(read('medic/lib/rules.js'), /omni-gateway-stopped/, 'the medic has a rule for it');
+  assert.match(read('DEPLOY.md'), /omni-gateway/);
 });
 
 test('PROXY-1: every reverse proxy example keeps Host, sets the client address and https, and allows big, slow requests', () => {

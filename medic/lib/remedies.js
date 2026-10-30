@@ -38,6 +38,17 @@ export const REMEDIES = {
     },
   },
   wait: { class: 'safe', title: 'wait', how: 'Nothing to do but wait; the medic looks again on its next run.', run: async () => ({ code: 0, out: 'waited', err: '' }) },
+  'start-omni-gateway': {
+    class: 'safe', title: 'start the Omni gateway',
+    how: 'systemctl start omni-gateway; omni-gateway --check says which member fails if it does not come up.',
+    run: async (ctx) => ctx.run('systemctl', ['start', 'omni-gateway.service'], { timeout: 60_000 }),
+  },
+  'restart-omni-gateway': {
+    class: 'safe', title: 'restart the Omni gateway',
+    how: 'systemctl restart omni-gateway (its members are started again on first use).',
+    run: async (ctx) => ctx.run('systemctl', ['restart', 'omni-gateway.service'], { timeout: 60_000 }),
+  },
+  'manual-omni': { class: 'manual', title: 'look at the Omni gateway', how: 'omni-gateway --check starts each member and lists its tools, or says which fails and why; journalctl -u omni-gateway has what the members printed; /etc/inputloop/omni/members.json names them (the example is in /usr/share/doc/inputloop-gitcha-omni-gateway/).' },
 
   'reset-empty-cassandra': {
     class: 'confirm', title: 'move an empty Cassandra data directory aside and start again under the new cluster name',
