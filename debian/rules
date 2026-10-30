@@ -45,10 +45,11 @@ override_dh_installdeb:
 override_dh_gencontrol:
 	dh_gencontrol -- -Vgitcha:Recommends="$(RECOMMENDS)"
 
-# dh_fixperms takes the execute bit off every .js file; these four are programs, run by the /usr/bin wrappers.
+# dh_fixperms takes the execute bit off every .js file; these are programs, run by the /usr/bin wrappers.
 override_dh_fixperms:
 	dh_fixperms
 	chmod 755 debian/inputloop-gitcha/usr/share/inputloop/gitcha/server/src/index.js \
 	  debian/inputloop-gitcha/usr/share/inputloop/gitcha/server/bin/gitcha-git-shell.js \
 	  debian/inputloop-gitcha/usr/share/inputloop/gitcha/server/bin/gitcha-ssh-keys.js \
+	  debian/inputloop-gitcha/usr/share/inputloop/gitcha/server/bin/gitcha-wait-ready.js \
 	  debian/inputloop-gitcha-runner/usr/share/inputloop/gitcha-runner/runner/bin/gitcha-runner.js

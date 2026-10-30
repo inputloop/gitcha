@@ -70,7 +70,7 @@ with [`extension/lib/manifest.js`](extension/lib/manifest.js).
 
 `npm start` runs [`server/src/index.js`](server/src/index.js). Here is what happens, in order:
 
-1. [`index.js:16`](server/src/index.js#L16) reads every setting with
+1. [`index.js:31`](server/src/index.js#L31) reads every setting with
    [`config.js:164`](server/src/config.js#L164). Settings come only from environment
    variables. If one is wrong (for example an unknown name in
    `GITCHA_LOCKED_CHECKS`, read by [`config.js:27`](server/src/config.js#L27)),
@@ -214,7 +214,7 @@ without saving it ([`helpers.js:81`](server/test/helpers.js#L81)).
 When the server starts, [`store.js:72`](server/src/store.js#L72) creates `db.lock`.
 A second server on the same folder is refused, because two servers writing one
 file would erase each other's changes. Cassandra has the same rule with a
-lease row ([`store-cassandra-worker.js:82`](server/src/store-cassandra-worker.js#L82)): every save checks
+lease row ([`store-cassandra-worker.js:85`](server/src/store-cassandra-worker.js#L85)): every save checks
 that the lease is still this server's, so a server that lost it cannot write.
 A check value of `secret.key` is kept there too, so a server started with the
 wrong key stops instead of locking everyone out.

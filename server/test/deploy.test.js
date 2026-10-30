@@ -121,3 +121,15 @@ test('VER-1: package versions put the commit time before the hash, so apt sees a
   // The last X.Y.Z+git<sha7> build (0.1.0) must sort below every new one, which a higher X.Y.Z guarantees.
   assert.notEqual(JSON.parse(read('package.json')).version, '0.1.0');
 });
+
+test('DEP-13: a start that fails is reported, retried patiently, and explained', () => {
+  const unit = read('deploy/gitcha.service');
+  assert.match(unit, /^ExecStartPost=\/usr\/bin\/gitcha-wait-ready$/m, 'systemctl start waits until Gitcha answers');
+  assert.match(unit, /^TimeoutStartSec=180$/m, 'long enough for the readiness wait (170 s)');
+  assert.match(unit, /^StartLimitIntervalSec=0$/m, 'systemd never gives up on it');
+  assert.match(unit, /^RestartSec=5s$/m);
+  const layout = read('deploy/lay-out.sh');
+  for (const cmd of ['gitcha-wait-ready', 'gitcha-check']) assert.ok(layout.includes(`usr/bin/${cmd}`), `${cmd} is installed`);
+  assert.match(read('server/bin/gitcha-wait-ready.js'), /170_000/, 'the wait ends before TimeoutStartSec does');
+  assert.match(read('DEPLOY.md'), /journalctl -u gitcha/);
+});

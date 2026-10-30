@@ -167,6 +167,43 @@ be named as such in alphaOS's security model.
 - **Settings:** `gitcha.env` lists every setting the server reads, with its default on a `#` line.
 - **Docker:** the image has `git` and `gpg`, no sshd, so there is no git over SSH there.
 
+### When it does not start
+
+**The proxy says "connection refused" (nginx: `connect() failed (111: Connection refused) while
+connecting to upstream`, a 502 page in the browser):** nothing is listening on `127.0.0.1:4873`, so
+the Gitcha server is not running. The proxy is fine; find out why Gitcha stopped:
+
+```sh
+sudo gitcha-check                       # tries what a start needs (settings, database, port) and says what fails
+systemctl status gitcha                 # running, starting, or failed, and the last lines it printed
+journalctl -u gitcha -e                 # everything it printed; -f follows it live
+journalctl -u gitcha -b --no-pager | grep 'cannot start'   # just the reasons, since boot
+curl -s http://127.0.0.1:4873/api/v1/health                 # does it answer on this machine?
+ss -ltnp | grep 4873                    # what is listening on the port
+```
+
+Gitcha logs to the systemd journal (standard output), not to a file under `/var/log`. Every failed
+start prints one line beginning `gitcha: cannot start:` with the reason, and the line before it says
+which database it was opening. `systemctl start gitcha` waits until Gitcha answers on its port, so a
+start that fails says `Job for gitcha.service failed` at once; systemd then tries again every 5 s for
+as long as it takes, so a database that comes up later is picked up by itself.
+
+The usual reasons:
+
+| `cannot start:` says | What to do |
+|---|---|
+| `cannot reach Cassandra at 127.0.0.1 ... ECONNREFUSED` | The packages default to `GITCHA_STORE=cassandra` and no Cassandra answers. Set one up here with `sudo gitcha-setup-cassandra` (Gitcha starts by itself once it is up), point `GITCHA_CASSANDRA_CONTACT_POINTS` at your cluster, or set `GITCHA_STORE=file` in `/etc/inputloop/gitcha/gitcha.env` (`dpkg-reconfigure inputloop-gitcha` for the full packaging) and `systemctl restart gitcha` |
+| `another Gitcha server (HOST, pid N) owns instance ...` | another server uses the same Cassandra instance: stop it or give this one its own `GITCHA_CASSANDRA_INSTANCE` |
+| `... was written with a different secret key` | restore the `secret.key` that belongs to this database |
+| `another process (pid N) is already using /var/lib/gitcha` | a second server (a hand-started `gitcha-server`) is running on the data directory |
+| `could not listen on 127.0.0.1:4873 (EADDRINUSE)` | something else holds the port: `ss -ltnp | grep 4873` |
+| a setting's name | the setting in `gitcha.env` is wrong; the message says what it expects |
+
+If `gitcha-check` says Gitcha **is** running and answering, but the proxy still gets "connection
+refused", the proxy is looking somewhere else: its upstream must be `http://127.0.0.1:4873` on the
+same machine (`proxy_pass` in nginx), or the address in `GITCHA_HOST`/`GITCHA_PORT` if you changed them.
+Run `gitcha-check` as root (it reads `gitcha.env`, then runs as the `gitcha` user, as the service does).
+
 ### The database: Cassandra or a file
 
 `GITCHA_STORE` chooses. Either way the server holds the whole database in memory, serves every
@@ -182,6 +219,24 @@ logs and `secret.key` stay in `/var/lib/gitcha`.
   `NetworkTopologyStrategy:dc1=3` for a real cluster, or `GITCHA_CASSANDRA_CREATE_KEYSPACE=no` and
   make it yourself). Reads and writes use `LOCAL_QUORUM` (`GITCHA_CASSANDRA_CONSISTENCY`).
 - **`file`**: `/var/lib/gitcha/db.json`, written whole and synced on every change.
+
+**Setting Cassandra up on the Gitcha machine.** The full packaging asks: when you choose
+`cassandra` and none is installed, debconf offers to install one here
+(`inputloop-gitcha/cassandra_setup`; preseed it `true` for unattended installs). Accept, and once the
+apt run that installs Gitcha has ended, a one-off job adds Apache's apt repository
+(`debian.cassandra.apache.org`, series `50x`) with Apache's signing key, installs and starts
+`cassandra` (apt brings the Java it needs), waits until it answers on 9042, and restarts Gitcha:
+
+```sh
+journalctl -u gitcha-setup-cassandra -f      # follow it
+```
+
+It has to wait for the apt run because a package cannot install another while dpkg holds its lock.
+The same command works by hand, for packages built with `build-debs.sh` (which ask nothing) or to try
+again: `sudo gitcha-setup-cassandra` (`--series 41x` for Cassandra 4.1). It needs network access to
+`apache.org` and about 4 GB of memory beside Gitcha; it changes none of Gitcha's settings, because
+the defaults (`127.0.0.1`, `datacenter1`) are what one local node needs. For a cluster of several
+nodes, install Cassandra yourself and answer debconf's questions about where its nodes are.
 
 **Moving to Cassandra.** Point a server that has a `db.json` at an empty instance and start it: it
 imports the file once and renames it `db.json.imported-to-cassandra`. Keep the same `secret.key`.

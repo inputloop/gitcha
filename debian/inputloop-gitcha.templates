@@ -26,6 +26,21 @@ Description: Where should Gitcha keep its database?
  Blobs, git repositories, sites and secret.key stay in /var/lib/gitcha either
  way.  When an empty Cassandra instance finds a db.json there, it imports it.
 
+Template: inputloop-gitcha/cassandra_setup
+Type: boolean
+Default: false
+Description: Install Apache Cassandra on this machine?
+ No Cassandra is installed here.  If this is accepted, then once this
+ installation has finished: Apache's apt repository for Cassandra (debian.cassandra.apache.org,
+ Cassandra 5.0) is added with Apache's signing key, Cassandra and the Java it
+ needs are installed and started, and Gitcha uses it at 127.0.0.1.
+ .
+ It needs network access to apache.org and about 4 GB of memory beside Gitcha.
+ Follow it with: journalctl -u gitcha-setup-cassandra -f
+ .
+ Otherwise the next questions ask where your Cassandra nodes are.  One can
+ also be set up here later with: sudo gitcha-setup-cassandra
+
 Template: inputloop-gitcha/cassandra_contact_points
 Type: string
 Default: 127.0.0.1

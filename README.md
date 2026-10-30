@@ -55,7 +55,7 @@ never sees your password**. When Gitcha asks for a 2FA check, Claude has to
 ask *you* for the code.
 
 > **Status, honestly.** Everything below is built and covered by the test
-> suite (363 tests), and the screenshots come from a real running server. Some
+> suite (365 tests), and the screenshots come from a real running server. Some
 > parts have only been tested against stand-ins, not the real thing:
 > git over a real `sshd`, a job inside a real bContain VM, the Stripe and
 > PayPal sandboxes, a live NextTime instance, and C4OK's door inside a full
@@ -415,6 +415,13 @@ is the encryption, so use it only where no one untrusted sees the traffic:
   URL (`gitcha login --server http://gitcha.lan:4873`);
 - **for one person, from anywhere:** keep Gitcha on loopback and tunnel to it,
   `ssh -N -L 4873:127.0.0.1:4873 you@gitcha-host`, then `http://localhost:4873`.
+
+**If the proxy says "connection refused"**, Gitcha itself is not running:
+`sudo gitcha-check` says why, and `journalctl -u gitcha -e` shows what it
+printed. The packages default to Cassandra: `sudo gitcha-setup-cassandra`
+installs one on the same machine (the full packaging offers this during
+installation), or set `GITCHA_STORE=file`. [DEPLOY.md](DEPLOY.md#when-it-does-not-start) lists the
+usual reasons.
 
 Never put plain http on the open internet: a session cookie read off the wire
 is as good as the account. [DEPLOY.md](DEPLOY.md#running-without-a-reverse-proxy)
@@ -1348,7 +1355,7 @@ against Cassandra 5.0), point them at a node:
 GITCHA_TEST_STORE=cassandra GITCHA_TEST_CASSANDRA=127.0.0.1:9042 npm --workspace server test
 ```
 
-The tests (363 of them: 280 for the server, 66 for the extension and CLI,
+The tests (365 of them: 282 for the server, 66 for the extension and CLI,
 17 for the runner) cover RFC 4226/6238 TOTP vectors, encryption at rest,
 replay protection, enrollment and the follow-up checks, CSRF and sign-in
 hardening, proxy addresses, the store's locking and crash safety, teams,

@@ -22,6 +22,11 @@ repository; it needs Java 17), or point GITCHA_CASSANDRA_CONTACT_POINTS at an ex
 GITCHA_STORE=file keeps it in /var/lib/gitcha/db.json.  An empty Cassandra instance that finds a
 db.json imports it once and renames it db.json.imported-to-cassandra.
 
+If it does not start (a proxy in front reports "connection refused"):  sudo gitcha-check  says why, and
+journalctl -u gitcha -e  shows everything it printed.  With GITCHA_STORE=cassandra a Cassandra node must be up
+at GITCHA_CASSANDRA_CONTACT_POINTS: sudo gitcha-setup-cassandra installs one here (debconf offers it), or set
+GITCHA_STORE=file.  DEPLOY.md, "When it does not start".
+
 Everything else (git repositories, sites, blobs, logs, and the keys it encrypts with) is /var/lib/gitcha.
 Back up the database (db.json, or the keyspace with nodetool snapshot) and the repositories; keep
 secret.key apart from those backups.  DEPLOY.md, beside this file, is the full guide.

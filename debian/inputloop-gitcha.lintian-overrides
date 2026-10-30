@@ -1,2 +1,3 @@
 # The commands are small wrappers around the server; gitcha-server --help is not a thing, DEPLOY.md is the manual.
 inputloop-gitcha: no-manual-page [usr/bin/gitcha-*]
+inputloop-gitcha: no-manual-page [usr/sbin/gitcha-setup-cassandra]
