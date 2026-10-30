@@ -107,6 +107,7 @@ ask *you* for the code.
 - [HTTP API](#http-api)
 - [Security model](#security-model)
 - [How this code works](HOW-IT-WORKS.md) (a guided tour of the source)
+- [How Gitcha works, as a TopoForge drawing](topoforge/README.md) (five pages, with the code behind each shape)
 - [Project layout](#project-layout)
 - [Development](#development)
 - [License](#license)

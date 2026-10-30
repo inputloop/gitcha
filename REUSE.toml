@@ -31,6 +31,11 @@ path = [
   "docs/screenshots/26-ring.png",
   "docs/screenshots/27-support.png",
   "extension/icon.png",
+  "topoforge/page-1.png",
+  "topoforge/page-2.png",
+  "topoforge/page-3.png",
+  "topoforge/page-4.png",
+  "topoforge/page-5.png",
 ]
 precedence = "closest"
 SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors"]
@@ -55,6 +60,7 @@ path = [
   "package.json",
   "runner/package.json",
   "server/package.json",
+  "topoforge/how-gitcha-works.json",
 ]
 precedence = "closest"
 SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors", "2026 Corwin Brust <corwin@bru.st>"]
@@ -70,7 +76,6 @@ SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> 
 SPDX-License-Identifier = "CC-BY-SA-4.0"
 
 # colophon: end
-
 # debian/: files whose formats leave no room for a header (written by hand, outside colophon's block above).
 [[annotations]]
 path = [
@@ -103,6 +108,15 @@ path = [
   "debian/inputloop-gitcha-medic.README.Debian",
   "debian/inputloop-gitcha-omni-gateway.README.Debian",
 ]
+precedence = "closest"
+SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors", "2026 Corwin Brust <corwin@bru.st>"]
+SPDX-License-Identifier = "CC-BY-SA-4.0"
+
+# topoforge/: the story TopoForge wrote from the drawing. Its third line carries the drawing's and the facts'
+# sha256, and TopoForge's own kit (tests/check.sh) checks the file byte for byte, so it takes no header
+# (written by hand, outside colophon's block above).
+[[annotations]]
+path = "topoforge/how-gitcha-works-story.md"
 precedence = "closest"
 SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors", "2026 Corwin Brust <corwin@bru.st>"]
 SPDX-License-Identifier = "CC-BY-SA-4.0"

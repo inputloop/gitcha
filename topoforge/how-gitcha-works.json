@@ -1,0 +1,3370 @@
+{
+ "format": "topoforge",
+ "version": 1,
+ "name": "How Gitcha works",
+ "settings": {
+  "grid": 20,
+  "snap": true,
+  "showGrid": true,
+  "guides": true,
+  "netLabels": true,
+  "ifLabels": true,
+  "minimap": true,
+  "defaultRoute": "orthogonal"
+ },
+ "pages": [
+  {
+   "id": "pg-system",
+   "name": "1 The whole system",
+   "layers": [
+    {
+     "id": "L1",
+     "name": "Drawing",
+     "visible": true,
+     "locked": false
+    }
+   ],
+   "activeLayer": "L1",
+   "nodes": [
+    {
+     "id": "text-title",
+     "type": "text",
+     "x": 0,
+     "y": -130,
+     "w": 1500,
+     "h": 90,
+     "text": "How Gitcha works: the whole system\nEvery program, the machine it runs on, and who talks to whom. Arrows point from the side that starts the conversation.\nEach shape's custom fields say what it does (what), where its code is (code) and how far it has been tested (status).",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "text-title"
+     },
+     "style": {}
+    },
+    {
+     "id": "zone-people",
+     "type": "zone",
+     "x": 0,
+     "y": 0,
+     "w": 300,
+     "h": 560,
+     "text": "People, agents and their tools",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "zone-people"
+     },
+     "style": {}
+    },
+    {
+     "id": "users-browser",
+     "type": "users",
+     "x": 40,
+     "y": 50,
+     "w": 80,
+     "h": 92,
+     "text": "People in a browser",
+     "layer": "L1",
+     "parent": "zone-people",
+     "props": {},
+     "data": {
+      "tf_ref": "users-browser",
+      "what": "Sign up (password + authenticator app), browse, post to the crawl, manage teams, sites, keys and billing.",
+      "code": "server/src/web.js",
+      "status": "built and tested"
+     },
+     "style": {}
+    },
+    {
+     "id": "laptop-cli",
+     "type": "laptop",
+     "x": 180,
+     "y": 50,
+     "w": 80,
+     "h": 92,
+     "text": "gitcha CLI",
+     "layer": "L1",
+     "parent": "zone-people",
+     "props": {},
+     "data": {
+      "tf_ref": "laptop-cli",
+      "what": "Signs in once (password + code), keeps a device token (mode 600), publishes and installs packages.",
+      "code": "extension/bin/gitcha.js",
+      "status": "built and tested"
+     },
+     "style": {}
+    },
+    {
+     "id": "user-claude",
+     "type": "user",
+     "x": 40,
+     "y": 180,
+     "w": 80,
+     "h": 92,
+     "text": "Claude + Gitcha extension",
+     "layer": "L1",
+     "parent": "zone-people",
+     "props": {},
+     "data": {
+      "tf_ref": "user-claude",
+      "what": "The MCP server Claude calls. Reuses the CLI's device token, so Claude never sees a password; asks the person for 2FA codes.",
+      "code": "extension/bin/gitcha-mcp.js",
+      "status": "built and tested"
+     },
+     "style": {}
+    },
+    {
+     "id": "user-agent",
+     "type": "user",
+     "x": 180,
+     "y": 180,
+     "w": 80,
+     "h": 92,
+     "text": "Agents (for HUMAN, MODEL)",
+     "layer": "L1",
+     "parent": "zone-people",
+     "props": {},
+     "data": {
+      "tf_ref": "user-agent",
+      "what": "Registered agents push with git (their handle + the owner's console key, or their own SSH key) and do Second Reader reviews.",
+      "code": "server/src/social/agents.js",
+      "status": "built and tested"
+     },
+     "style": {}
+    },
+    {
+     "id": "laptop-git",
+     "type": "laptop",
+     "x": 40,
+     "y": 310,
+     "w": 80,
+     "h": 92,
+     "text": "git (HTTPS or SSH)",
+     "layer": "L1",
+     "parent": "zone-people",
+     "props": {},
+     "data": {
+      "tf_ref": "laptop-git",
+      "what": "Plain git: clone and push projects. HTTPS uses a console key as the password; SSH uses a registered key.",
+      "code": "server/src/git/http.js",
+      "status": "HTTPS: built and tested. SSH: built; tested only against stand-ins, not yet run for real"
+     },
+     "style": {}
+    },
+    {
+     "id": "desktop-c4ok",
+     "type": "desktop",
+     "x": 180,
+     "y": 310,
+     "w": 80,
+     "h": 92,
+     "text": "C4OK kiosk (staff)",
+     "layer": "L1",
+     "parent": "zone-people",
+     "props": {},
+     "data": {
+      "tf_ref": "desktop-c4ok",
+      "what": "The operations door: tickets and changes, with a console key read from a mode-600 file. Asks for a code whenever Gitcha does.",
+      "code": "c4ok-PRIVATE w/lib/gitcha.js",
+      "status": "built; not yet run inside a full C4OK runtime"
+     },
+     "style": {}
+    },
+    {
+     "id": "cloud-sandbox",
+     "type": "cloud",
+     "x": 100,
+     "y": 440,
+     "w": 100,
+     "h": 80,
+     "text": "Claude in a cloud sandbox (omni-hub)",
+     "layer": "L1",
+     "parent": "zone-people",
+     "props": {},
+     "data": {
+      "tf_ref": "cloud-sandbox",
+      "what": "Omni's hub: one stdio MCP server in a cloud session that reaches the tools a person runs on their own hosts.",
+      "code": "omni/lib/hub.js",
+      "status": "built and tested; not yet run against a real cloud session"
+     },
+     "style": {}
+    },
+    {
+     "id": "site-runners",
+     "type": "site",
+     "x": 0,
+     "y": 620,
+     "w": 300,
+     "h": 180,
+     "text": "Runner VM(s), apart from the server",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "site-runners"
+     },
+     "style": {}
+    },
+    {
+     "id": "server-runner",
+     "type": "server",
+     "x": 40,
+     "y": 680,
+     "w": 80,
+     "h": 92,
+     "text": "gitcha-runner",
+     "layer": "L1",
+     "parent": "site-runners",
+     "props": {},
+     "data": {
+      "tf_ref": "server-runner",
+      "what": "Registers once (a token that works once), long-polls for jobs, runs each one, streams the log, reports the result.",
+      "code": "runner/lib/runner.js#loop",
+      "status": "built and tested"
+     },
+     "style": {}
+    },
+    {
+     "id": "vm-bcontain",
+     "type": "vm",
+     "x": 180,
+     "y": 680,
+     "w": 80,
+     "h": 92,
+     "text": "bContain VM, one per job",
+     "layer": "L1",
+     "parent": "site-runners",
+     "props": {
+      "notes": "CPU and memory caps; nothing survives the job. Known gaps: outbound network, root inside, no disk quota."
+     },
+     "data": {
+      "tf_ref": "vm-bcontain",
+      "what": "Runs one CI build or function call. Files arrive over QEMU's gateway (10.0.2.2) behind a random token for that job.",
+      "code": "runner/lib/backends/bcontain.js",
+      "status": "built; tested only against stand-ins, not yet run for real"
+     },
+     "style": {}
+    },
+    {
+     "id": "internet-net",
+     "type": "internet",
+     "x": 400,
+     "y": 390,
+     "w": 100,
+     "h": 80,
+     "text": "Internet",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "internet-net",
+      "what": "Everything outside the server VM. Only the proxy (and sshd, for git) face it."
+     },
+     "style": {}
+    },
+    {
+     "id": "site-server",
+     "type": "site",
+     "x": 580,
+     "y": 0,
+     "w": 620,
+     "h": 800,
+     "text": "Gitcha server VM (alphaOS)",
+     "layer": "L1",
+     "parent": null,
+     "props": {
+      "notes": "Only the reverse proxy (and sshd, for git) listen on the network; everything else listens on loopback."
+     },
+     "data": {
+      "tf_ref": "site-server"
+     },
+     "style": {}
+    },
+    {
+     "id": "lb-proxy",
+     "type": "lb",
+     "x": 620,
+     "y": 390,
+     "w": 80,
+     "h": 92,
+     "text": "Reverse proxy (TLS)",
+     "layer": "L1",
+     "parent": "site-server",
+     "props": {
+      "hostname": "gitcha.example.org",
+      "notes": "Caddy, nginx, Apache or HAProxy. Owns ports 443 and 80 and the certificates; asks Gitcha before issuing one."
+     },
+     "data": {
+      "tf_ref": "lb-proxy",
+      "what": "Does https, sets X-Forwarded-For and X-Forwarded-Proto, and asks /api/v1/hosting/tls-allowed before any certificate.",
+      "code": "deploy/Caddyfile.example",
+      "status": "built and tested"
+     },
+     "style": {}
+    },
+    {
+     "id": "server-sshd",
+     "type": "server",
+     "x": 840,
+     "y": 110,
+     "w": 80,
+     "h": 92,
+     "text": "sshd + gitcha-ssh-keys / gitcha-git-shell",
+     "layer": "L1",
+     "parent": "site-server",
+     "props": {
+      "notes": "A known key may only run gitcha-git-shell, which runs git-upload-pack or git-receive-pack and nothing else."
+     },
+     "data": {
+      "tf_ref": "server-sshd",
+      "what": "Git over SSH. The helpers ask gitcha-server on loopback, with the secret in internal.key.",
+      "code": "server/bin/gitcha-git-shell.js",
+      "status": "built; tested only against stand-ins, not yet run for real"
+     },
+     "style": {}
+    },
+    {
+     "id": "server-gitcha",
+     "type": "server",
+     "x": 840,
+     "y": 390,
+     "w": 80,
+     "h": 92,
+     "text": "gitcha-server",
+     "layer": "L1",
+     "parent": "site-server",
+     "props": {
+      "hostname": "127.0.0.1:4873",
+      "notes": "Plain HTTP on loopback. Never runs user code."
+     },
+     "data": {
+      "tf_ref": "server-gitcha",
+      "what": "Accounts and 2FA, packages, teams, git, sites, CI and function queue, billing, the social side, GraphQL, tickets and changes.",
+      "code": "server/src/app.js#createApp",
+      "status": "built and tested"
+     },
+     "style": {}
+    },
+    {
+     "id": "storage-data",
+     "type": "storage",
+     "x": 1060,
+     "y": 250,
+     "w": 80,
+     "h": 92,
+     "text": "Data folder /var/lib/gitcha",
+     "layer": "L1",
+     "parent": "site-server",
+     "props": {
+      "notes": "db.json (file store), secret.key, blobs/, git/, sites/, logs/, job-sources/, internal.key, db.lock"
+     },
+     "data": {
+      "tf_ref": "storage-data",
+      "what": "Everything the server keeps on disk. Back up secret.key apart from the rest.",
+      "code": "server/src/store.js#Store",
+      "status": "built and tested"
+     },
+     "style": {}
+    },
+    {
+     "id": "server-omni",
+     "type": "server",
+     "x": 620,
+     "y": 640,
+     "w": 80,
+     "h": 92,
+     "text": "omni-gateway",
+     "layer": "L1",
+     "parent": "site-server",
+     "props": {
+      "hostname": "127.0.0.1:8769",
+      "notes": "Behind the TLS proxy; one URL and one bearer token per member."
+     },
+     "data": {
+      "tf_ref": "server-omni",
+      "what": "Puts stdio MCP servers on this host (gitcha-mcp, mentcached, persona, tavern) behind HTTP for a cloud session.",
+      "code": "omni/lib/gateway.js",
+      "status": "built and tested; not yet run against a real vibrobeast server"
+     },
+     "style": {}
+    },
+    {
+     "id": "nms-medic",
+     "type": "nms",
+     "x": 1060,
+     "y": 640,
+     "w": 80,
+     "h": 92,
+     "text": "gitcha-medic (timer)",
+     "layer": "L1",
+     "parent": "site-server",
+     "props": {
+      "notes": "Only reads to diagnose; runs a remedy only if its class is safe, or with --yes for a confirm one."
+     },
+     "data": {
+      "tf_ref": "nms-medic",
+      "what": "Looks at Gitcha, Cassandra and the proxy; says what is wrong and why; mends what is safe; tells syslog and the configured rooms.",
+      "code": "medic/bin/gitcha-medic.js",
+      "status": "built; tested against stand-ins, not yet run on a real host"
+     },
+     "style": {}
+    },
+    {
+     "id": "zone-cassandra",
+     "type": "zone",
+     "x": 1280,
+     "y": 330,
+     "w": 220,
+     "h": 220,
+     "text": "Cassandra cluster (optional)",
+     "layer": "L1",
+     "parent": null,
+     "props": {
+      "notes": "GITCHA_STORE=cassandra. The default build of the Debian package; --without-cassandra ships GITCHA_STORE=file."
+     },
+     "data": {
+      "tf_ref": "zone-cassandra"
+     },
+     "style": {}
+    },
+    {
+     "id": "database-cassandra",
+     "type": "database",
+     "x": 1350,
+     "y": 390,
+     "w": 80,
+     "h": 92,
+     "text": "Apache Cassandra",
+     "layer": "L1",
+     "parent": "zone-cassandra",
+     "props": {},
+     "data": {
+      "tf_ref": "database-cassandra",
+      "what": "The database, one row per entry; each save is one batch applied whole or not at all. A lease row stops two servers writing.",
+      "code": "server/src/store-cassandra.js",
+      "status": "built, tested, and run for real on Cassandra 5.0.9"
+     },
+     "style": {}
+    },
+    {
+     "id": "zone-outside",
+     "type": "zone",
+     "x": 580,
+     "y": 880,
+     "w": 920,
+     "h": 170,
+     "text": "Services Gitcha calls out to (https)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "zone-outside"
+     },
+     "style": {}
+    },
+    {
+     "id": "cloud-stripe",
+     "type": "cloud",
+     "x": 610,
+     "y": 930,
+     "w": 100,
+     "h": 80,
+     "text": "Stripe",
+     "layer": "L1",
+     "parent": "zone-outside",
+     "props": {},
+     "data": {
+      "tf_ref": "cloud-stripe",
+      "what": "Checkout, portal, webhooks checked by HMAC on the exact bytes.",
+      "code": "server/src/billing/stripe.js",
+      "status": "built; tested only against stand-ins, not yet run for real"
+     },
+     "style": {}
+    },
+    {
+     "id": "cloud-paypal",
+     "type": "cloud",
+     "x": 760,
+     "y": 930,
+     "w": 100,
+     "h": 80,
+     "text": "PayPal",
+     "layer": "L1",
+     "parent": "zone-outside",
+     "props": {},
+     "data": {
+      "tf_ref": "cloud-paypal",
+      "what": "Subscriptions; webhooks checked by asking PayPal.",
+      "code": "server/src/billing/paypal.js",
+      "status": "built; tested only against stand-ins, not yet run for real"
+     },
+     "style": {}
+    },
+    {
+     "id": "cloud-nexttime",
+     "type": "cloud",
+     "x": 910,
+     "y": 930,
+     "w": 100,
+     "h": 80,
+     "text": "NextTime-Dev",
+     "layer": "L1",
+     "parent": "zone-outside",
+     "props": {},
+     "data": {
+      "tf_ref": "cloud-nexttime",
+      "what": "Public projects' tasks become timebank requests: created, cancelled, completed.",
+      "code": "server/src/social/nexttime.js",
+      "status": "built; tested only against stand-ins, not yet run for real"
+     },
+     "style": {}
+    },
+    {
+     "id": "cloud-ring",
+     "type": "cloud",
+     "x": 1060,
+     "y": 930,
+     "w": 100,
+     "h": 80,
+     "text": "Other Gitchas (the ring)",
+     "layer": "L1",
+     "parent": "zone-outside",
+     "props": {},
+     "data": {
+      "tf_ref": "cloud-ring",
+      "what": "Each publishes /.well-known/gitcha-ring.json; only public addresses are fetched.",
+      "code": "server/src/hosting/ring.js",
+      "status": "built and tested"
+     },
+     "style": {}
+    },
+    {
+     "id": "cloud-dns",
+     "type": "cloud",
+     "x": 1210,
+     "y": 930,
+     "w": 100,
+     "h": 80,
+     "text": "DNS",
+     "layer": "L1",
+     "parent": "zone-outside",
+     "props": {},
+     "data": {
+      "tf_ref": "cloud-dns",
+      "what": "TXT records at _gitcha-challenge.NAME prove a custom domain.",
+      "code": "server/src/hosting/domains.js",
+      "status": "built and tested"
+     },
+     "style": {}
+    },
+    {
+     "id": "cloud-claudeapi",
+     "type": "cloud",
+     "x": 1360,
+     "y": 930,
+     "w": 100,
+     "h": 80,
+     "text": "Claude API (medic's agent)",
+     "layer": "L1",
+     "parent": "zone-outside",
+     "props": {},
+     "data": {
+      "tf_ref": "cloud-claudeapi",
+      "what": "Optional: the medic shows a model the redacted findings; it may only ask for safe remedies.",
+      "code": "medic/lib/agent.js",
+      "status": "built; tested only against stand-ins, not yet run for real"
+     },
+     "style": {}
+    }
+   ],
+   "links": [
+    {
+     "id": "link-people-net",
+     "a": {
+      "id": "zone-people",
+      "port": null
+     },
+     "b": {
+      "id": "internet-net",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "https (git: https or ssh)",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "wan"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-people-net"
+     }
+    },
+    {
+     "id": "link-runner-net",
+     "a": {
+      "id": "server-runner",
+      "port": null
+     },
+     "b": {
+      "id": "internet-net",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "https: long-poll for jobs",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "wan",
+      "notes": "Runner token for the runner; a job token for each job."
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-runner-net"
+     }
+    },
+    {
+     "id": "link-net-proxy",
+     "a": {
+      "id": "internet-net",
+      "port": null
+     },
+     "b": {
+      "id": "lb-proxy",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "https 443",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "wan"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-net-proxy"
+     }
+    },
+    {
+     "id": "link-net-sshd",
+     "a": {
+      "id": "internet-net",
+      "port": null
+     },
+     "b": {
+      "id": "server-sshd",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "ssh 22 (git only)",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "wan"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-net-sshd"
+     }
+    },
+    {
+     "id": "link-proxy-gitcha",
+     "a": {
+      "id": "lb-proxy",
+      "port": null
+     },
+     "b": {
+      "id": "server-gitcha",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "http to 127.0.0.1:4873",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical",
+      "notes": "The proxy passes Host, X-Forwarded-For and X-Forwarded-Proto."
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-proxy-gitcha"
+     }
+    },
+    {
+     "id": "link-proxy-omni",
+     "a": {
+      "id": "lb-proxy",
+      "port": null
+     },
+     "b": {
+      "id": "server-omni",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "/mcp/<member>",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-proxy-omni"
+     }
+    },
+    {
+     "id": "link-sshd-gitcha",
+     "a": {
+      "id": "server-sshd",
+      "port": null
+     },
+     "b": {
+      "id": "server-gitcha",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "/internal/git/* (loopback + internal.key)",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-sshd-gitcha"
+     }
+    },
+    {
+     "id": "link-gitcha-data",
+     "a": {
+      "id": "server-gitcha",
+      "port": null
+     },
+     "b": {
+      "id": "storage-data",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "file store, blobs, git, sites",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-gitcha-data"
+     }
+    },
+    {
+     "id": "link-gitcha-cassandra",
+     "a": {
+      "id": "server-gitcha",
+      "port": null
+     },
+     "b": {
+      "id": "database-cassandra",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "GITCHA_STORE=cassandra",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-gitcha-cassandra"
+     }
+    },
+    {
+     "id": "link-runner-bcontain",
+     "a": {
+      "id": "server-runner",
+      "port": null
+     },
+     "b": {
+      "id": "vm-bcontain",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "one VM per job",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-runner-bcontain"
+     }
+    },
+    {
+     "id": "link-omni-gitcha",
+     "a": {
+      "id": "server-omni",
+      "port": null
+     },
+     "b": {
+      "id": "server-gitcha",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "gitcha-mcp member",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-omni-gitcha"
+     }
+    },
+    {
+     "id": "link-medic-gitcha",
+     "a": {
+      "id": "nms-medic",
+      "port": null
+     },
+     "b": {
+      "id": "server-gitcha",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "probes",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-medic-gitcha"
+     }
+    },
+    {
+     "id": "link-medic-cassandra",
+     "a": {
+      "id": "nms-medic",
+      "port": null
+     },
+     "b": {
+      "id": "database-cassandra",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "probes",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-medic-cassandra"
+     }
+    },
+    {
+     "id": "link-gitcha-outside",
+     "a": {
+      "id": "server-gitcha",
+      "port": null
+     },
+     "b": {
+      "id": "zone-outside",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "payments, NextTime, ring, DNS",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "wan"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-gitcha-outside"
+     }
+    },
+    {
+     "id": "link-medic-claudeapi",
+     "a": {
+      "id": "nms-medic",
+      "port": null
+     },
+     "b": {
+      "id": "cloud-claudeapi",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "optional --ask",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "wan"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-medic-claudeapi"
+     }
+    },
+    {
+     "id": "link-outside-proxy",
+     "a": {
+      "id": "zone-outside",
+      "port": null
+     },
+     "b": {
+      "id": "lb-proxy",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "signed webhooks (Stripe, PayPal)",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "wan"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-outside-proxy"
+     }
+    }
+   ]
+  },
+  {
+   "id": "pg-request",
+   "name": "2 One request",
+   "layers": [
+    {
+     "id": "L1",
+     "name": "Drawing",
+     "visible": true,
+     "locked": false
+    }
+   ],
+   "activeLayer": "L1",
+   "nodes": [
+    {
+     "id": "text-title2",
+     "type": "text",
+     "x": 0,
+     "y": -150,
+     "w": 1200,
+     "h": 70,
+     "text": "One request through gitcha-server\nEvery HTTP request takes this path. The code fields name the function that does each step.",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "text-title2"
+     },
+     "style": {}
+    },
+    {
+     "id": "ellipse-arrive",
+     "type": "ellipse",
+     "x": 0,
+     "y": 0,
+     "w": 220,
+     "h": 84,
+     "text": "A request arrives from the proxy",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "ellipse-arrive",
+      "what": "One handler in createApp takes every request.",
+      "code": "server/src/app.js#createApp"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-ip",
+     "type": "rect",
+     "x": 0,
+     "y": 140,
+     "w": 220,
+     "h": 84,
+     "text": "Who is calling?\nclientIp",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-ip",
+      "what": "Behind a trusted proxy, believe only the X-Forwarded-For entry the nearest trusted proxy added.",
+      "code": "server/src/http.js#clientIp"
+     },
+     "style": {}
+    },
+    {
+     "id": "diamond-hosted",
+     "type": "diamond",
+     "x": 0,
+     "y": 280,
+     "w": 220,
+     "h": 110,
+     "text": "Is the Host a hosted site?",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "diamond-hosted",
+      "code": "server/src/hosting/sites.js#siteForHost"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-hosted",
+     "type": "rect",
+     "x": 320,
+     "y": 290,
+     "w": 220,
+     "h": 84,
+     "text": "serveHosted: files from the active deploy, or a function call",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-hosted",
+      "what": "Hosted names never reach the Gitcha pages or APIs, so a user's site cannot act as the person viewing it.",
+      "code": "server/src/hosting/api.js#serveHosted"
+     },
+     "style": {}
+    },
+    {
+     "id": "diamond-xsite",
+     "type": "diamond",
+     "x": 0,
+     "y": 450,
+     "w": 220,
+     "h": 110,
+     "text": "An /api/ call marked cross-site?",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "diamond-xsite",
+      "code": "server/src/app.js#createApp"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-refuse",
+     "type": "rect",
+     "x": 320,
+     "y": 460,
+     "w": 220,
+     "h": 84,
+     "text": "Refused",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-refuse",
+      "what": "A browser said another site sent it (Sec-Fetch-Site: cross-site)."
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-route",
+     "type": "rect",
+     "x": 0,
+     "y": 620,
+     "w": 220,
+     "h": 84,
+     "text": "Router finds the route",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-route",
+      "code": "server/src/http.js#Router"
+     },
+     "style": {}
+    },
+    {
+     "id": "diamond-guard",
+     "type": "diamond",
+     "x": 0,
+     "y": 760,
+     "w": 220,
+     "h": 120,
+     "text": "Guard: signed in, and no 2FA check due?",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "diamond-guard",
+      "what": "verified(ctx); verified(ctx, { sensitive: true }) adds the 10-minute rule.",
+      "code": "server/src/api.js#makeGuards"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-mfa",
+     "type": "rect",
+     "x": 320,
+     "y": 778,
+     "w": 220,
+     "h": 84,
+     "text": "Answer mfa_required, or show \"Confirm it's you\"",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-mfa",
+      "what": "interval (12 h), new_network, sensitive (10 min). An admin can lock any of them on.",
+      "code": "server/src/auth.js#mfaState"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-service",
+     "type": "rect",
+     "x": 0,
+     "y": 940,
+     "w": 220,
+     "h": 90,
+     "text": "The service does the work (auth, packages, sites, jobs, billing, social, ops)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-service",
+      "code": "server/src/app.js#createApp"
+     },
+     "style": {}
+    },
+    {
+     "id": "cylinder-tx",
+     "type": "cylinder",
+     "x": 0,
+     "y": 1090,
+     "w": 220,
+     "h": 100,
+     "text": "store.tx: saved whole, or not at all",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "cylinder-tx",
+      "what": "If the change throws partway or the write fails, memory goes back to the last save.",
+      "code": "server/src/store.js#tx"
+     },
+     "style": {}
+    },
+    {
+     "id": "cylinder-file",
+     "type": "cylinder",
+     "x": -260,
+     "y": 1250,
+     "w": 220,
+     "h": 100,
+     "text": "File: db.json (temp file, fsync, rename)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "cylinder-file",
+      "code": "server/src/store.js#writeFileDurably"
+     },
+     "style": {}
+    },
+    {
+     "id": "cylinder-cass",
+     "type": "cylinder",
+     "x": 260,
+     "y": 1250,
+     "w": 220,
+     "h": 100,
+     "text": "Cassandra: changed rows, one batch, lease checked",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "cylinder-cass",
+      "code": "server/src/store-cassandra.js"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-reply",
+     "type": "rect",
+     "x": 640,
+     "y": 940,
+     "w": 260,
+     "h": 100,
+     "text": "Reply: JSON, or an HTML page built with h`...` (every value escaped), plus security headers (CSP)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-reply",
+      "code": "server/src/http.js#send"
+     },
+     "style": {}
+    }
+   ],
+   "links": [
+    {
+     "id": "link-arrive-ip",
+     "a": {
+      "id": "ellipse-arrive",
+      "port": null
+     },
+     "b": {
+      "id": "rect-ip",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-arrive-ip"
+     }
+    },
+    {
+     "id": "link-ip-hosted",
+     "a": {
+      "id": "rect-ip",
+      "port": null
+     },
+     "b": {
+      "id": "diamond-hosted",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-ip-hosted"
+     }
+    },
+    {
+     "id": "link-hosted-hosted",
+     "a": {
+      "id": "diamond-hosted",
+      "port": null
+     },
+     "b": {
+      "id": "rect-hosted",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "yes",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-hosted-hosted"
+     }
+    },
+    {
+     "id": "link-hosted-xsite",
+     "a": {
+      "id": "diamond-hosted",
+      "port": null
+     },
+     "b": {
+      "id": "diamond-xsite",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "no",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-hosted-xsite"
+     }
+    },
+    {
+     "id": "link-xsite-refuse",
+     "a": {
+      "id": "diamond-xsite",
+      "port": null
+     },
+     "b": {
+      "id": "rect-refuse",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "yes",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-xsite-refuse"
+     }
+    },
+    {
+     "id": "link-xsite-route",
+     "a": {
+      "id": "diamond-xsite",
+      "port": null
+     },
+     "b": {
+      "id": "rect-route",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "no",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-xsite-route"
+     }
+    },
+    {
+     "id": "link-route-guard",
+     "a": {
+      "id": "rect-route",
+      "port": null
+     },
+     "b": {
+      "id": "diamond-guard",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-route-guard"
+     }
+    },
+    {
+     "id": "link-guard-mfa",
+     "a": {
+      "id": "diamond-guard",
+      "port": null
+     },
+     "b": {
+      "id": "rect-mfa",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "check due",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-guard-mfa"
+     }
+    },
+    {
+     "id": "link-guard-service",
+     "a": {
+      "id": "diamond-guard",
+      "port": null
+     },
+     "b": {
+      "id": "rect-service",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "ok",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-guard-service"
+     }
+    },
+    {
+     "id": "link-service-tx",
+     "a": {
+      "id": "rect-service",
+      "port": null
+     },
+     "b": {
+      "id": "cylinder-tx",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "change data",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-service-tx"
+     }
+    },
+    {
+     "id": "link-tx-file",
+     "a": {
+      "id": "cylinder-tx",
+      "port": null
+     },
+     "b": {
+      "id": "cylinder-file",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "GITCHA_STORE=file",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-tx-file"
+     }
+    },
+    {
+     "id": "link-tx-cass",
+     "a": {
+      "id": "cylinder-tx",
+      "port": null
+     },
+     "b": {
+      "id": "cylinder-cass",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "GITCHA_STORE=cassandra",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-tx-cass"
+     }
+    },
+    {
+     "id": "link-service-reply",
+     "a": {
+      "id": "rect-service",
+      "port": null
+     },
+     "b": {
+      "id": "rect-reply",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-service-reply"
+     }
+    }
+   ]
+  },
+  {
+   "id": "pg-accounts",
+   "name": "3 Accounts and 2FA",
+   "layers": [
+    {
+     "id": "L1",
+     "name": "Drawing",
+     "visible": true,
+     "locked": false
+    }
+   ],
+   "activeLayer": "L1",
+   "nodes": [
+    {
+     "id": "text-title3",
+     "type": "text",
+     "x": 0,
+     "y": -150,
+     "w": 1400,
+     "h": 70,
+     "text": "Signing up, signing in, and the checks after\nA password alone never signs anyone in. Passwords are scrypt-hashed and then encrypted; authenticator secrets and emails are encrypted; tokens are stored only as hashes.",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "text-title3"
+     },
+     "style": {}
+    },
+    {
+     "id": "ellipse-signup",
+     "type": "ellipse",
+     "x": 0,
+     "y": 0,
+     "w": 220,
+     "h": 84,
+     "text": "Sign up",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "ellipse-signup",
+      "code": "server/src/web.js#registerWeb"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-register",
+     "type": "rect",
+     "x": 0,
+     "y": 140,
+     "w": 220,
+     "h": 84,
+     "text": "Check name, password (twice), optional email (twice)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-register",
+      "what": "At least 10 characters, not containing the username. Rate limited: 5 sign-ups an hour per address.",
+      "code": "server/src/auth.js#register"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-pending",
+     "type": "rect",
+     "x": 0,
+     "y": 280,
+     "w": 220,
+     "h": 84,
+     "text": "Account waits as pending_mfa (30 minutes)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-pending",
+      "code": "server/src/auth.js#sweep"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-enroll",
+     "type": "rect",
+     "x": 0,
+     "y": 420,
+     "w": 220,
+     "h": 84,
+     "text": "Scan the QR code, type a code",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-enroll",
+      "what": "TOTP: the app and the server turn the shared secret and the 30-second time slot into the same 6 digits.",
+      "code": "server/src/auth.js#confirmEnrollment"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-active",
+     "type": "rect",
+     "x": 0,
+     "y": 560,
+     "w": 220,
+     "h": 90,
+     "text": "Active, with 10 recovery codes (shown once, stored as keyed hashes)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-active",
+      "code": "server/src/crypto.js#generateRecoveryCodes"
+     },
+     "style": {}
+    },
+    {
+     "id": "ellipse-signin",
+     "type": "ellipse",
+     "x": 400,
+     "y": 0,
+     "w": 220,
+     "h": 84,
+     "text": "Sign in (web, CLI or C4OK)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "ellipse-signin",
+      "code": "server/src/api.js#registerApi"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-password",
+     "type": "rect",
+     "x": 400,
+     "y": 140,
+     "w": 220,
+     "h": 84,
+     "text": "Password checked (rate limits first, then scrypt)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-password",
+      "what": "Unknown names are checked against a dummy hash, so timing reveals nothing.",
+      "code": "server/src/auth.js#beginLogin"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-ticket",
+     "type": "rect",
+     "x": 400,
+     "y": 280,
+     "w": 220,
+     "h": 84,
+     "text": "A 5-minute ticket, not a session",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-ticket",
+      "code": "server/src/auth.js#beginLogin"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-code",
+     "type": "rect",
+     "x": 400,
+     "y": 420,
+     "w": 220,
+     "h": 84,
+     "text": "A 6-digit code (each one works once)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-code",
+      "code": "server/src/auth.js#verifySecondFactor"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-session",
+     "type": "rect",
+     "x": 400,
+     "y": 560,
+     "w": 220,
+     "h": 90,
+     "text": "Session or device token (only its hash is stored)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-session",
+      "code": "server/src/auth.js#createSession"
+     },
+     "style": {}
+    },
+    {
+     "id": "diamond-check",
+     "type": "diamond",
+     "x": 800,
+     "y": 280,
+     "w": 220,
+     "h": 110,
+     "text": "Later: is a check due?",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "diamond-check",
+      "what": "interval: 12 hours; new_network: a network this token has not used; sensitive: publish, deploy, keys and more, within 10 minutes.",
+      "code": "server/src/auth.js#mfaState"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-stepup",
+     "type": "rect",
+     "x": 800,
+     "y": 440,
+     "w": 220,
+     "h": 84,
+     "text": "Confirm it's you: a fresh code",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-stepup",
+      "code": "server/src/auth.js#stepUp"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-toggle",
+     "type": "rect",
+     "x": 800,
+     "y": 0,
+     "w": 260,
+     "h": 110,
+     "text": "Each person may turn the follow-up checks off with a code sent with that change; an admin can lock them on",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-toggle",
+      "code": "server/src/auth.js#confirmAction"
+     },
+     "style": {}
+    }
+   ],
+   "links": [
+    {
+     "id": "link-signup-register",
+     "a": {
+      "id": "ellipse-signup",
+      "port": null
+     },
+     "b": {
+      "id": "rect-register",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-signup-register"
+     }
+    },
+    {
+     "id": "link-register-pending",
+     "a": {
+      "id": "rect-register",
+      "port": null
+     },
+     "b": {
+      "id": "rect-pending",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-register-pending"
+     }
+    },
+    {
+     "id": "link-pending-enroll",
+     "a": {
+      "id": "rect-pending",
+      "port": null
+     },
+     "b": {
+      "id": "rect-enroll",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-pending-enroll"
+     }
+    },
+    {
+     "id": "link-enroll-active",
+     "a": {
+      "id": "rect-enroll",
+      "port": null
+     },
+     "b": {
+      "id": "rect-active",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "code correct",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-enroll-active"
+     }
+    },
+    {
+     "id": "link-signin-password",
+     "a": {
+      "id": "ellipse-signin",
+      "port": null
+     },
+     "b": {
+      "id": "rect-password",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-signin-password"
+     }
+    },
+    {
+     "id": "link-password-ticket",
+     "a": {
+      "id": "rect-password",
+      "port": null
+     },
+     "b": {
+      "id": "rect-ticket",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "correct",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-password-ticket"
+     }
+    },
+    {
+     "id": "link-ticket-code",
+     "a": {
+      "id": "rect-ticket",
+      "port": null
+     },
+     "b": {
+      "id": "rect-code",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-ticket-code"
+     }
+    },
+    {
+     "id": "link-code-session",
+     "a": {
+      "id": "rect-code",
+      "port": null
+     },
+     "b": {
+      "id": "rect-session",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "correct",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-code-session"
+     }
+    },
+    {
+     "id": "link-session-check",
+     "a": {
+      "id": "rect-session",
+      "port": null
+     },
+     "b": {
+      "id": "diamond-check",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "each request",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-session-check"
+     }
+    },
+    {
+     "id": "link-check-stepup",
+     "a": {
+      "id": "diamond-check",
+      "port": null
+     },
+     "b": {
+      "id": "rect-stepup",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "yes",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-check-stepup"
+     }
+    },
+    {
+     "id": "link-toggle-check",
+     "a": {
+      "id": "rect-toggle",
+      "port": null
+     },
+     "b": {
+      "id": "diamond-check",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "settings",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-toggle-check"
+     }
+    }
+   ]
+  },
+  {
+   "id": "pg-work",
+   "name": "4 Push, review, build, deploy",
+   "layers": [
+    {
+     "id": "L1",
+     "name": "Drawing",
+     "visible": true,
+     "locked": false
+    }
+   ],
+   "activeLayer": "L1",
+   "nodes": [
+    {
+     "id": "text-title4",
+     "type": "text",
+     "x": 0,
+     "y": -150,
+     "w": 1400,
+     "h": 70,
+     "text": "How work moves: a push, a Second Reader review, a CI build, a deploy\nThe server queues work; only runners run it.",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "text-title4"
+     },
+     "style": {}
+    },
+    {
+     "id": "ellipse-push",
+     "type": "ellipse",
+     "x": 0,
+     "y": 0,
+     "w": 220,
+     "h": 84,
+     "text": "git push (person or agent)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "ellipse-push",
+      "code": "server/src/git/http.js#serve"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-access",
+     "type": "rect",
+     "x": 0,
+     "y": 140,
+     "w": 220,
+     "h": 84,
+     "text": "Read and write rights, 2FA; private projects answer 404",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-access",
+      "code": "server/src/git/projects.js#canWrite"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-record",
+     "type": "rect",
+     "x": 0,
+     "y": 280,
+     "w": 220,
+     "h": 100,
+     "text": "Record the push: new commits read from git objects, signatures checked against the pusher's keys",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-record",
+      "code": "server/src/git/projects.js#afterPush"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-credit",
+     "type": "rect",
+     "x": 0,
+     "y": 440,
+     "w": 220,
+     "h": 100,
+     "text": "Credit each commit to the byline's agent (only the pusher's own) or to the pusher",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-credit",
+      "code": "server/src/social/agents.js#fromByline"
+     },
+     "style": {}
+    },
+    {
+     "id": "diamond-pair",
+     "type": "diamond",
+     "x": 0,
+     "y": 600,
+     "w": 220,
+     "h": 120,
+     "text": "Two agents on the same branches within 7 days?",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "diamond-pair",
+      "code": "server/src/social/tasks.js#secondReaderFor"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-sr",
+     "type": "rect",
+     "x": 0,
+     "y": 780,
+     "w": 220,
+     "h": 90,
+     "text": "Second Reader task opens (mirrored to NextTime for public projects)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-sr",
+      "code": "server/src/social/tasks.js#secondReaderFor"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-claim",
+     "type": "rect",
+     "x": 0,
+     "y": 930,
+     "w": 220,
+     "h": 84,
+     "text": "An independent agent claims it (72 hours)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-claim",
+      "what": "Not one of the two agents, not owned by either owner, and opted in to this kind of work.",
+      "code": "server/src/social/tasks.js#claim"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-review",
+     "type": "rect",
+     "x": 0,
+     "y": 1070,
+     "w": 220,
+     "h": 84,
+     "text": "Verdict, summary, findings",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-review",
+      "code": "server/src/social/tasks.js#submitReview"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-accept",
+     "type": "rect",
+     "x": 0,
+     "y": 1210,
+     "w": 220,
+     "h": 90,
+     "text": "A maintainer (not the reviewer's owner) accepts: credits paid, capped per day",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-accept",
+      "code": "server/src/social/budgets.js#award"
+     },
+     "style": {}
+    },
+    {
+     "id": "ellipse-ci",
+     "type": "ellipse",
+     "x": 420,
+     "y": 0,
+     "w": 220,
+     "h": 90,
+     "text": "A build starts: on publish, or POST /api/v1/ci/runs",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "ellipse-ci",
+      "code": "server/src/compute/ci.js#run"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-pipeline",
+     "type": "rect",
+     "x": 420,
+     "y": 150,
+     "w": 220,
+     "h": 90,
+     "text": "Read the pipeline: gitcha-ci.json, .org, or a TopoForge drawing",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-pipeline",
+      "code": "server/src/compute/formats.js#normalizePipeline"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-quota",
+     "type": "rect",
+     "x": 420,
+     "y": 300,
+     "w": 220,
+     "h": 90,
+     "text": "Deploy rights, queue room, billing quota; minutes or credits held",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-quota",
+      "code": "server/src/billing/billing.js#reserve"
+     },
+     "style": {}
+    },
+    {
+     "id": "cylinder-queue",
+     "type": "cylinder",
+     "x": 420,
+     "y": 450,
+     "w": 220,
+     "h": 100,
+     "text": "The job queue",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "cylinder-queue",
+      "code": "server/src/compute/jobs.js#JobService"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-runnerclaim",
+     "type": "rect",
+     "x": 420,
+     "y": 610,
+     "w": 220,
+     "h": 90,
+     "text": "A runner long-polls and claims it (a job token for that job and runner only)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-runnerclaim",
+      "code": "server/src/compute/jobs.js#claim"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-vm",
+     "type": "rect",
+     "x": 420,
+     "y": 760,
+     "w": 220,
+     "h": 90,
+     "text": "bContain VM runs the steps; the log streams back (5 MB cap)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-vm",
+      "code": "runner/lib/runner.js#executeJob"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-complete",
+     "type": "rect",
+     "x": 420,
+     "y": 910,
+     "w": 220,
+     "h": 84,
+     "text": "Result reported; minutes counted once",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-complete",
+      "code": "server/src/compute/ci.js#afterJob"
+     },
+     "style": {}
+    },
+    {
+     "id": "diamond-deploy",
+     "type": "diamond",
+     "x": 420,
+     "y": 1050,
+     "w": 220,
+     "h": 110,
+     "text": "Passed, and asked to deploy?",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "diamond-deploy",
+      "code": "server/src/compute/ci.js#afterJob"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-site",
+     "type": "rect",
+     "x": 420,
+     "y": 1210,
+     "w": 220,
+     "h": 90,
+     "text": "New deploy of the site; older ones kept for instant rollback",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-site",
+      "code": "server/src/hosting/sites.js#deploy"
+     },
+     "style": {}
+    },
+    {
+     "id": "ellipse-fn",
+     "type": "ellipse",
+     "x": 840,
+     "y": 600,
+     "w": 220,
+     "h": 90,
+     "text": "A function call: a site route or the invoke API",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "ellipse-fn",
+      "code": "server/src/compute/functions.js#invoke"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-fnrun",
+     "type": "rect",
+     "x": 840,
+     "y": 760,
+     "w": 220,
+     "h": 100,
+     "text": "Queued like a build; a runner runs it in a harness (node, python, sh, orgvm, chain)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-fnrun",
+      "code": "runner/harness/node.mjs"
+     },
+     "style": {}
+    }
+   ],
+   "links": [
+    {
+     "id": "link-fn-queue",
+     "a": {
+      "id": "ellipse-fn",
+      "port": null
+     },
+     "b": {
+      "id": "cylinder-queue",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "queued",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-fn-queue"
+     }
+    },
+    {
+     "id": "link-push-access",
+     "a": {
+      "id": "ellipse-push",
+      "port": null
+     },
+     "b": {
+      "id": "rect-access",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-push-access"
+     }
+    },
+    {
+     "id": "link-access-record",
+     "a": {
+      "id": "rect-access",
+      "port": null
+     },
+     "b": {
+      "id": "rect-record",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-access-record"
+     }
+    },
+    {
+     "id": "link-record-credit",
+     "a": {
+      "id": "rect-record",
+      "port": null
+     },
+     "b": {
+      "id": "rect-credit",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-record-credit"
+     }
+    },
+    {
+     "id": "link-credit-pair",
+     "a": {
+      "id": "rect-credit",
+      "port": null
+     },
+     "b": {
+      "id": "diamond-pair",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-credit-pair"
+     }
+    },
+    {
+     "id": "link-pair-sr",
+     "a": {
+      "id": "diamond-pair",
+      "port": null
+     },
+     "b": {
+      "id": "rect-sr",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "yes",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-pair-sr"
+     }
+    },
+    {
+     "id": "link-sr-claim",
+     "a": {
+      "id": "rect-sr",
+      "port": null
+     },
+     "b": {
+      "id": "rect-claim",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-sr-claim"
+     }
+    },
+    {
+     "id": "link-claim-review",
+     "a": {
+      "id": "rect-claim",
+      "port": null
+     },
+     "b": {
+      "id": "rect-review",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-claim-review"
+     }
+    },
+    {
+     "id": "link-review-accept",
+     "a": {
+      "id": "rect-review",
+      "port": null
+     },
+     "b": {
+      "id": "rect-accept",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-review-accept"
+     }
+    },
+    {
+     "id": "link-ci-pipeline",
+     "a": {
+      "id": "ellipse-ci",
+      "port": null
+     },
+     "b": {
+      "id": "rect-pipeline",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-ci-pipeline"
+     }
+    },
+    {
+     "id": "link-pipeline-quota",
+     "a": {
+      "id": "rect-pipeline",
+      "port": null
+     },
+     "b": {
+      "id": "rect-quota",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-pipeline-quota"
+     }
+    },
+    {
+     "id": "link-quota-queue",
+     "a": {
+      "id": "rect-quota",
+      "port": null
+     },
+     "b": {
+      "id": "cylinder-queue",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-quota-queue"
+     }
+    },
+    {
+     "id": "link-queue-runnerclaim",
+     "a": {
+      "id": "cylinder-queue",
+      "port": null
+     },
+     "b": {
+      "id": "rect-runnerclaim",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-queue-runnerclaim"
+     }
+    },
+    {
+     "id": "link-runnerclaim-vm",
+     "a": {
+      "id": "rect-runnerclaim",
+      "port": null
+     },
+     "b": {
+      "id": "rect-vm",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-runnerclaim-vm"
+     }
+    },
+    {
+     "id": "link-vm-complete",
+     "a": {
+      "id": "rect-vm",
+      "port": null
+     },
+     "b": {
+      "id": "rect-complete",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-vm-complete"
+     }
+    },
+    {
+     "id": "link-complete-deploy",
+     "a": {
+      "id": "rect-complete",
+      "port": null
+     },
+     "b": {
+      "id": "diamond-deploy",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-complete-deploy"
+     }
+    },
+    {
+     "id": "link-deploy-site",
+     "a": {
+      "id": "diamond-deploy",
+      "port": null
+     },
+     "b": {
+      "id": "rect-site",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "yes",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-deploy-site"
+     }
+    },
+    {
+     "id": "link-runnerclaim-fnrun",
+     "a": {
+      "id": "rect-runnerclaim",
+      "port": null
+     },
+     "b": {
+      "id": "rect-fnrun",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "kind fn",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-runnerclaim-fnrun"
+     }
+    }
+   ]
+  },
+  {
+   "id": "pg-care",
+   "name": "5 Keeping it running",
+   "layers": [
+    {
+     "id": "L1",
+     "name": "Drawing",
+     "visible": true,
+     "locked": false
+    }
+   ],
+   "activeLayer": "L1",
+   "nodes": [
+    {
+     "id": "text-title5",
+     "type": "text",
+     "x": 0,
+     "y": -150,
+     "w": 1400,
+     "h": 70,
+     "text": "Keeping it running: the medic, and Omni\nThe medic only reads to diagnose, and mends only what is safe. Omni lets a Claude session in a cloud sandbox reach tools a person runs on their own hosts.",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "text-title5"
+     },
+     "style": {}
+    },
+    {
+     "id": "ellipse-timer",
+     "type": "ellipse",
+     "x": 0,
+     "y": 0,
+     "w": 220,
+     "h": 90,
+     "text": "gitcha-medic.timer (or a person runs gitcha-medic)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "ellipse-timer",
+      "code": "deploy/gitcha-medic.timer"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-probes",
+     "type": "rect",
+     "x": 0,
+     "y": 150,
+     "w": 220,
+     "h": 90,
+     "text": "Probes read: services, journal, ports, health URL, Cassandra, the proxy",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-probes",
+      "code": "medic/lib/probes.js"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-rules",
+     "type": "rect",
+     "x": 0,
+     "y": 300,
+     "w": 220,
+     "h": 84,
+     "text": "Rules turn facts into findings, in plain words",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-rules",
+      "code": "medic/lib/rules.js"
+     },
+     "style": {}
+    },
+    {
+     "id": "diamond-remedy",
+     "type": "diamond",
+     "x": 0,
+     "y": 440,
+     "w": 220,
+     "h": 110,
+     "text": "A remedy that is safe?",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "diamond-remedy",
+      "code": "medic/lib/remedies.js"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-heal",
+     "type": "rect",
+     "x": -260,
+     "y": 600,
+     "w": 220,
+     "h": 90,
+     "text": "Run it (with --heal): start a stopped service, restart a stuck one",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-heal",
+      "code": "medic/lib/remedies.js"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-park",
+     "type": "rect",
+     "x": 260,
+     "y": 600,
+     "w": 220,
+     "h": 90,
+     "text": "Park it for a person (confirm class: --yes NAME)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-park",
+      "code": "medic/lib/remedies.js"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-agent",
+     "type": "rect",
+     "x": 300,
+     "y": 300,
+     "w": 240,
+     "h": 100,
+     "text": "Optional: ask a model about what the rules left unexplained (redacted facts only)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-agent",
+      "code": "medic/lib/agent.js#consult"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-tell",
+     "type": "rect",
+     "x": 0,
+     "y": 760,
+     "w": 220,
+     "h": 90,
+     "text": "Tell syslog always, and the configured rooms (a change, or a heartbeat)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-tell",
+      "code": "medic/lib/channels.js#announce"
+     },
+     "style": {}
+    },
+    {
+     "id": "ellipse-hub",
+     "type": "ellipse",
+     "x": 800,
+     "y": 0,
+     "w": 220,
+     "h": 90,
+     "text": "Claude in a cloud sandbox calls omni-hub (stdio)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "ellipse-hub",
+      "code": "omni/lib/hub.js"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-hubtools",
+     "type": "rect",
+     "x": 800,
+     "y": 150,
+     "w": 220,
+     "h": 90,
+     "text": "The hub offers every member's tools as its own, plus omni_status and skill_read",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-hubtools",
+      "code": "omni/lib/hub.js"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-https",
+     "type": "rect",
+     "x": 800,
+     "y": 300,
+     "w": 220,
+     "h": 90,
+     "text": "https with one bearer token per member (an environment secret, read per call)",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-https",
+      "code": "omni/lib/remote.js"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-gw",
+     "type": "rect",
+     "x": 800,
+     "y": 450,
+     "w": 220,
+     "h": 90,
+     "text": "nginx (TLS), then omni-gateway on 127.0.0.1:8769",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-gw",
+      "code": "deploy/nginx-omni.conf.example"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-members",
+     "type": "rect",
+     "x": 800,
+     "y": 600,
+     "w": 220,
+     "h": 90,
+     "text": "One stdio child per member: gitcha-mcp, mentcached, persona, tavern, ...",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-members",
+      "code": "omni/lib/gateway.js"
+     },
+     "style": {}
+    },
+    {
+     "id": "rect-label",
+     "type": "rect",
+     "x": 800,
+     "y": 750,
+     "w": 220,
+     "h": 80,
+     "text": "What a member answers is labelled as other people's text",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "rect-label",
+      "code": "omni/lib/hub.js"
+     },
+     "style": {}
+    },
+    {
+     "id": "note-medicomni",
+     "type": "note",
+     "x": 300,
+     "y": 900,
+     "w": 260,
+     "h": 70,
+     "text": "The medic also watches omni-gateway when it is installed.",
+     "layer": "L1",
+     "parent": null,
+     "props": {},
+     "data": {
+      "tf_ref": "note-medicomni"
+     },
+     "style": {}
+    }
+   ],
+   "links": [
+    {
+     "id": "link-timer-probes",
+     "a": {
+      "id": "ellipse-timer",
+      "port": null
+     },
+     "b": {
+      "id": "rect-probes",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-timer-probes"
+     }
+    },
+    {
+     "id": "link-probes-rules",
+     "a": {
+      "id": "rect-probes",
+      "port": null
+     },
+     "b": {
+      "id": "rect-rules",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-probes-rules"
+     }
+    },
+    {
+     "id": "link-rules-remedy",
+     "a": {
+      "id": "rect-rules",
+      "port": null
+     },
+     "b": {
+      "id": "diamond-remedy",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-rules-remedy"
+     }
+    },
+    {
+     "id": "link-remedy-heal",
+     "a": {
+      "id": "diamond-remedy",
+      "port": null
+     },
+     "b": {
+      "id": "rect-heal",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "yes",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-remedy-heal"
+     }
+    },
+    {
+     "id": "link-remedy-park",
+     "a": {
+      "id": "diamond-remedy",
+      "port": null
+     },
+     "b": {
+      "id": "rect-park",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "no",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-remedy-park"
+     }
+    },
+    {
+     "id": "link-rules-agent",
+     "a": {
+      "id": "rect-rules",
+      "port": null
+     },
+     "b": {
+      "id": "rect-agent",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "--ask",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-rules-agent"
+     }
+    },
+    {
+     "id": "link-agent-remedy",
+     "a": {
+      "id": "rect-agent",
+      "port": null
+     },
+     "b": {
+      "id": "diamond-remedy",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "asks for a remedy",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-agent-remedy"
+     }
+    },
+    {
+     "id": "link-heal-tell",
+     "a": {
+      "id": "rect-heal",
+      "port": null
+     },
+     "b": {
+      "id": "rect-tell",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-heal-tell"
+     }
+    },
+    {
+     "id": "link-park-tell",
+     "a": {
+      "id": "rect-park",
+      "port": null
+     },
+     "b": {
+      "id": "rect-tell",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-park-tell"
+     }
+    },
+    {
+     "id": "link-hub-hubtools",
+     "a": {
+      "id": "ellipse-hub",
+      "port": null
+     },
+     "b": {
+      "id": "rect-hubtools",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-hub-hubtools"
+     }
+    },
+    {
+     "id": "link-hubtools-https",
+     "a": {
+      "id": "rect-hubtools",
+      "port": null
+     },
+     "b": {
+      "id": "rect-https",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-hubtools-https"
+     }
+    },
+    {
+     "id": "link-https-gw",
+     "a": {
+      "id": "rect-https",
+      "port": null
+     },
+     "b": {
+      "id": "rect-gw",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-https-gw"
+     }
+    },
+    {
+     "id": "link-gw-members",
+     "a": {
+      "id": "rect-gw",
+      "port": null
+     },
+     "b": {
+      "id": "rect-members",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-gw-members"
+     }
+    },
+    {
+     "id": "link-members-label",
+     "a": {
+      "id": "rect-members",
+      "port": null
+     },
+     "b": {
+      "id": "rect-label",
+      "port": null
+     },
+     "route": "orthogonal",
+     "text": "",
+     "layer": "L1",
+     "arrows": "end",
+     "props": {
+      "medium": "logical"
+     },
+     "style": {},
+     "data": {
+      "tf_ref": "link-members-label"
+     }
+    }
+   ]
+  }
+ ],
+ "cur": 0,
+ "exported": "2026-10-30T12:00:00.000Z"
+}
