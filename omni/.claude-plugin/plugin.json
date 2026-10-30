@@ -1,0 +1,12 @@
+{
+  "name": "omni",
+  "version": "0.2.0",
+  "description": "One MCP door for Claude in a cloud sandbox: reaches the MCP servers you run elsewhere (vibrobeast's memory seat, persona sheets, Tavern, Llama Bridge, C4, Gitcha) through a gateway on your own host, and reads the skills you choose. Tokens stay in the environment.",
+  "author": { "name": "Corwin Brust and Bryant Frankford", "email": "BryantAndCorwin@inputloop.com" },
+  "homepage": "https://github.com/inputloop/gitcha",
+  "repository": "https://github.com/inputloop/gitcha",
+  "license": "GPL-3.0-or-later OR LGPL-3.0-or-later",
+  "keywords": ["mcp", "bridge", "memory", "skills", "cloud", "free-software"],
+  "mcpServers": "./.mcp.json",
+  "skills": "./skills/"
+}

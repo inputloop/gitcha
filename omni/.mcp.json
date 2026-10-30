@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "omni": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/omni-hub.js"],
+      "env": {
+        "OMNI_ROSTER": "${OMNI_ROSTER:-}",
+        "OMNI_ROSTER_JSON": "${OMNI_ROSTER_JSON:-}",
+        "OMNI_SKILLS": "${OMNI_SKILLS:-}"
+      }
+    }
+  }
+}

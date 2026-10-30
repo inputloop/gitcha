@@ -108,6 +108,13 @@ sh deploy/mass-install.sh servers.txt preseed.cfg \
 sh deploy/mass-install.sh runners.txt preseed.cfg --deb out/inputloop-gitcha-runner_*.deb
 ```
 
+**Hosts pull; nothing pushes to them.** `sh deploy/publish.sh REPO_DIR --sign KEYID --to user@host:/srv/apt/gitcha`
+builds (with `debian/` when debhelper is there, else `build-debs.sh`), runs `apt-repo.sh`, and copies the folder
+where nginx serves it. On each host, once, `sudo sh deploy/apt-client.sh https://apt.example.org/gitcha --unattended
+--install inputloop-gitcha inputloop-gitcha-medic` installs the key and the source and lets `unattended-upgrades`
+take new versions from the `inputloop` origin on its own schedule. The medic then reports to Tavern and syslog, so
+the keeper reads the room instead of logging in. A repository without a key is refused by `apt-client.sh`.
+
 A runner fleet registers itself during installation: make one registration token with `uses` of
 at least the number of runners, put it in the preseed file, and each runner trades it for its own
 runner token (the registration token is used once and kept nowhere: not in debconf, not on the

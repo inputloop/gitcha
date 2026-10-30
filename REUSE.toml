@@ -63,6 +63,7 @@ SPDX-License-Identifier = "GPL-3.0-or-later OR LGPL-3.0-or-later"
 [[annotations]]
 path = [
   "extension/skills/gitcha/SKILL.md",
+  "omni/skills/omni/SKILL.md",
 ]
 precedence = "closest"
 SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors", "2026 Corwin Brust <corwin@bru.st>"]
@@ -84,6 +85,9 @@ path = [
   "debian/inputloop-gitcha-runner.lintian-overrides",
   "debian/inputloop-gitcha-medic.lintian-overrides",
   "medic/package.json",
+  "omni/package.json",
+  "omni/.claude-plugin/plugin.json",
+  "omni/.mcp.json",
 ]
 precedence = "closest"
 SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors", "2026 Corwin Brust <corwin@bru.st>"]

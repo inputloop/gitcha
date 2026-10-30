@@ -1,0 +1,10 @@
+{
+  "name": "gitcha-omni",
+  "version": "0.2.0",
+  "description": "Omni: one MCP door for Claude in a cloud sandbox, reaching the MCP servers you run elsewhere (vibrobeast's memory seat, Tavern, Llama Bridge, C4, Gitcha) through a gateway on your own host, with the skills you choose beside it. Zero dependencies.",
+  "license": "GPL-3.0-or-later OR LGPL-3.0-or-later",
+  "type": "module",
+  "bin": { "omni-hub": "bin/omni-hub.js", "omni-gateway": "bin/omni-gateway.js" },
+  "engines": { "node": ">=20" },
+  "scripts": { "test": "node --test test/*.test.js" }
+}

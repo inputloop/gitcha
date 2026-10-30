@@ -9,11 +9,12 @@
     "server",
     "extension",
     "runner",
-    "medic"
+    "medic",
+    "omni"
   ],
   "scripts": {
     "start": "npm --workspace server start",
-    "test": "npm --workspace server test && npm --workspace extension test && npm --workspace runner test && npm --workspace medic test",
+    "test": "npm --workspace server test && npm --workspace extension test && npm --workspace runner test && npm --workspace medic test && npm --workspace omni test",
     "screenshots": "node scripts/screenshots.mjs",
     "docs": "node scripts/how-it-works.mjs",
     "docs:check": "node scripts/how-it-works.mjs --check"
