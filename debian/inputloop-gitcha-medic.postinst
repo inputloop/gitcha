@@ -1,0 +1,73 @@
+#!/bin/sh
+# postinst for inputloop-gitcha-medic: the debconf answers written into medic.env (the lines they name, the rest of
+# the conffile kept), the agent key into its own file, and (only when asked) the timer enabled and started.
+# Copyright 2026 Corwin Brust <corwin@bru.st> and Bryant Frankford <nathanielfrankford@gmail.com> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+set -e
+. /usr/share/debconf/confmodule
+ETC=/etc/inputloop/gitcha
+ENV=$ETC/medic.env
+KEY=$ETC/agent.key
+enable=no key=''
+
+# set NAME VALUE: put NAME=VALUE in medic.env, replacing the line (set or commented) that names it, or appending.
+# Quoted as a systemd EnvironmentFile wants it.
+set_env() {
+  v=$(printf '%s' "$2" | sed 's/[\\"]/\\&/g')
+  if grep -q "^#\{0,1\}$1=" "$ENV"; then
+    # The first line that names it becomes the setting; any later copies are left as they are.
+    awk -v k="$1" -v v="$v" 'BEGIN{done=0} !done && $0 ~ "^#?" k "=" {print k "=\"" v "\""; done=1; next} {print}' "$ENV" > "$ENV.dpkg-new"
+  else
+    cp "$ENV" "$ENV.dpkg-new"; printf '%s="%s"\n' "$1" "$v" >> "$ENV.dpkg-new"
+  fi
+  chmod 600 "$ENV.dpkg-new"; mv "$ENV.dpkg-new" "$ENV"
+}
+
+if [ "$1" = configure ]; then
+  chown root:root "$ENV"; chmod 600 "$ENV"
+  # The answers are collected first (db_get talks to debconf over stdout), then written.
+  db_get inputloop-gitcha-medic/heal; heal=$RET
+  db_get inputloop-gitcha-medic/channels; channels=$(printf '%s' "$RET" | tr -d ' ')
+  db_get inputloop-gitcha-medic/tavern_agent_json; tavern_agent_json=$RET
+  db_get inputloop-gitcha-medic/tavern_room; tavern_room=$RET
+  db_get inputloop-gitcha-medic/chadgram_file; chadgram_file=$RET
+  db_get inputloop-gitcha-medic/webhook_url; webhook_url=$RET
+  db_get inputloop-gitcha-medic/c4_dir; c4_dir=$RET
+  db_get inputloop-gitcha-medic/agent; agent=$RET
+  db_get inputloop-gitcha-medic/agent_model; agent_model=$RET
+  db_get inputloop-gitcha-medic/agent_url; agent_url=$RET
+  db_get inputloop-gitcha-medic/agent_key; key=$RET
+  # The key lives in its own file from here on, not in the debconf database.
+  db_set inputloop-gitcha-medic/agent_key ""
+  db_get inputloop-gitcha-medic/enable
+  if [ "$RET" = true ]; then enable=yes; fi
+
+  set_env GITCHA_MEDIC_HEAL "$heal"
+  set_env GITCHA_MEDIC_CHANNELS "${channels:-syslog}"
+  case ", $channels," in *", tavern,"*) set_env GITCHA_MEDIC_TAVERN_AGENT_JSON "$tavern_agent_json"; set_env GITCHA_MEDIC_TAVERN_ROOM "$tavern_room" ;; esac
+  case ", $channels," in *", chadgram,"*) set_env GITCHA_MEDIC_CHADGRAM_FILE "$chadgram_file" ;; esac
+  case ", $channels," in *", webhook,"*) set_env GITCHA_MEDIC_WEBHOOK_URL "$webhook_url" ;; esac
+  case ", $channels," in *", c4,"*) set_env GITCHA_MEDIC_C4_DIR "$c4_dir" ;; esac
+  set_env GITCHA_MEDIC_AGENT "$agent"
+  if [ "$agent" != none ]; then
+    set_env GITCHA_MEDIC_AGENT_MODEL "$agent_model"
+    set_env GITCHA_MEDIC_AGENT_URL "$agent_url"
+    if [ -n "$key" ]; then
+      (umask 077; printf '%s\n' "$key" > "$KEY.dpkg-new"); chown root:root "$KEY.dpkg-new"; chmod 600 "$KEY.dpkg-new"; mv "$KEY.dpkg-new" "$KEY"
+    fi
+    [ -f "$KEY" ] && set_env GITCHA_MEDIC_AGENT_KEY_FILE "$KEY"
+  fi
+  install -d -m 700 /var/lib/gitcha-medic
+fi
+db_stop
+
+#DEBHELPER#
+
+if [ "$1" = configure ]; then
+  [ -d /run/systemd/system ] && systemctl --system daemon-reload >/dev/null 2>&1 || true
+  if [ "$enable" = yes ]; then
+    deb-systemd-helper enable gitcha-medic.timer >/dev/null || true
+    deb-systemd-invoke start gitcha-medic.timer >/dev/null 2>&1 || echo "inputloop-gitcha-medic: the timer did not start; see systemctl status gitcha-medic.timer" >&2
+  fi
+fi
+exit 0

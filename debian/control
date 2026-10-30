@@ -36,3 +36,17 @@ Description: Gitcha runner: CI jobs and functions in bContain VMs
  bContain VM, streams the log back and reports the result.  debconf can take
  the server and a registration token, so a preseed file registers it
  unattended.  It starts only when that is asked for.
+
+Package: inputloop-gitcha-medic
+Architecture: all
+Depends: ${misc:Depends}, nodejs (>= 20), inputloop-gitcha, bsdutils
+Recommends: curl
+Description: Gitcha medic: diagnose Gitcha, its Cassandra and its proxy, and mend what is safe
+ Every five minutes (a timer) and by hand, looks at the Gitcha server on this
+ machine, the Apache Cassandra node it keeps its database in and the nginx or
+ Caddy in front; says in plain words what is wrong and why; runs the remedies
+ that are safe to run unasked when told it may; parks the rest for a person
+ (sudo gitcha-medic --yes NAME); and tells syslog and the rooms it is given
+ (Tavern, chadgram, a webhook, a C4 folder).  An AI agent (the Claude API; a
+ local model and inputloop's own agents are reserved names) can be asked for a
+ second opinion over redacted facts; it cannot say yes for a person.

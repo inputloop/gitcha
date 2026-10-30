@@ -8,6 +8,7 @@
 #   inputloop-gitcha         the server: registry, forge (git over HTTPS and SSH), hosting, functions'
 #                            control plane, billing, the social side, operations; runs as user "gitcha"
 #   inputloop-gitcha-runner  the runner: CI jobs and functions in bContain VMs; runs as user "gitcha-runner"
+#   inputloop-gitcha-medic   the medic: diagnoses Gitcha, its Cassandra and its proxy; a timer, run as root
 #
 # A .deb is the package file that Debian and Ubuntu install with dpkg or apt.
 # This script uses plain dpkg-deb and needs no root.  The server's npm dependencies (graphql, qrcode, and
@@ -111,4 +112,26 @@ chmod 755 "$S/DEBIAN/postinst"
 finish inputloop-gitcha-runner "nodejs (>= 20), adduser" "Gitcha runner: CI jobs and functions in bContain VMs
 Registers with a Gitcha server, takes jobs, runs each in its own throwaway
 bContain VM, streams the log back and reports the result.  Does not start by itself." "bcontain"
+
+# ---- inputloop-gitcha-medic ------------------------------------------------------------------------
+# The medic needs only its own code (Node's standard library). medic.env is a conffile; the timer is not enabled.
+stage inputloop-gitcha-medic
+sh "$here/deploy/lay-out.sh" medic "$S"
+printf '/etc/inputloop/gitcha/medic.env\n' > "$S/DEBIAN/conffiles"
+cp "$here/debian/inputloop-gitcha-medic.README.Debian" "$S/usr/share/doc/inputloop-gitcha-medic/README.Debian"
+cat > "$S/DEBIAN/postinst" <<'EOF'
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+  chown root:root /etc/inputloop/gitcha/medic.env; chmod 600 /etc/inputloop/gitcha/medic.env
+  install -d -m 700 /var/lib/gitcha-medic
+  systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+EOF
+chmod 755 "$S/DEBIAN/postinst"
+finish inputloop-gitcha-medic "nodejs (>= 20), inputloop-gitcha, bsdutils" "Gitcha medic: diagnose Gitcha, its Cassandra and its proxy, and mend what is safe
+Looks at the Gitcha server, its Cassandra node and the proxy in front; says in
+plain words what is wrong and why; runs the safe remedies when told it may; parks
+the rest for a person; tells syslog and the configured rooms.  The timer does not
+start by itself: systemctl enable --now gitcha-medic.timer" "curl"
 rm -rf "$STAGE"

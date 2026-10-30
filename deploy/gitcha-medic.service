@@ -1,0 +1,30 @@
+# gitcha-medic.service -- one run of the medic: look at Gitcha, Cassandra and the proxy; mend what is safe; tell the rooms.
+# Copyright 2026 Corwin Brust <corwin@bru.st> and Bryant Frankford <nathanielfrankford@gmail.com> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+# Started by gitcha-medic.timer (every five minutes) and by hand: systemctl start gitcha-medic
+[Unit]
+Description=Gitcha medic: diagnose Gitcha, its Cassandra and its proxy; mend what is safe; say so
+After=network.target gitcha.service
+[Service]
+Type=oneshot
+# Root: it reads the journals and gitcha.env and runs systemctl, as a person with sudo would. It changes nothing but
+# what a remedy of class safe does (start or restart a service), and GITCHA_MEDIC_HEAL in medic.env says whether even that.
+EnvironmentFile=-/etc/inputloop/gitcha/medic.env
+ExecStart=/usr/bin/gitcha-medic --quiet
+TimeoutStartSec=600
+StateDirectory=gitcha-medic
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# What it may write: its own state; the chadgram and C4 drop files when configured (named in medic.env, under these);
+# and Cassandra's directory, only for the move-aside a person asks for with --yes reset-empty-cassandra.
+ReadWritePaths=/var/lib/gitcha-medic /var/lib/cassandra
+MemoryMax=512M
+TasksMax=64

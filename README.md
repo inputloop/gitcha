@@ -60,6 +60,12 @@ ask *you* for the code.
 > git over a real `sshd`, a job inside a real bContain VM, the Stripe and
 > PayPal sandboxes, a live NextTime instance, and C4OK's door inside a full
 > C4OK runtime. [DEPLOY.md](DEPLOY.md) says what to try first.
+>
+> A third package, **`inputloop-gitcha-medic`**, watches a server and the
+> Cassandra and proxy beside it, says in plain words what is wrong, mends what
+> is safe to mend when told it may, and asks a person about the rest
+> (DEPLOY.md, "The medic"). Its tests run against stand-ins; it has not yet run
+> on a real host.
 
 ---
 

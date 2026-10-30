@@ -78,11 +78,35 @@ test('DEB-2: every debconf question is asked by config and used by postinst, and
     }
     return [...out].sort();
   };
-  for (const pkg of ['inputloop-gitcha', 'inputloop-gitcha-runner']) {
+  for (const pkg of ['inputloop-gitcha', 'inputloop-gitcha-runner', 'inputloop-gitcha-medic']) {
     const templates = [...read(`debian/${pkg}.templates`).matchAll(/^Template: (\S+)$/gm)].map((m) => m[1]).sort();
     assert.deepEqual(questions(`debian/${pkg}.config`), templates, `${pkg}: config asks each template`);
     assert.deepEqual(questions(`debian/${pkg}.postinst`), templates, `${pkg}: postinst reads each answer`);
   }
+});
+
+test('MEDIC-1: the medic package is built both ways, ships its units and conffile, and its debconf answers are settings medic.env lists', () => {
+  assert.match(read('debian/control'), /^Package: inputloop-gitcha-medic$/m);
+  assert.match(read('debian/rules'), /lay-out\.sh medic debian\/inputloop-gitcha-medic/);
+  assert.match(read('debian/rules'), /dh_installsystemd -pinputloop-gitcha-medic --name=gitcha-medic --no-enable --no-start --no-stop-on-upgrade/);
+  assert.match(read('deploy/build-debs.sh'), /lay-out\.sh" medic/);
+  const layout = read('deploy/lay-out.sh');
+  for (const f of ['gitcha-medic.service', 'gitcha-medic.timer', 'medic.env', 'usr/bin/gitcha-medic']) assert.ok(layout.includes(f), `lay-out.sh installs ${f}`);
+  const env = read('deploy/medic.env');
+  const postinst = read('debian/inputloop-gitcha-medic.postinst');
+  for (const name of new Set([...postinst.matchAll(/set_env (GITCHA_MEDIC_[A-Z0-9_]+)/g)].map((m) => m[1]))) assert.match(env, new RegExp(`^#?${name}=`, 'm'), `${name} is a setting in medic.env`);
+  // Every setting the medic reads has a line in medic.env.
+  const seen = new Set();
+  for (const f of fs.readdirSync(path.join(root, 'medic/lib'))) for (const m of read(`medic/lib/${f}`).matchAll(/env\.(GITCHA_MEDIC_[A-Z0-9_]+)/g)) seen.add(m[1]);
+  assert.deepEqual([...seen].filter((n) => !new RegExp(`^#?${n}=`, 'm').test(env)).sort(), [], 'settings the medic reads with no line in medic.env');
+  // The timer's unit runs the quiet mode, never --yes; it is a oneshot with the same protections as the server.
+  const unit = read('deploy/gitcha-medic.service');
+  assert.match(unit, /^ExecStart=\/usr\/bin\/gitcha-medic --quiet$/m);
+  assert.match(unit, /^Type=oneshot$/m);
+  for (const d of ['ProtectSystem=strict', 'NoNewPrivileges=yes', 'MemoryMax', 'TasksMax', 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6']) assert.ok(unit.includes(d), `gitcha-medic.service has ${d}`);
+  assert.match(read('deploy/gitcha-medic.timer'), /^OnUnitActiveSec=5min$/m);
+  assert.match(read('deploy/preseed.example.cfg'), /inputloop-gitcha-medic\/enable boolean/);
+  assert.match(read('DEPLOY.md'), /gitcha-medic/);
 });
 
 test('DEB-3: the debconf answers become settings the server reads, and the build option has its anchors', () => {

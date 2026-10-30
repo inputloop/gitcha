@@ -29,12 +29,14 @@ override_dh_auto_build override_dh_auto_test:
 override_dh_auto_install:
 	sh deploy/lay-out.sh server debian/inputloop-gitcha $(CASSANDRA) --debconf
 	sh deploy/lay-out.sh runner debian/inputloop-gitcha-runner
+	sh deploy/lay-out.sh medic debian/inputloop-gitcha-medic
 
 # As in alphaOS, installing never enables or starts a service: the debconf question "enable" does, when answered yes.
 # Not stopped for an upgrade either: postinst restarts a running service once the new code is in place.
 override_dh_installsystemd:
 	dh_installsystemd -pinputloop-gitcha --name=gitcha --no-enable --no-start --no-stop-on-upgrade
 	dh_installsystemd -pinputloop-gitcha-runner --name=gitcha-runner --no-enable --no-start --no-stop-on-upgrade
+	dh_installsystemd -pinputloop-gitcha-medic --name=gitcha-medic --no-enable --no-start --no-stop-on-upgrade
 
 # The build option reaches the maintainer scripts and the debconf default through these two tokens.
 override_dh_installdeb:
@@ -52,4 +54,5 @@ override_dh_fixperms:
 	  debian/inputloop-gitcha/usr/share/inputloop/gitcha/server/bin/gitcha-git-shell.js \
 	  debian/inputloop-gitcha/usr/share/inputloop/gitcha/server/bin/gitcha-ssh-keys.js \
 	  debian/inputloop-gitcha/usr/share/inputloop/gitcha/server/bin/gitcha-wait-ready.js \
-	  debian/inputloop-gitcha-runner/usr/share/inputloop/gitcha-runner/runner/bin/gitcha-runner.js
+	  debian/inputloop-gitcha-runner/usr/share/inputloop/gitcha-runner/runner/bin/gitcha-runner.js \
+	  debian/inputloop-gitcha-medic/usr/share/inputloop/gitcha-medic/medic/bin/gitcha-medic.js

@@ -1,0 +1,89 @@
+Template: inputloop-gitcha-medic/heal
+Type: select
+Choices: report, safe
+Default: report
+Description: What may the medic do by itself?
+ report: say what it finds, in syslog and the rooms below, and change nothing.
+ .
+ safe: also run the remedies that are safe to run unasked: start a stopped
+ Cassandra, Gitcha or nginx, restart a Gitcha that failed while its database
+ was down.  A remedy that moves data or edits a file never runs by itself; a
+ person runs it with: sudo gitcha-medic --yes NAME
+
+Template: inputloop-gitcha-medic/channels
+Type: multiselect
+Choices: syslog, tavern, chadgram, webhook, c4
+Default: syslog
+Description: Where should the medic say what it finds?
+ syslog: the host's own log (journalctl -t gitcha-medic).  tavern: a Tavern
+ room on this machine.  chadgram: an ilmsg/1 JSONL file for a chad.tab route.
+ webhook: any URL that takes JSON by POST (comic.chat and others, until they
+ have adapters of their own).  c4: a folder postcards are dropped in.
+ .
+ The next questions ask for what each chosen channel needs.
+
+Template: inputloop-gitcha-medic/tavern_agent_json
+Type: string
+Default: /var/lib/tavern/agent.json
+Description: Tavern's agent.json on this machine:
+ Tavern writes it in its data directory at each start: the local API port and
+ the agent token.  The medic reads it per message and keeps no copy.
+
+Template: inputloop-gitcha-medic/tavern_room
+Type: string
+Default: main
+Description: Tavern room to speak in:
+
+Template: inputloop-gitcha-medic/chadgram_file
+Type: string
+Default: /var/lib/gitcha-medic/chad.jsonl
+Description: JSONL file for chadgram (one ilmsg/1 line per message):
+
+Template: inputloop-gitcha-medic/webhook_url
+Type: string
+Default:
+Description: Webhook URL (JSON by POST):
+
+Template: inputloop-gitcha-medic/c4_dir
+Type: string
+Default:
+Description: Folder to drop C4 postcards in:
+
+Template: inputloop-gitcha-medic/agent
+Type: select
+Choices: none, claude, local, inputloop, openai
+Default: none
+Description: Which agent gives a second opinion?
+ none: the rules alone.  claude: the Claude API (api.anthropic.com).
+ .
+ local, inputloop and openai are named but not written yet (TODO): an Ollama or
+ llama-bridge endpoint, a Mentat or Tavern resident, an OpenAI-compatible
+ server.  Choosing one now reserves the setting; the medic says so plainly
+ until the adapter exists.
+ .
+ The agent sees redacted facts (no setting's value, no key) and may ask for the
+ safe remedies only; it cannot say yes for a person.
+
+Template: inputloop-gitcha-medic/agent_model
+Type: string
+Default: claude-opus-5-5
+Description: Model name for that agent:
+
+Template: inputloop-gitcha-medic/agent_url
+Type: string
+Default: https://api.anthropic.com
+Description: Endpoint for that agent:
+
+Template: inputloop-gitcha-medic/agent_key
+Type: password
+Description: API key for that agent:
+ Written to /etc/inputloop/gitcha/agent.key (mode 600, root only), which the
+ medic reads per call; not kept in the debconf database.  Leave it empty to
+ keep the one already there, or when the endpoint needs none.
+
+Template: inputloop-gitcha-medic/enable
+Type: boolean
+Default: true
+Description: Run the medic every five minutes (gitcha-medic.timer)?
+ If not now, later: systemctl enable --now gitcha-medic.timer
+ By hand at any time: sudo gitcha-medic

@@ -14,6 +14,12 @@ gitcha (0.2.0) unstable; urgency=medium
     before its hash, so apt always sees a newer commit as newer.  The old
     X.Y.Z+git<sha7> sorted by the hash's letters and could hide an upgrade;
     the move to 0.2.0 puts every new build above the old ones.
+  * A third package, inputloop-gitcha-medic: a timer that looks at Gitcha, its
+    Cassandra and its proxy, says what is wrong and why, runs the safe remedies
+    when told it may, parks the rest for a person (--yes NAME), and tells
+    syslog, Tavern, chadgram, a webhook or a C4 folder.  An agent (the Claude
+    API; local and inputloop vendors reserved) can be asked for a second
+    opinion over redacted facts.
 
  -- inputloop <nathanielfrankford@gmail.com>  Fri, 30 Oct 2026 01:30:00 +0000
 

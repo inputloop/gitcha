@@ -1,0 +1,13 @@
+# gitcha-medic.timer -- run the medic three minutes after boot and every five minutes after that.
+# Copyright 2026 Corwin Brust <corwin@bru.st> and Bryant Frankford <nathanielfrankford@gmail.com> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+# Not enabled by the package unless debconf is told to: systemctl enable --now gitcha-medic.timer
+[Unit]
+Description=Run the Gitcha medic every five minutes
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30
+AccuracySec=30
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,16 @@
+#!/bin/sh
+# postrm for inputloop-gitcha-medic.  Purging removes the medic's own state and its agent key file; it never touches
+# Gitcha's or Cassandra's data, nor anything the medic moved aside under /var/lib/cassandra/medic-aside-*.
+# Copyright 2026 Corwin Brust <corwin@bru.st> and Bryant Frankford <nathanielfrankford@gmail.com> and Contributors.
+# SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
+set -e
+
+if [ "$1" = purge ]; then
+  rm -rf /var/lib/gitcha-medic
+  rm -f /etc/inputloop/gitcha/agent.key /etc/inputloop/gitcha/medic.env
+  if [ -e /usr/share/debconf/confmodule ]; then . /usr/share/debconf/confmodule; db_purge; fi
+fi
+
+#DEBHELPER#
+
+exit 0

@@ -79,8 +79,11 @@ path = [
   "debian/tests/control",
   "debian/inputloop-gitcha.templates",
   "debian/inputloop-gitcha-runner.templates",
+  "debian/inputloop-gitcha-medic.templates",
   "debian/inputloop-gitcha.lintian-overrides",
   "debian/inputloop-gitcha-runner.lintian-overrides",
+  "debian/inputloop-gitcha-medic.lintian-overrides",
+  "medic/package.json",
 ]
 precedence = "closest"
 SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors", "2026 Corwin Brust <corwin@bru.st>"]
@@ -90,6 +93,7 @@ SPDX-License-Identifier = "GPL-3.0-or-later OR LGPL-3.0-or-later"
 path = [
   "debian/inputloop-gitcha.README.Debian",
   "debian/inputloop-gitcha-runner.README.Debian",
+  "debian/inputloop-gitcha-medic.README.Debian",
 ]
 precedence = "closest"
 SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors", "2026 Corwin Brust <corwin@bru.st>"]

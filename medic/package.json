@@ -1,0 +1,10 @@
+{
+  "name": "gitcha-medic",
+  "version": "0.2.0",
+  "description": "Watches a Gitcha server and the Cassandra and proxy beside it, says in plain words what is wrong, mends what is safe to mend, and asks a person about the rest.",
+  "license": "GPL-3.0-or-later OR LGPL-3.0-or-later",
+  "type": "module",
+  "bin": { "gitcha-medic": "bin/gitcha-medic.js" },
+  "engines": { "node": ">=20" },
+  "scripts": { "test": "node --test test/*.test.js" }
+}

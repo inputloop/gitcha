@@ -204,6 +204,59 @@ refused", the proxy is looking somewhere else: its upstream must be `http://127.
 same machine (`proxy_pass` in nginx), or the address in `GITCHA_HOST`/`GITCHA_PORT` if you changed them.
 Run `gitcha-check` as root (it reads `gitcha.env`, then runs as the `gitcha` user, as the service does).
 
+### The medic: finding out, mending what is safe, and telling someone
+
+`inputloop-gitcha-medic` is a third package from this tree, installed beside the server. Every five
+minutes (`gitcha-medic.timer`), and whenever you run `sudo gitcha-medic`, it looks at the Gitcha
+server on the machine, the Cassandra node it keeps its database in, and the nginx (or Caddy) in
+front, and says in plain words what is wrong, why it thinks so, and what to do:
+
+```sh
+sudo gitcha-medic                 # look and say; exit 0 all well, 1 something is wrong
+sudo gitcha-medic --heal          # also run the safe remedies (start a stopped service, restart a stuck one)
+sudo gitcha-medic --list          # every remedy and its class
+sudo gitcha-medic --yes NAME      # run one confirm-class remedy, after reading what it does
+sudo gitcha-medic --json          # facts and findings for a program (C4OK's Operations door)
+journalctl -t gitcha-medic        # what it has said to syslog
+```
+
+**The rules come first, the agent second.** The medic's probes only read: `systemctl show`,
+`journalctl`, `cassandra.yaml`, Cassandra's `system.log`, the data directory's keyspace names, the
+ports, the health URL, `nginx -t`, `df`, `/proc/meminfo`. A table of rules turns those facts into
+findings with no model in the loop: the Cassandra node that refuses to start because its
+`cluster_name` was changed after its first start (`Saved cluster name X != configured name Y`), a
+node that is out of memory, a stopped unit, a Gitcha that failed while its database was down and
+only needs a restart now, a lease held by another server, the wrong `secret.key`, a proxy whose
+upstream points elsewhere, a disk near full. When `GITCHA_MEDIC_AGENT` names one, an agent is shown
+the redacted facts and findings (no setting's value, no key) and can look again and ask for remedies.
+
+**Three classes of remedy; the class is the consent gate.** `safe` remedies start or restart a
+service and run from the timer only when `GITCHA_MEDIC_HEAL=safe`; an agent may ask for one.
+`confirm` remedies move data or edit files (for example, move an empty Cassandra data directory
+aside so the node starts under its new `cluster_name`; nothing is deleted, and it refuses when a
+keyspace of ours is on disk) and run only when a person types `--yes NAME`; the medic and any agent
+can only ask. `manual` remedies are for hands: the medic says what to try. Nothing it does deletes
+data, edits `gitcha.env` or `debconf.env`, or touches `secret.key`.
+
+**Where it speaks.** `syslog` always; and any of `tavern` (POST `/api/say` on this machine's Tavern,
+with the agent token from Tavern's `agent.json`, read per message), `chadgram` (one `ilmsg/1` line per
+message appended to a JSONL file a `chad.tab` route reads), `webhook` (JSON by POST, for comic.chat
+and other rooms until they have adapters of their own) and `c4` (a postcard file dropped in a folder).
+With `--quiet` (the timer's mode) the rooms hear a change, or a heartbeat every `GITCHA_MEDIC_REPEAT`.
+Settings live in `/etc/inputloop/gitcha/medic.env` (root only), written by debconf
+(`dpkg-reconfigure inputloop-gitcha-medic`); a preseed answers them for many hosts.
+
+**The agent.** `claude` speaks to the Claude API over plain HTTPS (the medic has no npm
+dependencies, like the runner) with a key in `/etc/inputloop/gitcha/agent.key` (mode 600); the model
+is `GITCHA_MEDIC_AGENT_MODEL` (`claude-opus-5-5` unless you say otherwise), with a refusal fallback
+on. `local` (an Ollama or llama-bridge endpoint), `inputloop` (a Mentat or Tavern resident, through
+Tavern or the Wire) and `openai` (any `/v1/chat/completions` server) are reserved names with TODO
+adapters: choosing one makes the medic say so, not pretend.
+
+Status: the probes, rules, remedies, channels and the Claude adapter are covered by the medic's tests
+against stand-ins (the first scenario is gw19 on 2026-10-30 as its keeper found it). **Not yet run on
+a real host**; the first is gw19.
+
 ### The database: Cassandra or a file
 
 `GITCHA_STORE` chooses. Either way the server holds the whole database in memory, serves every

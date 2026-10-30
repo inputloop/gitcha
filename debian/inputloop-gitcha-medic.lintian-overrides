@@ -1,0 +1,2 @@
+# The command is a small wrapper around the medic; gitcha-medic --help and README.Debian are the manual.
+inputloop-gitcha-medic: no-manual-page [usr/bin/gitcha-medic]

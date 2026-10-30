@@ -3,7 +3,7 @@
 # Copyright 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Corwin Brust <corwin@bru.st> and Contributors.
 # SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 #
-# usage:  sh deploy/lay-out.sh server|runner DESTDIR [--without-cassandra] [--debconf]
+# usage:  sh deploy/lay-out.sh server|runner|medic DESTDIR [--without-cassandra] [--debconf]
 #
 # The one recipe for what goes where: deploy/build-debs.sh (plain dpkg-deb, alphaOS) and debian/rules
 # (dpkg-buildpackage, the full packaging) both call it, so the two kinds of package hold the same files.
@@ -94,5 +94,16 @@ runner)
   mkdir -p "$D/usr/lib/systemd/system"
   cp "$here/deploy/gitcha-runner.service" "$D/usr/lib/systemd/system/gitcha-runner.service"
   ;;
-*) echo "lay-out.sh: server or runner, not $what" >&2; exit 2 ;;
+medic)
+  # The medic needs only its own code: Node's standard library, no npm dependencies (as the runner).
+  APP=$D/usr/share/inputloop/gitcha-medic
+  rm -rf "$APP"; mkdir -p "$APP"
+  cp -R "$here/medic" "$APP/medic"; rm -rf "$APP/medic/test"
+  chmod 755 "$APP/medic/bin/gitcha-medic.js"
+  wrapper usr/bin/gitcha-medic "node /usr/share/inputloop/gitcha-medic/medic/bin/gitcha-medic.js"
+  mkdir -p "$D/etc/inputloop/gitcha" "$D/usr/lib/systemd/system" "$D/usr/share/doc/inputloop-gitcha-medic"
+  cp "$here/deploy/medic.env" "$D/etc/inputloop/gitcha/medic.env"
+  cp "$here/deploy/gitcha-medic.service" "$here/deploy/gitcha-medic.timer" "$D/usr/lib/systemd/system/"
+  ;;
+*) echo "lay-out.sh: server, runner or medic, not $what" >&2; exit 2 ;;
 esac

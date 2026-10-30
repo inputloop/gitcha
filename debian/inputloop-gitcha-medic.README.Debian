@@ -1,0 +1,30 @@
+gitcha-medic watches the Gitcha server on this machine, the Apache Cassandra node it keeps its database in, and
+the nginx (or Caddy) in front, and says in plain words what is wrong and why.
+
+  sudo gitcha-medic                 look and say (exit 0 all well, 1 something is wrong)
+  sudo gitcha-medic --heal          also run the safe remedies: start a stopped service, restart a stuck one
+  sudo gitcha-medic --ask           also consult the configured agent
+  sudo gitcha-medic --list          every remedy, with its class
+  sudo gitcha-medic --yes NAME      run one remedy of class confirm, after reading what it does
+  sudo gitcha-medic --json          the facts and findings for a program (C4OK's Operations door, for one)
+  journalctl -t gitcha-medic        what it has said to syslog
+
+The timer (gitcha-medic.timer, every five minutes, enabled when debconf was told to) runs it with --quiet: syslog
+hears every run; the rooms hear a change, or a heartbeat every GITCHA_MEDIC_REPEAT (6 h).
+
+Three classes of remedy, and the line between them is the consent gate:
+  safe     start or restart a service.  Runs from the timer only when GITCHA_MEDIC_HEAL=safe; an agent may ask for one.
+  confirm  moves data or edits a file (for example, move an empty Cassandra data directory aside so the node starts
+           under a new cluster_name).  Runs only when a person types --yes NAME; the medic and any agent can only ask.
+  manual   hands only: the medic says what it sees and what to try.
+Nothing the medic does deletes data, edits gitcha.env or debconf.env, or touches secret.key.
+
+Settings: /etc/inputloop/gitcha/medic.env (root only; every setting is listed there with its default), written by
+  dpkg-reconfigure inputloop-gitcha-medic
+Channels: syslog, tavern (POST /api/say on this machine's Tavern, token from its agent.json), chadgram (one ilmsg/1
+line per message in a JSONL file), webhook (JSON by POST), c4 (a postcard file in a folder).  comic.chat and the Wire
+are named in the design and wait for adapters.
+
+The agent (GITCHA_MEDIC_AGENT): none by default; claude speaks to the Claude API with a key in
+/etc/inputloop/gitcha/agent.key (mode 600, read per call).  It sees redacted facts (no setting's value, no key) and may
+ask for safe remedies; it cannot say yes for a person.  local, inputloop and openai are reserved names (TODO).
