@@ -646,24 +646,37 @@ never leave the server.
 
 ### Encrypted direct messages
 
-Messages are encrypted in the browser, so most of the work is in
-[[server/public/dm.js]], and the server side is small:
+Messages are encrypted on people's devices, so most of the work is in two
+files the browser page and the `gitcha` CLI share:
 
-- [[server/src/social/dm.js#DmService]] stores public keys
-  ([[server/src/social/dm.js#checkPublicKey]] refuses anything that is not a
-  P-256 public key), locked backups, ciphertext, blocks and daily counts.
-  [[server/src/social/dm.js#send]] checks what it can without the key: the
-  shape and size of the ciphertext, that the message names both people's
-  current keys, blocks and the 300-a-day limit.
-- [[server/src/social/dm-web.js#registerDm]] serves the Messages page and the
-  `/api/v1/dm/` routes. Every call needs the session and the CSRF header (or a
-  device token); setting a key and fetching the backup need a fresh code.
-- In the browser, [[server/public/dm.js#makeKey]] makes the key pair and the
-  optional passphrase-locked backup, [[server/public/dm.js#conversationKey]]
-  turns two keys into an AES-GCM key, and
-  [[server/public/dm.js#openThread]] decrypts a conversation, checks the
-  contact's key against the one it remembers, and shows the safety number
-  ([[server/public/dm.js#safetyNumber]]).
+- [[extension/lib/dm-protocol.js]] is the cryptography.
+  [[extension/lib/dm-protocol.js#newPrekey]] makes a prekey signed by the
+  identity key, [[extension/lib/dm-protocol.js#seal]] seals one message (a
+  one-time key, the recipient's prekey, the sender inside and signed, padded
+  by [[extension/lib/dm-protocol.js#pad]]), and
+  [[extension/lib/dm-protocol.js#open]] opens it and checks the signature.
+  [[extension/lib/dm-protocol.js#lockKeyring]] locks the keys for the backup.
+- [[extension/lib/dm-client.js#DmDevice]] is one device:
+  [[extension/lib/dm-client.js#setup]] and
+  [[extension/lib/dm-client.js#restore]] make or unlock keys,
+  [[extension/lib/dm-client.js#maintain]] replaces the prekey every 7 days,
+  destroys old ones and picks up another device's,
+  [[extension/lib/dm-client.js#sync]] fetches and opens envelopes, and
+  [[extension/lib/dm-client.js#send]] seals one envelope for the recipient and
+  one for the sender's own inbox.
+- [[server/public/dm.js]] draws the Messages page on top of `DmDevice`, and
+  `gitcha messages` ([[extension/bin/gitcha.js#"async messages("]]) does the
+  same in a terminal, keeping the keys in a mode-600 file
+  ([[extension/lib/dm-store.js#fileStorage]]).
+
+The server side is small. [[server/src/social/dm.js#DmService]] keeps public
+keys, signed prekeys (it checks the signature), locked backups, blocks, daily
+counts and the envelopes, which name only their inbox.
+[[server/src/social/dm.js#send]] checks what it can without a key: shapes,
+sizes, that each envelope uses the current prekey, blocks and limits; and
+[[server/src/social/dm.js#sweep]] deletes envelopes after 30 days.
+[[server/src/social/dm-web.js#registerDm]] serves the page, the shared files
+and the `/api/v1/dm/` routes.
 
 ### Posts and media
 

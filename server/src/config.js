@@ -244,6 +244,8 @@ export function loadConfig(env = process.env, overrides = {}) {
     },
     social: {
       maxMediaBytes: Number(env.GITCHA_MAX_MEDIA_BYTES ?? 50 * 1024 * 1024),
+      // Days the server keeps encrypted direct messages (devices destroy the keys that open them after 30).
+      dmKeepDays: Math.min(Math.max(Number(env.GITCHA_DM_KEEP_DAYS ?? 30) || 30, 1), 30),
     },
     budgets: {
       awardsFile: env.GITCHA_AWARDS_FILE ?? null,

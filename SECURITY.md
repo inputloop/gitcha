@@ -171,28 +171,52 @@ Gitcha server**.
 
 ## Encrypted direct messages
 
-- Keys are made in the browser with Web Crypto: ECDH on P-256. The private key
-  is kept in the browser's IndexedDB as a key the page can use but cannot read
-  out. The server stores only public keys and their fingerprints (SHA-256), and
-  refuses a key that carries a private part.
-- Each message: ECDH between the two people's keys, HKDF-SHA256, then
-  AES-256-GCM with a fresh 12-byte IV. The sender, recipient and both key
-  fingerprints are bound to the ciphertext as additional data, so the server
-  cannot relabel a message, and a message must name both people's current keys.
-- The optional key backup is locked in the browser with PBKDF2-SHA256 (600,000
-  rounds; the server refuses fewer than 200,000) and AES-GCM. The server never
-  sees the passphrase. Fetching the backup, and setting or replacing a key, need
-  a fresh 2FA code.
-- The browser computes every fingerprint itself from the key it will use and
-  refuses a key whose fingerprint the server misstates. It remembers each
-  contact's first key and warns, and stops sending, when it changes; the safety
-  number lets two people check out of band.
-- From a browser every messaging call, reads included, needs the session and
-  the `X-Gitcha-CSRF` header (the page carries the token, since the cookie is
-  HttpOnly), and cross-site calls are refused.
-- Limits, stated plainly: the server sees who wrote to whom, when and how much;
-  the server serves the script that encrypts, so a compromised server could
-  serve a bad one; there is no forward secrecy.
+The protocol is in `extension/lib/dm-protocol.js` and one device's logic in
+`extension/lib/dm-client.js`; the browser page and the `gitcha` CLI both use
+those two files.
+
+- **Keys.** Each person has an identity key (ECDSA P-256), made on their
+  device. Messages to them are encrypted to a prekey (ECDH P-256) signed by
+  the identity key. The device replaces the prekey every 7 days and destroys
+  prekeys older than 30 days. The server checks every prekey's signature and
+  refuses any key that carries a private part.
+- **A message.** The sender makes a one-time ECDH key, combines it with the
+  recipient's prekey, and derives an AES-256-GCM key with HKDF-SHA256. Inside
+  the encryption: the sender, the recipient, the exact time and the text,
+  signed by the sender's identity key, so the recipient can check who wrote it.
+  The one-time key, the prekey and the recipient's fingerprint are bound as
+  additional data, so an envelope cannot be moved to another inbox.
+- **Sealed sender.** The server stores two envelopes per message, one in each
+  person's inbox, with no sender, no recipient, no time of day and no shared
+  numbering: a stolen database does not show who wrote to whom. The live
+  server does see which signed-in person sends to which inbox while a message
+  is sent (to apply blocks and limits). It does not record that.
+- **Padding.** Envelopes are one of four sizes: 512 bytes, 2, 8 or 64 KB.
+- **Forward secrecy.** Once a prekey is destroyed, nothing can open messages
+  sealed to it, even with the identity key. The server deletes envelopes after
+  `GITCHA_DM_KEEP_DAYS` (at most 30). Opened messages are kept on the device.
+- **Backup.** The identity key and the last 30 days of prekeys, locked on the
+  device with PBKDF2-SHA256 (600,000 rounds; the server refuses fewer than
+  200,000) and AES-GCM. A new device needs a fresh 2FA code to fetch it; a
+  device that already holds the identity key proves it by signing the day
+  instead (to pick up another device's prekey). A prekey rotation may not
+  change the backup's passphrase settings.
+- **Trust.** Devices compute fingerprints themselves from the keys they use
+  and refuse a key whose fingerprint the server misstates. They remember each
+  contact's first key, warn and stop sending when it changes, and mark
+  messages signed by a key not yet confirmed. The safety number lets two people
+  check out of band.
+- **The code.** The page loads `dm-protocol.js` and `dm-client.js` from the
+  server, which serves the very files in `extension/lib`. The CLI uses its
+  own installed copies, and `gitcha messages check-page` compares the
+  server's with them byte for byte.
+- **From a browser** every messaging call, reads included, needs the session
+  and the `X-Gitcha-CSRF` header (the page carries the token), and cross-site
+  calls are refused. Keys sit in IndexedDB as keys the page can use but not
+  read out. The CLI keeps them in a mode-600 file, like SSH keys.
+- **What remains:** the live server sees senders while they send; anyone with
+  the backup and its passphrase, or an unlocked device, can read the last 30
+  days; the browser page runs code the server sends (check it, or use the CLI).
 
 ## The Claude extension and your secrets
 

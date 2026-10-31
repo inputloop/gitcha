@@ -10,9 +10,12 @@
 // even ask. (CSRF is a trick where another site makes your browser send a request.) Setting or replacing a
 // key, and fetching the locked backup, need a fresh code, like other sensitive actions.
 import { HttpError, mfaRequired } from '../errors.js';
-import { json, readJson } from '../http.js';
+import fs from 'node:fs';
+import { json, readJson, send } from '../http.js';
 import { safeEqual } from '../crypto.js';
 import { h } from '../views.js';
+
+const SHARED = Object.fromEntries(['dm-protocol.js', 'dm-client.js'].map((f) => [f, fs.readFileSync(new URL(`../../../extension/lib/${f}`, import.meta.url))]));
 
 export function registerDm(router, { auth, config, web, dm }) {
   const { page, current, requireWeb, csrfValid, csrfToken } = web;
@@ -46,27 +49,42 @@ export function registerDm(router, { auth, config, web, dm }) {
     page(ctx, 'Messages', messagesPage({ username: a.user.username, to: ctx.url.searchParams.get('to') ?? '', csrf: csrfToken(ctx) }), { user: a.user, wide: true });
   });
 
-  router.get('/api/v1/dm/me', (ctx) => json(ctx.res, 200, dm.me(caller(ctx).user)));
-  router.put('/api/v1/dm/key', async (ctx) => {
-    const a = caller(ctx, { fresh: true });
-    json(ctx.res, 200, dm.setKey(a.user, await readJson(ctx.req, 64 * 1024), ctx.ip));
-  });
-  router.get('/api/v1/dm/backup', (ctx) => json(ctx.res, 200, dm.backup(caller(ctx, { fresh: true }).user)));
-  router.get('/api/v1/dm/keys/:username', (ctx) => { caller(ctx); json(ctx.res, 200, dm.keyView(dm.person(ctx.params.username))); });
-  router.get('/api/v1/dm/conversations', (ctx) => json(ctx.res, 200, { conversations: dm.conversations(caller(ctx).user) }));
-  router.get('/api/v1/dm/with/:username', (ctx) => {
+  router.get('/api/v1/dm/me', (ctx) => {
     const a = caller(ctx);
-    json(ctx.res, 200, dm.thread(a.user, ctx.params.username, { before: ctx.url.searchParams.get('before') }));
+    json(ctx.res, 200, { ...dm.me(a.user), blocked: dm.blockedBy(a.user) });
   });
+  router.put('/api/v1/dm/identity', async (ctx) => {
+    const a = caller(ctx, { fresh: true });
+    json(ctx.res, 200, await dm.setIdentity(a.user, await readJson(ctx.req, 512 * 1024), ctx.ip));
+  });
+  router.put('/api/v1/dm/prekey', async (ctx) => {
+    const a = caller(ctx);
+    json(ctx.res, 200, await dm.rotatePrekey(a.user, await readJson(ctx.req, 512 * 1024)));
+  });
+  // A new device needs a fresh code for the backup; a device that signs today's proof with the identity key does not.
+  router.get('/api/v1/dm/backup', async (ctx) => {
+    const a = caller(ctx);
+    if (!(await dm.provesIdentity(a.user, ctx.url.searchParams.get('proof')))) caller(ctx, { fresh: true });
+    json(ctx.res, 200, dm.backup(a.user));
+  });
+  router.get('/api/v1/dm/keys/:username', (ctx) => { caller(ctx); json(ctx.res, 200, dm.keyView(dm.person(ctx.params.username))); });
+  router.get('/api/v1/dm/box', (ctx) => json(ctx.res, 200, dm.box(caller(ctx).user, { after: ctx.url.searchParams.get('after') })));
   router.post('/api/v1/dm/send', async (ctx) => {
     const a = caller(ctx);
-    json(ctx.res, 201, dm.send(a.user, await readJson(ctx.req, 64 * 1024)));
+    json(ctx.res, 201, dm.send(a.user, await readJson(ctx.req, 256 * 1024)));
   });
   router.post('/api/v1/dm/block', async (ctx) => {
     const a = caller(ctx);
     const { username, blocked = true } = await readJson(ctx.req);
     json(ctx.res, 200, dm.setBlock(a.user, username, Boolean(blocked), ctx.ip));
   });
+
+  // The two files that do the encrypting. They live in extension/lib, so the gitcha CLI ships the very same
+  // files: anyone can compare what this server sends with the copies in their own package (gitcha messages
+  // check-page).
+  for (const [name, source] of Object.entries(SHARED)) {
+    router.get(`/static/${name}`, (ctx) => send(ctx.res, 200, source, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-cache' }));
+  }
 }
 
 /**
@@ -78,15 +96,16 @@ export const messagesPage = ({ username, to, csrf }) => h`
 <link rel="stylesheet" href="/static/dm.css">
 <div class="page-head"><h1>Messages</h1><span class="badge ok">end-to-end encrypted</span></div>
 <div id="dm" class="dm" data-me="${username}" data-to="${to}" data-csrf="${csrf}">
-  <noscript><div class="alert error">Messages are encrypted in your browser, so this page needs JavaScript.</div></noscript>
+  <noscript><div class="alert error">Messages are encrypted on your device, so this page needs JavaScript. Or use the gitcha command line: gitcha messages.</div></noscript>
+  <p class="muted" id="dm-loading">Opening your messages...</p>
   <section class="card dm-setup" id="dm-setup" hidden>
     <h2>Set up encrypted messages</h2>
-    <p>Your browser will make a key pair. The private key stays on this device; the server only gets the public key, so it can never read your messages.</p>
-    <p>Choose a passphrase to keep a locked backup of your key on the server, so you can read your messages on another device or after clearing this browser. The server never sees the passphrase. Without a backup, losing this browser's data means losing your old messages.</p>
+    <p>This device will make your keys. They stay here: the server only gets the public halves, so it can never read your messages. Every 7 days this device makes a fresh key for new messages and, after 30 days, destroys the old ones, so keys stolen later cannot open older messages.</p>
+    <p>A backup passphrase lets you read your messages on another device, or after clearing this browser. The server keeps your keys locked with it and never sees the passphrase. Without one, your messages live only on this device.</p>
     <form id="dm-setup-form">
       <label>Backup passphrase <span class="muted">(at least 12 characters; leave empty for no backup)</span> <input type="password" name="passphrase" autocomplete="new-password" minlength="12"></label>
       <label>Passphrase again <input type="password" name="again" autocomplete="new-password"></label>
-      <button class="btn">Make my key</button>
+      <button class="btn">Make my keys</button>
     </form>
   </section>
   <section class="card dm-restore" id="dm-restore" hidden>
@@ -96,9 +115,9 @@ export const messagesPage = ({ username, to, csrf }) => h`
       <label>Backup passphrase <input type="password" name="passphrase" autocomplete="current-password"></label>
       <button class="btn">Unlock</button>
     </form>
-    <details class="dm-replace"><summary>Start over with a new key</summary>
-      <p>Messages sent to your old key cannot be read with a new one. People you talk to will be told your key changed.</p>
-      <button class="btn danger" id="dm-replace">Make a new key</button>
+    <details class="dm-replace"><summary>Start over with new keys</summary>
+      <p>Messages sent to your old keys cannot be read with new ones. People you write to will be told your key changed.</p>
+      <button class="btn danger" id="dm-replace" type="button">Make new keys</button>
     </details>
   </section>
   <div class="dm-grid" id="dm-main" hidden>
@@ -111,7 +130,7 @@ export const messagesPage = ({ username, to, csrf }) => h`
       <p class="muted">Choose a conversation, or write to someone.</p>
     </section>
   </div>
-  <p class="small muted dm-note">Only you and the person you write to can read these messages. The server sees who wrote to whom, when, and how long each message is, but not what it says. Compare safety numbers with the other person, in person or by another channel, to be sure no one is in between.</p>
+  <p class="small muted dm-note">Only you and the person you write to can read these messages. The server keeps sealed envelopes that do not say who sent them, all padded to a few fixed sizes, and deletes them after 30 days; messages you have opened stay on this device. Compare safety numbers with the other person, in person or by another channel, to be sure no one is in between.</p>
   <div class="alert error" id="dm-error" role="alert" hidden></div>
 </div>
 <script src="/static/dm.js" type="module"></script>`;

@@ -523,7 +523,7 @@ Gitcha also writes TopoForge drawings, with [`extension/lib/topoforge.js`](exten
 The routes are in [`topoforge.js:52`](server/src/topoforge.js#L52). Each uses
 the same "who may see this" rule as the thing it draws, sends the drawing as a
 download, and the instance map is for administrators and staff only. The CLI's
-`gitcha topoforge` ([`gitcha.js:319`](extension/bin/gitcha.js#L319)) and the
+`gitcha topoforge` ([`gitcha.js:430`](extension/bin/gitcha.js#L430)) and the
 Claude tool `gitcha_topoforge` use them.
 
 [`ci.js:83`](server/src/compute/ci.js#L83) starts a build. It checks deploy rights, room
@@ -646,24 +646,37 @@ never leave the server.
 
 ### Encrypted direct messages
 
-Messages are encrypted in the browser, so most of the work is in
-[`server/public/dm.js`](server/public/dm.js), and the server side is small:
+Messages are encrypted on people's devices, so most of the work is in two
+files the browser page and the `gitcha` CLI share:
 
-- [`dm.js:44`](server/src/social/dm.js#L44) stores public keys
-  ([`dm.js:33`](server/src/social/dm.js#L33) refuses anything that is not a
-  P-256 public key), locked backups, ciphertext, blocks and daily counts.
-  [`dm.js:121`](server/src/social/dm.js#L121) checks what it can without the key: the
-  shape and size of the ciphertext, that the message names both people's
-  current keys, blocks and the 300-a-day limit.
-- [`dm-web.js:17`](server/src/social/dm-web.js#L17) serves the Messages page and the
-  `/api/v1/dm/` routes. Every call needs the session and the CSRF header (or a
-  device token); setting a key and fetching the backup need a fresh code.
-- In the browser, [`dm.js:97`](server/public/dm.js#L97) makes the key pair and the
-  optional passphrase-locked backup, [`dm.js:131`](server/public/dm.js#L131)
-  turns two keys into an AES-GCM key, and
-  [`dm.js:185`](server/public/dm.js#L185) decrypts a conversation, checks the
-  contact's key against the one it remembers, and shows the safety number
-  ([`dm.js:146`](server/public/dm.js#L146)).
+- [`extension/lib/dm-protocol.js`](extension/lib/dm-protocol.js) is the cryptography.
+  [`dm-protocol.js:83`](extension/lib/dm-protocol.js#L83) makes a prekey signed by the
+  identity key, [`dm-protocol.js:117`](extension/lib/dm-protocol.js#L117) seals one message (a
+  one-time key, the recipient's prekey, the sender inside and signed, padded
+  by [`dm-protocol.js:59`](extension/lib/dm-protocol.js#L59)), and
+  [`dm-protocol.js:137`](extension/lib/dm-protocol.js#L137) opens it and checks the signature.
+  [`dm-protocol.js:190`](extension/lib/dm-protocol.js#L190) locks the keys for the backup.
+- [`dm-client.js:22`](extension/lib/dm-client.js#L22) is one device:
+  [`dm-client.js:87`](extension/lib/dm-client.js#L87) and
+  [`dm-client.js:107`](extension/lib/dm-client.js#L107) make or unlock keys,
+  [`dm-client.js:121`](extension/lib/dm-client.js#L121) replaces the prekey every 7 days,
+  destroys old ones and picks up another device's,
+  [`dm-client.js:191`](extension/lib/dm-client.js#L191) fetches and opens envelopes, and
+  [`dm-client.js:251`](extension/lib/dm-client.js#L251) seals one envelope for the recipient and
+  one for the sender's own inbox.
+- [`server/public/dm.js`](server/public/dm.js) draws the Messages page on top of `DmDevice`, and
+  `gitcha messages` ([`gitcha.js:335`](extension/bin/gitcha.js#L335)) does the
+  same in a terminal, keeping the keys in a mode-600 file
+  ([`dm-store.js:18`](extension/lib/dm-store.js#L18)).
+
+The server side is small. [`dm.js:48`](server/src/social/dm.js#L48) keeps public
+keys, signed prekeys (it checks the signature), locked backups, blocks, daily
+counts and the envelopes, which name only their inbox.
+[`dm.js:177`](server/src/social/dm.js#L177) checks what it can without a key: shapes,
+sizes, that each envelope uses the current prekey, blocks and limits; and
+[`dm.js:212`](server/src/social/dm.js#L212) deletes envelopes after 30 days.
+[`dm-web.js:20`](server/src/social/dm-web.js#L20) serves the page, the shared files
+and the `/api/v1/dm/` routes.
 
 ### Posts and media
 
@@ -729,7 +742,7 @@ Both live in [`extension`](extension) and share the same library.
   and only then moves it into place.
 - [`extension/bin/gitcha.js`](extension/bin/gitcha.js) is the `gitcha` command. When the server asks
   for a code, `withStepUp` asks you for one and tries again
-  ([`gitcha.js:124`](extension/bin/gitcha.js#L124)).
+  ([`gitcha.js:138`](extension/bin/gitcha.js#L138)).
 - [`extension/bin/gitcha-mcp.js`](extension/bin/gitcha-mcp.js) is the Claude extension: an MCP server (the
   Model Context Protocol, the way Claude calls outside tools) built on
   [`mcp.js:65`](extension/lib/mcp.js#L65). Every tool's input is checked

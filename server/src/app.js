@@ -108,7 +108,7 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
   registerSocialApi(router, services);
   services.web = registerWeb(router, { auth, packages, teams, config, billing: services.billing });
   registerSocialWeb(router, services);
-  services.dm = new DmService({ store, clock });
+  services.dm = new DmService({ store, clock, keepDays: config.social.dmKeepDays ?? 30 });
   registerDm(router, services);
 
   // Static files (CSS, images). path.basename strips any folder part, so a request cannot reach
@@ -169,7 +169,7 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
   // on, the database always holds every collection, so a change that fails and is rolled back (store.tx) can
   // go back to the file without losing a collection that had never been written.
   store.tx(() => {});
-  const sweeper = setInterval(() => { services.jobs.sweep(); auth.sweep(); }, 30_000);
+  const sweeper = setInterval(() => { services.jobs.sweep(); auth.sweep(); services.dm?.sweep(); }, 30_000);
   sweeper.unref();
   // When the server closes, stop the timer, answer any waiting runner requests with nothing, and
   // release the data folder lock.

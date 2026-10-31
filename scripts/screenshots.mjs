@@ -22,6 +22,7 @@ import { createApp } from '../server/src/app.js';
 import { totp, timeStep } from '../server/src/totp.js';
 import { sha256 } from '../server/src/crypto.js';
 import { seedCommunity } from './demo-data.mjs';
+import { writeAs } from './demo-messages.mjs';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
@@ -34,6 +35,7 @@ const PORT = 4873;
 const URL_ = `http://localhost:${PORT}`;
 const USER = 'alice';
 const PASSWORD = 'correct horse battery staple';
+const DM_PASSPHRASE = 'a long walk by the river';
 
 fs.mkdirSync(OUT, { recursive: true });
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gitcha-shots-'));
@@ -202,14 +204,77 @@ await shot('10-step-up');
   await page.goto(`${URL_}/support`);
   await shot('27-support', { fullPage: true });
 
-  // Phone pictures for the README's "On a phone" section: the same signed-in browser, 390px wide.
-  const phone = await browser.newContext({ storageState: await ctx.storageState(), viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, colorScheme: 'light' });
-  const phonePage = await phone.newPage();
-  for (const [name, where] of [['mobile-crawl', '/crawl'], ['mobile-project', '/projects/alice/tiny-parser'], ['mobile-account', '/account'], ['mobile-package', '/packages/tiny-logger']]) {
-    await phonePage.goto(`${URL_}${where}`);
-    await phonePage.screenshot({ path: path.join(OUT, `${name}.png`) });
+  // ---- encrypted messages ---------------------------------------------------------------
+  // Making a messaging key is a sensitive action, so confirm a fresh code first. Then alice's browser makes
+  // her key (with a backup passphrase), bob and carol write to her (demo-messages.mjs plays their browsers
+  // with the same protocol), and alice reads and answers in the browser.
+  await page.goto(`${URL_}/verify?next=${encodeURIComponent('/messages')}`);
+  await page.fill('input[name=code]', await freshCode(secret));
+  await page.click('main form button.btn');
+  await page.waitForSelector('#dm-setup:not([hidden])');
+  await page.fill('#dm-setup-form input[name=passphrase]', DM_PASSPHRASE);
+  await page.fill('#dm-setup-form input[name=again]', DM_PASSPHRASE);
+  await page.click('#dm-setup-form button');
+  await page.waitForSelector('#dm-main:not([hidden])');
+  await writeAs(app, URL_, 'carol', 'alice', 'Cora finished the second read of tiny-parser. Two findings, both small.');
+  await writeAs(app, URL_, 'bob', 'alice', 'Bix found the unary minus bug. Want me to take the fix, or will Ada?');
+  await page.goto(`${URL_}/messages?to=bob`);
+  await page.waitForSelector('.dm-msg.in');
+  await page.fill('.dm-compose textarea', 'Ada has it; she wrote the precedence code. Thanks for the find!');
+  await page.click('.dm-compose button');
+  await page.waitForSelector('.dm-msg.out');
+  await page.click('.dm-safety summary');
+  await shot('28-messages', { fullPage: true });
+}
+
+// ---- the same pages on a phone ------------------------------------------------------------
+// The README shows each page beside its phone view. A signed-in phone browser (the same session) visits
+// the walkthrough's pages at 390 x 844; a signed-out one takes the landing, sign-up and sign-in pages.
+{
+  const phoneOpts = { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, colorScheme: 'light' };
+  for (const f of fs.readdirSync(OUT)) if (/^mobile-.*\.png$/.test(f)) fs.rmSync(path.join(OUT, f));
+  const out = await browser.newContext(phoneOpts);
+  const op = await out.newPage();
+  for (const [name, where] of [['mobile-01-landing', '/'], ['mobile-02-register', '/register'], ['mobile-05-login', '/login']]) {
+    await op.goto(`${URL_}${where}`);
+    await op.screenshot({ path: path.join(OUT, `${name}.png`) });
     console.log(`  ✓ ${name}.png`);
   }
+  await out.close();
+
+  const phone = await browser.newContext({ ...phoneOpts, storageState: await ctx.storageState() });
+  const pp = await phone.newPage();
+  const tasks = Object.values(app.tasks.data);
+  const sr = tasks.find((t) => t.kind === 'second_reader');
+  const thread = Object.values(app.store.data.posts).find((p) => !p.parent && p.title?.startsWith('How we test'));
+  const pages = [
+    ['mobile-07-packages', '/packages'], ['mobile-08-package', '/packages/tiny-logger'], ['mobile-09-account', '/account'],
+    ['mobile-10-step-up', '/verify?reason=interval&next=/packages'], ['mobile-15-teams', '/teams'], ['mobile-16-team', '/teams/acme'],
+    ['mobile-18-crawl', '/crawl'], ['mobile-19-thread', thread ? `/p/${thread.id}` : '/crawl'], ['mobile-20-project', '/projects/alice/tiny-parser'],
+    ['mobile-21-second-reader', `/tasks/${sr.id}`], ['mobile-22-agent', '/a/cora'], ['mobile-23-agents', '/agents'], ['mobile-24-keys', '/keys'],
+    ['mobile-25-billing', '/billing'], ['mobile-26-ring', '/ring'], ['mobile-27-support', '/support'],
+  ];
+  for (const [name, where] of pages) {
+    await pp.goto(`${URL_}${where}`);
+    await pp.screenshot({ path: path.join(OUT, `${name}.png`) });
+    console.log(`  ✓ ${name}.png`);
+  }
+  // The open menu, so the README can show how the header folds on a phone.
+  await pp.goto(`${URL_}/crawl`);
+  await pp.click('.nav-menu summary');
+  await pp.screenshot({ path: path.join(OUT, 'mobile-00-menu.png') });
+  console.log('  ✓ mobile-00-menu.png');
+  // Messages on a new device: the phone browser has no key yet, so alice unlocks it with her backup passphrase.
+  await pp.goto(`${URL_}/messages?to=bob`);
+  await pp.waitForSelector('#dm-restore:not([hidden])');
+  await pp.screenshot({ path: path.join(OUT, 'mobile-28-messages-unlock.png') });
+  console.log('  ✓ mobile-28-messages-unlock.png');
+  await pp.fill('#dm-restore-form input[name=passphrase]', DM_PASSPHRASE);
+  await pp.click('#dm-restore-form button');
+  await pp.waitForSelector('.dm-msg.out');
+  await pp.locator('.dm-thread').scrollIntoViewIfNeeded();
+  await pp.screenshot({ path: path.join(OUT, 'mobile-28-messages.png') });
+  console.log('  ✓ mobile-28-messages.png');
   await phone.close();
 }
 

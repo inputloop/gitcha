@@ -1,165 +1,195 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// Encrypted direct messages. These tests play the browser's part with Node's Web Crypto, the same way
-// server/public/dm.js does, so the server is tested with real ciphertext, and checked never to hold the words.
+// Encrypted direct messages (protocol version 2), driven through the same device code the browser page and
+// the CLI use (extension/lib/dm-client.js), against a real server. Each test reads what the server stored.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { startServer, createUser, api, deviceLogin } from './helpers.js';
+import { DmDevice } from '../../extension/lib/dm-client.js';
+import * as P from '../../extension/lib/dm-protocol.js';
 
-const { subtle } = globalThis.crypto;
-const enc = new TextEncoder(), dec = new TextDecoder();
-const ECDH = { name: 'ECDH', namedCurve: 'P-256' };
-const b64 = (buf) => Buffer.from(buf).toString('base64');
-const hex = (buf) => Buffer.from(buf).toString('hex');
-const fingerprint = async (jwk) => hex(await subtle.digest('SHA-256', enc.encode(`P-256:${jwk.x}:${jwk.y}`)));
+const DAY = 86_400_000;
 
-/** A person's browser: a key pair, and the protocol of dm.js. */
-async function browserFor(username) {
-  const pair = await subtle.generateKey(ECDH, true, ['deriveBits']);
-  const jwk = await subtle.exportKey('jwk', pair.publicKey);
-  const publicKey = { kty: 'EC', crv: 'P-256', x: jwk.x, y: jwk.y };
-  const me = { username, privateKey: pair.privateKey, publicKey, fingerprint: await fingerprint(publicKey) };
-  const keyWith = async (theirJwk, theirFp) => {
-    const pub = await subtle.importKey('jwk', theirJwk, ECDH, false, []);
-    const bits = await subtle.deriveBits({ name: 'ECDH', public: pub }, me.privateKey, 256);
-    const hk = await subtle.importKey('raw', bits, 'HKDF', false, ['deriveKey']);
-    return subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: enc.encode('gitcha-dm-v1'), info: enc.encode(`gitcha dm v1|${[me.fingerprint, theirFp].sort().join('|')}`) }, hk, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+/** A device for `name`, signed in with `token`, keeping its keys in memory. */
+function deviceFor(srv, name, token) {
+  const mem = {};
+  const call = async (method, p, body) => {
+    const r = await api(srv.url, method, `/api/v1/dm${p}`, { token, body });
+    if (r.status >= 400) { const e = new Error(r.body.message); e.code = r.body.error; throw e; }
+    return r.body;
   };
-  const bound = (m) => enc.encode(JSON.stringify(['gitcha-dm-v1', m.from, m.to, m.fromKey, m.toKey]));
-  me.encrypt = async (to, theirKey, text) => {
-    const m = { from: username, to, fromKey: me.fingerprint, toKey: theirKey.fingerprint };
-    const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
-    const ct = await subtle.encrypt({ name: 'AES-GCM', iv, additionalData: bound(m) }, await keyWith(theirKey.publicKey, theirKey.fingerprint), enc.encode(text));
-    return { to, iv: b64(iv), ct: b64(ct), fromKey: m.fromKey, toKey: m.toKey };
-  };
-  me.decrypt = async (m, theirKey) => dec.decode(await subtle.decrypt({ name: 'AES-GCM', iv: Buffer.from(m.iv, 'base64'), additionalData: bound(m) }, await keyWith(theirKey.publicKey, theirKey.fingerprint), Buffer.from(m.ct, 'base64')));
-  return me;
+  return new DmDevice({ me: name, api: call, storage: { get: async (n) => mem[n], put: async (n, v) => { mem[n] = structuredClone(v); } }, mode: 'pkcs8', now: () => srv.clock() });
 }
 
 async function setup() {
-  const srv = await startServer();
-  const people = {};
+  // Some tests move the clock on by weeks; long sessions and a long 2FA re-check keep these test devices signed
+  // in meanwhile (a real device would sign in again). The 10-minute window for sensitive actions is unchanged.
+  const year = 365 * DAY;
+  const srv = await startServer({ overrides: { policy: { sessionIdle: year, sessionMaxAge: year, stepUpInterval: year } } });
+  const out = { srv };
   for (const [name, pass] of [['alice', 'first long pass!'], ['bob', 'second long pass'], ['carol', 'third long passw']]) {
     const u = createUser(srv, name, pass);
-    people[name] = { token: await deviceLogin(srv, u), browser: await browserFor(name) };
+    const token = await deviceLogin(srv, u);
+    out[name] = { user: u, token, device: deviceFor(srv, name, token) };
   }
-  for (const p of Object.values(people)) {
-    const r = await api(srv.url, 'PUT', '/api/v1/dm/key', { token: p.token, body: { publicKey: p.browser.publicKey } });
-    assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.equal(r.body.fingerprint, p.browser.fingerprint, 'the server computes the same fingerprint as the browser');
-  }
-  return { srv, ...people };
+  return out;
 }
+const db = (srv) => JSON.parse(fs.readFileSync(path.join(srv.config.dataDir, 'db.json'), 'utf8'));
 
-test('a message is stored as ciphertext only, and both people (and only they) can read it', async () => {
-  const { srv, alice, bob, carol } = await setup();
-  try {
-    const bobKey = (await api(srv.url, 'GET', '/api/v1/dm/keys/bob', { token: alice.token })).body;
-    const words = 'Meet at the rail yard at noon. Bring the second key.';
-    const sent = await api(srv.url, 'POST', '/api/v1/dm/send', { token: alice.token, body: await alice.browser.encrypt('bob', bobKey, words) });
-    assert.equal(sent.status, 201, JSON.stringify(sent.body));
-
-    const db = fs.readFileSync(path.join(srv.config.dataDir, 'db.json'), 'utf8');
-    assert.ok(!db.includes('rail yard') && !db.includes(b64(enc.encode(words))), 'the server never had the words');
-
-    const t = (await api(srv.url, 'GET', '/api/v1/dm/with/alice', { token: bob.token })).body;
-    assert.equal(t.messages.length, 1);
-    const aliceKey = t.with;
-    assert.equal(await bob.browser.decrypt(t.messages[0], aliceKey), words, 'bob reads it');
-    const mineAgain = (await api(srv.url, 'GET', '/api/v1/dm/with/bob', { token: alice.token })).body.messages[0];
-    assert.equal(await alice.browser.decrypt(mineAgain, bobKey), words, 'and alice can read what she sent');
-    await assert.rejects(carol.browser.decrypt(t.messages[0], aliceKey), 'carol\'s key does not open it');
-    const relabelled = { ...t.messages[0], from: 'carol' };
-    await assert.rejects(bob.browser.decrypt(relabelled, aliceKey), 'a message the server relabels does not decrypt');
-    assert.deepEqual((await api(srv.url, 'GET', '/api/v1/dm/with/alice', { token: carol.token })).body.messages, [], 'carol is not in that conversation');
-
-    const convs = (await api(srv.url, 'GET', '/api/v1/dm/conversations', { token: bob.token })).body.conversations;
-    assert.deepEqual(convs.map((c) => [c.with, c.unread]), [['alice', 0]], 'opening the conversation marked it read');
-  } finally { await srv.close(); }
-});
-
-test('a message must name the keys both people have now', async () => {
+test('a message reaches its recipient and the sender\'s own copy, and the server cannot tell who wrote to whom', async () => {
   const { srv, alice, bob } = await setup();
   try {
-    const bobKey = (await api(srv.url, 'GET', '/api/v1/dm/keys/bob', { token: alice.token })).body;
-    const stale = await alice.browser.encrypt('bob', bobKey, 'hello');
-    bob.browser = await browserFor('bob'); // bob makes a new key
-    assert.equal((await api(srv.url, 'PUT', '/api/v1/dm/key', { token: bob.token, body: { publicKey: bob.browser.publicKey } })).status, 200);
-    const r = await api(srv.url, 'POST', '/api/v1/dm/send', { token: alice.token, body: stale });
-    assert.equal(r.status, 409);
-    assert.equal(r.body.error, 'key_changed');
-    const view = (await api(srv.url, 'GET', '/api/v1/dm/keys/bob', { token: alice.token })).body;
-    assert.equal(view.history.length, 2, 'the old key stays in the history, so a browser can tell that it changed');
-  } finally { await srv.close(); }
-});
+    await alice.device.setup('alice backup words');
+    await bob.device.setup(null);
+    assert.equal((await alice.device.status()).state, 'ready');
+    await alice.device.send('bob', 'Meet at the rail yard at noon.');
+    await bob.device.status();
+    await bob.device.sync();
+    assert.deepEqual(bob.device.thread('alice').map((m) => [m.from, m.text, m.trusted]), [['alice', 'Meet at the rail yard at noon.', true]]);
+    assert.deepEqual(alice.device.thread('bob').map((m) => [m.from, m.to, m.out]), [['alice', 'bob', true]], 'alice reads her own copy');
 
-test('keys, backups and messages are checked for shape; a private part is refused', async () => {
-  const { srv, alice } = await setup();
-  try {
-    const priv = await subtle.exportKey('jwk', (await subtle.generateKey(ECDH, true, ['deriveBits'])).privateKey);
-    assert.equal((await api(srv.url, 'PUT', '/api/v1/dm/key', { token: alice.token, body: { publicKey: priv } })).status, 400, 'a key with its private part (d) is refused');
-    assert.equal((await api(srv.url, 'PUT', '/api/v1/dm/key', { token: alice.token, body: { publicKey: { kty: 'EC', crv: 'P-384', x: 'a', y: 'b' } } })).status, 400);
-    const weak = { v: 1, kdf: 'PBKDF2-SHA256', cipher: 'AES-GCM', iterations: 1000, salt: b64(Buffer.alloc(16)), iv: b64(Buffer.alloc(12)), data: 'AAAA' };
-    assert.equal((await api(srv.url, 'PUT', '/api/v1/dm/key', { token: alice.token, body: { publicKey: alice.browser.publicKey, backup: weak } })).status, 400, 'a backup locked with too few rounds is refused');
-    const ok = { ...weak, iterations: 600_000 };
-    assert.equal((await api(srv.url, 'PUT', '/api/v1/dm/key', { token: alice.token, body: { publicKey: alice.browser.publicKey, backup: ok } })).status, 200);
-    assert.deepEqual((await api(srv.url, 'GET', '/api/v1/dm/backup', { token: alice.token })).body.backup, ok, 'only its owner gets the backup back');
-    for (const bad of [{ iv: 'short', ct: 'AAAA' }, { iv: b64(Buffer.alloc(12)), ct: '' }, { iv: b64(Buffer.alloc(12)), ct: 'A'.repeat(48_004) }]) {
-      const me = (await api(srv.url, 'GET', '/api/v1/dm/me', { token: alice.token })).body;
-      const bobFp = (await api(srv.url, 'GET', '/api/v1/dm/keys/bob', { token: alice.token })).body.fingerprint;
-      assert.equal((await api(srv.url, 'POST', '/api/v1/dm/send', { token: alice.token, body: { to: 'bob', fromKey: me.fingerprint, toKey: bobFp, ...bad } })).status, 400);
+    const stored = db(srv);
+    const raw = JSON.stringify(stored);
+    assert.ok(!raw.includes('rail yard'), 'the words are not on the server');
+    const records = Object.values(stored.dmBox);
+    assert.equal(records.length, 2, 'one envelope in each inbox');
+    const ids = { alice: srv.store.userByName('alice').id, bob: srv.store.userByName('bob').id };
+    assert.deepEqual(records.map((r) => r.owner).sort(), [ids.alice, ids.bob].sort());
+    for (const r of records) {
+      assert.deepEqual(Object.keys(r).sort(), ['ct', 'day', 'ek', 'id', 'iv', 'owner', 'seq', 'spk', 'v'], 'no sender, no recipient, no time of day');
+      assert.equal(r.seq, 1, 'each inbox counts on its own, so two records cannot be paired by number');
+      assert.match(r.day, /^\d{4}-\d{2}-\d{2}$/);
+      assert.ok(!JSON.stringify(r).includes(r.owner === ids.alice ? ids.bob : ids.alice), 'a record does not name the other person');
     }
   } finally { await srv.close(); }
 });
 
-test('replacing a key and reading the backup need a fresh code; a block stops messages', async () => {
+test('envelopes come in a few fixed sizes, so a message\'s length does not show', async () => {
   const { srv, alice, bob } = await setup();
   try {
-    srv.clock.advance(11 * 60_000); // past the 10-minute window for sensitive actions
-    const stale = await api(srv.url, 'PUT', '/api/v1/dm/key', { token: alice.token, body: { publicKey: alice.browser.publicKey } });
-    assert.equal(stale.status, 401);
-    assert.equal(stale.body.error, 'mfa_required');
-    assert.equal((await api(srv.url, 'GET', '/api/v1/dm/backup', { token: alice.token })).body.error, 'mfa_required');
-
-    assert.equal((await api(srv.url, 'POST', '/api/v1/dm/block', { token: bob.token, body: { username: 'alice' } })).status, 200);
-    const bobKey = (await api(srv.url, 'GET', '/api/v1/dm/keys/bob', { token: alice.token })).body;
-    const r = await api(srv.url, 'POST', '/api/v1/dm/send', { token: alice.token, body: await alice.browser.encrypt('bob', bobKey, 'hi') });
-    assert.equal(r.status, 403);
-    assert.equal(r.body.error, 'blocked');
+    await alice.device.setup(null);
+    await bob.device.setup(null);
+    for (const text of ['ok', 'see you at noon by the north gate, bring the second key and the map']) await alice.device.send('bob', text);
+    const inbox = Object.values(db(srv).dmBox).filter((r) => r.owner === srv.store.userByName('bob').id);
+    assert.equal(new Set(inbox.map((r) => r.ct.length)).size, 1);
   } finally { await srv.close(); }
 });
 
-test('from a browser, every call needs the CSRF header from the page, reads included', async () => {
-  const { srv } = await setup();
+test('forward secrecy: the prekey is replaced every 7 days and destroyed after 30, and then old envelopes cannot be opened', async () => {
+  const { srv, alice, bob } = await setup();
   try {
+    await alice.device.setup(null);
+    await bob.device.setup(null);
+    const first = (await api(srv.url, 'GET', '/api/v1/dm/keys/bob', { token: alice.token })).body.prekey.id;
+    await alice.device.send('bob', 'an old secret');
+    const envelope = Object.values(db(srv).dmBox).find((r) => r.owner === srv.store.userByName('bob').id);
+    for (let week = 0; week < 5; week++) { srv.clock.advance(8 * DAY); await bob.device.status(); }
+    const now = (await api(srv.url, 'GET', '/api/v1/dm/keys/bob', { token: alice.token })).body.prekey.id;
+    assert.notEqual(now, first, 'bob\'s device made new prekeys');
+    assert.equal(await bob.device.prekeyKey(first), null, 'and destroyed the first one');
+    await assert.rejects(P.open(envelope, { me: 'bob', myFingerprint: bob.device.keys.identity.fingerprint, prekeyKey: (id) => bob.device.prekeyKey(id), signerOf: async () => alice.device.keys.identity.publicKey }), /destroyed/);
+    assert.ok(srv.dm.sweep() >= 1, 'the server deletes envelopes older than 30 days too');
+    assert.equal(Object.values(db(srv).dmBox).length, 0);
+  } finally { await srv.close(); }
+});
+
+test('a second device unlocks from the backup, and later picks up a prekey the first made, without a fresh code', async () => {
+  const { srv, alice, bob } = await setup();
+  try {
+    await alice.device.setup('alice backup words');
+    await bob.device.setup(null);
+    const tablet = deviceFor(srv, 'alice', alice.token);
+    assert.equal((await tablet.status()).state, 'restore');
+    await assert.rejects(tablet.restore('the wrong words'), /does not unlock/);
+    await tablet.restore('alice backup words');
+    assert.equal((await tablet.status()).state, 'ready');
+
+    srv.clock.advance(8 * DAY);
+    await alice.device.status(); // the first device replaces the prekey, and updates the locked backup
+    await bob.device.status();
+    await bob.device.send('alice', 'sent to the new prekey');
+    // The tablet's 2FA is not fresh now; it proves it holds the identity key instead, and gets the new prekey.
+    assert.equal((await api(srv.url, 'GET', '/api/v1/dm/backup', { token: alice.token })).body.error, 'mfa_required', 'without a proof, a fresh code is needed');
+    assert.equal((await tablet.status()).state, 'ready');
+    await tablet.sync();
+    assert.deepEqual(tablet.thread('bob').map((m) => m.text), ['sent to the new prekey']);
+  } finally { await srv.close(); }
+});
+
+test('when a contact\'s key changes, sending stops until it is checked; messages signed by an unconfirmed key are marked', async () => {
+  const { srv, alice, bob } = await setup();
+  try {
+    await alice.device.setup(null);
+    await bob.device.setup(null);
+    await alice.device.send('bob', 'hello');
+    const bobAgain = deviceFor(srv, 'bob', bob.token);
+    await bobAgain.load();
+    await bobAgain.setup(null); // bob starts over with new keys
+    alice.device.directory.clear();
+    assert.equal((await alice.device.contact('bob', { fresh: true })).pin, 'changed');
+    await assert.rejects(alice.device.send('bob', 'are you still you?'), /key changed/);
+    await bobAgain.send('alice', 'new keys, same bob');
+    await alice.device.sync();
+    assert.equal(alice.device.thread('bob').find((m) => m.text === 'new keys, same bob').trusted, false);
+    await alice.device.acceptKey('bob');
+    assert.equal(alice.device.thread('bob').find((m) => m.text === 'new keys, same bob').trusted, true);
+    await alice.device.send('bob', 'checked the number, hello again');
+  } finally { await srv.close(); }
+});
+
+test('the server checks what it can: signed prekeys, public keys only, backup settings, blocks, limits', async () => {
+  const { srv, alice, bob } = await setup();
+  try {
+    await alice.device.setup('alice backup words');
+    await bob.device.setup(null);
+    const id = await P.newIdentity();
+    const other = await P.newIdentity();
+    const forged = await P.newPrekey(await P.importIdentity(other.pkcs8), srv.clock());
+    const pub = (p) => ({ id: p.id, createdAt: p.createdAt, publicKey: p.publicKey, sig: p.sig });
+    const r1 = await api(srv.url, 'PUT', '/api/v1/dm/identity', { token: alice.token, body: { identityKey: id.publicKey, prekey: pub(forged) } });
+    assert.equal(r1.status, 400, 'a prekey not signed by the identity key is refused');
+    const priv = await globalThis.crypto.subtle.exportKey('jwk', (await globalThis.crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign'])).privateKey);
+    assert.equal((await api(srv.url, 'PUT', '/api/v1/dm/identity', { token: alice.token, body: { identityKey: priv, prekey: pub(forged) } })).status, 400, 'a private key is refused');
+
+    const k = await P.newPrekey(await alice.device.identityKey(), srv.clock());
+    const salt = globalThis.crypto.getRandomValues(new Uint8Array(16));
+    const backup = await P.lockKeyring({ identity: {}, prekeys: [] }, await P.passphraseKey('another passphrase', salt, 200_000), { salt, iterations: 200_000 });
+    const swap = await api(srv.url, 'PUT', '/api/v1/dm/prekey', { token: alice.token, body: { prekey: pub(k), backup } });
+    assert.equal(swap.status, 400, 'a rotation cannot swap in a backup with other passphrase settings');
+
+    assert.equal((await api(srv.url, 'POST', '/api/v1/dm/block', { token: bob.token, body: { username: 'alice' } })).status, 200);
+    await assert.rejects(alice.device.send('bob', 'hi'), /does not take messages from you/);
+
+    const day = new Date(srv.clock()).toISOString().slice(0, 10);
+    srv.store.tx((d) => { d.dmDaily[srv.store.userByName('bob').id] = { day, count: 300 }; });
+    await assert.rejects(bob.device.send('alice', 'one more'), /limit is 300/);
+  } finally { await srv.close(); }
+});
+
+test('setting keys needs a fresh code; from a browser every call needs the page\'s CSRF token, reads included', async () => {
+  const { srv, alice } = await setup();
+  try {
+    srv.clock.advance(11 * 60_000);
+    await assert.rejects(alice.device.setup(null), (err) => err.code === 'mfa_required');
     const sid = srv.auth.createSession(srv.store.userByName('alice'), { kind: 'web', name: 't', ip: '127.0.0.1' }).token;
     const page = await fetch(`${srv.url}/messages`, { headers: { Cookie: `gitcha_sid=${sid}` } });
     assert.equal(page.status, 200);
-    const csrf = /gitcha_csrf=([^;]+)/.exec(page.headers.get('set-cookie'))[1];
     const html = await page.text();
+    const csrf = /data-csrf="([^"]+)"/.exec(html)[1];
     assert.match(html, /<script src="\/static\/dm\.js" type="module"><\/script>/);
-    assert.match(html, /end-to-end encrypted/);
     const cookies = `gitcha_sid=${sid}; gitcha_csrf=${csrf}`;
-    assert.equal((await fetch(`${srv.url}/api/v1/dm/conversations`, { headers: { Cookie: cookies } })).status, 403, 'no header: refused');
-    assert.equal((await fetch(`${srv.url}/api/v1/dm/conversations`, { headers: { Cookie: cookies, 'X-Gitcha-CSRF': 'forged.token' } })).status, 403);
-    assert.equal((await fetch(`${srv.url}/api/v1/dm/conversations`, { headers: { Cookie: cookies, 'X-Gitcha-CSRF': csrf, 'Sec-Fetch-Site': 'cross-site' } })).status, 403, 'another site: refused');
-    assert.equal((await fetch(`${srv.url}/api/v1/dm/conversations`, { headers: { Cookie: cookies, 'X-Gitcha-CSRF': csrf } })).status, 200);
-    const js = await fetch(`${srv.url}/static/dm.js`);
-    assert.equal(js.status, 200);
-    assert.match(js.headers.get('content-type'), /text\/javascript/);
-  } finally { await srv.close(); }
-});
-
-test('one person may send at most 300 messages a day', async () => {
-  const { srv, alice } = await setup();
-  try {
-    const day = new Date(srv.clock()).toISOString().slice(0, 10);
-    srv.store.tx((d) => { d.dmDaily[srv.store.userByName('alice').id] = { day, count: 300 }; });
-    const bobKey = (await api(srv.url, 'GET', '/api/v1/dm/keys/bob', { token: alice.token })).body;
-    const r = await api(srv.url, 'POST', '/api/v1/dm/send', { token: alice.token, body: await alice.browser.encrypt('bob', bobKey, 'one more') });
-    assert.equal(r.status, 429);
+    assert.equal((await fetch(`${srv.url}/api/v1/dm/box`, { headers: { Cookie: cookies } })).status, 403, 'no header: refused');
+    assert.equal((await fetch(`${srv.url}/api/v1/dm/box`, { headers: { Cookie: cookies, 'X-Gitcha-CSRF': csrf, 'Sec-Fetch-Site': 'cross-site' } })).status, 403);
+    assert.equal((await fetch(`${srv.url}/api/v1/dm/box`, { headers: { Cookie: cookies, 'X-Gitcha-CSRF': csrf } })).status, 200);
+    for (const f of ['dm.js', 'dm-client.js', 'dm-protocol.js']) {
+      const js = await fetch(`${srv.url}/static/${f}`);
+      assert.equal(js.status, 200, f);
+      assert.match(js.headers.get('content-type'), /text\/javascript/);
+    }
+    const served = Buffer.from(await (await fetch(`${srv.url}/static/dm-protocol.js`)).arrayBuffer());
+    assert.deepEqual(served, fs.readFileSync(new URL('../../extension/lib/dm-protocol.js', import.meta.url)), 'the page gets exactly the file the CLI ships');
   } finally { await srv.close(); }
 });

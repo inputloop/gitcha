@@ -6,6 +6,7 @@
 // The Claude extension also uses it for first-run sign-in, so passwords never pass through the AI model.
 // Its SessionStart hook (hooks/hooks.json) runs `gitcha status --hook` when a Claude session starts.
 import os from 'node:os';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,6 +17,8 @@ import { installOne, installAll, parseSpec } from '../lib/installer.js';
 import { ask } from '../lib/prompt.js';
 import { pipelineFromOrg, pipelineFromDrawing, chainFromDrawing } from '../lib/formats.js';
 import { pipelineToDrawing } from '../lib/topoforge.js';
+import { DmDevice } from '../lib/dm-client.js';
+import { fileStorage, messagesFile } from '../lib/dm-store.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const VERSION = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8')).version;
@@ -57,6 +60,17 @@ ${bold('Security')}
   gitcha security [--interval on|off] [--new-network on|off] [--sensitive on|off]
                                                 view or toggle follow-up 2FA checks
   gitcha logout [--local-only]                  revoke this device's token (--local-only: just forget it here)
+
+${bold('Messages')} (encrypted end to end; keys stay on this computer, in a mode-600 file)
+  gitcha messages                               your conversations (fetches new messages)
+  gitcha messages setup                         make your keys (asks for an optional backup passphrase)
+  gitcha messages unlock                        use your keys here, from the backup (asks for the passphrase)
+  gitcha messages read <user>                   the conversation with <user>
+  gitcha messages send <user> [text]            send (the text, or what you pipe in)
+  gitcha messages safety <user>                 the safety number to compare with <user>
+  gitcha messages trust <user>                  accept <user>'s new key after you compared the number
+  gitcha messages block|unblock <user>
+  gitcha messages check-page                    is the server's encryption code the same as this package's?
 
 ${bold('TopoForge')} (drawings you open in TopoForge with File > Open)
   gitcha topoforge export <gitcha-ci.json|.org> [--out FILE]   draw a pipeline (offline)
@@ -313,6 +327,103 @@ const commands = {
     const client = authedClient(flags);
     const res = await withStepUp(client, () => client.setVisibility(_[1], _[2] === 'team-only'));
     out(green(`✓ ${bold(res.name)} is now ${res.visibility === 'team' ? `visible only to team ${res.team}` : 'visible to every registry user'}.`));
+  },
+
+  // `gitcha messages <sub>`: encrypted direct messages, with the same device logic as the browser page
+  // (lib/dm-client.js) and the same encryption (lib/dm-protocol.js). The code that encrypts comes from this
+  // package, not from the server.
+  async messages({ _, flags }) {
+    const [, sub = 'list', who] = _;
+    const client = authedClient(flags);
+    if (sub === 'check-page') {
+      const here = path.dirname(fileURLToPath(import.meta.url));
+      let same = true;
+      for (const f of ['dm-protocol.js', 'dm-client.js']) {
+        const res = await client.request('GET', `/static/${f}`, { raw: true });
+        const theirs = Buffer.from(await res.arrayBuffer());
+        const ours = fs.readFileSync(path.join(here, '..', 'lib', f));
+        const h = (b) => crypto.createHash('sha256').update(b).digest('hex');
+        const match = h(theirs) === h(ours);
+        same &&= match;
+        out(`${match ? green('✓ same') : red('✗ DIFFERENT')}  ${f}  ${dim(`server ${h(theirs).slice(0, 16)}, this package ${h(ours).slice(0, 16)}`)}`);
+      }
+      if (!same) out(yellow('The server sends encryption code that differs from this package. If the server runs another Gitcha version, compare with that version; otherwise do not trust the web page with secrets.'));
+      return;
+    }
+    const me = getCredentials(client.server).username;
+    const api = (method, p, body) => withStepUp(client, () => client.request(method, `/api/v1/dm${p}`, { body }));
+    const device = new DmDevice({ me, api, storage: fileStorage(messagesFile(client.server, me)), mode: 'pkcs8' });
+    const st = await device.status();
+    const askPass = async (twice) => {
+      const p = await ask(`${bold('Backup passphrase')}${twice ? dim(' (12 or more characters; empty for no backup)') : ''}: `, { hidden: true });
+      if (twice && p) {
+        if (p.length < 12) throw new Error('The passphrase must be at least 12 characters.');
+        if (await ask(`${bold('Passphrase again')}: `, { hidden: true }) !== p) throw new Error('The two passphrases do not match.');
+      }
+      return p;
+    };
+    if (sub === 'setup') {
+      if (st.state !== 'setup' && !flags.force) throw new Error('You already have messaging keys. Use `gitcha messages unlock` here, or add --force to replace them (old messages then cannot be read).');
+      await device.setup((await askPass(true)) || null);
+      return out(green('✓ Your keys are made and kept in ') + bold(messagesFile(client.server, me)) + dim(' (mode 600).'));
+    }
+    if (sub === 'unlock') {
+      await device.restore(await askPass(false));
+      return out(green('✓ Your messaging keys are unlocked on this computer.'));
+    }
+    if (st.state === 'setup') throw new Error('You have no messaging keys yet. Run `gitcha messages setup`.');
+    if (st.state === 'restore') throw new Error('This computer does not have your current messaging keys. Run `gitcha messages unlock` (it asks for your backup passphrase).');
+    await device.sync();
+    const needUser = () => { if (!who) throw new Error(`Usage: gitcha messages ${sub} <user>`); return who; };
+    switch (sub) {
+      case 'list': {
+        const convs = device.conversations();
+        if (flags.json) return out(JSON.stringify(convs, null, 2));
+        if (!convs.length) return out(dim('No conversations yet. Start one with `gitcha messages send <user> <text>`.'));
+        for (const c of convs) out(`${bold(cyan(c.with))}  ${c.unread ? yellow(`${c.unread} new  `) : ''}${dim(`${c.count} messages, last ${when(c.last)}`)}`);
+        const lost = device.failures().length;
+        if (lost) out(dim(`${lost} message(s) could not be opened here (their keys were destroyed, or they were damaged).`));
+        return;
+      }
+      case 'read': {
+        const c = await device.contact(needUser());
+        if (!c.ready) return out(dim(`${who} has not set up encrypted messages yet.`));
+        if (c.pin === 'changed') out(red(`⚠ ${who}'s key changed since you last wrote. Compare the safety number (gitcha messages safety ${who}) before trusting new messages.`));
+        const msgs = device.thread(who);
+        if (flags.json) return out(JSON.stringify(msgs, null, 2));
+        for (const m of msgs) out(`${m.out ? green('you') : cyan(who)} ${dim(when(m.at))}${m.trusted ? '' : red(' (signed by a key you have not confirmed)')}
+  ${m.text.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '?').replace(/\n/g, '\n  ')}`);
+        if (!msgs.length) out(dim('No messages yet.'));
+        return device.markRead(who);
+      }
+      case 'send': {
+        needUser();
+        let text = _.slice(3).join(' ');
+        if (!text && !process.stdin.isTTY) text = fs.readFileSync(0, 'utf8');
+        if (!text.trim()) throw new Error('Usage: gitcha messages send <user> <text>   (or pipe the text in)');
+        await device.send(who, text);
+        return out(green(`✓ Sent to ${bold(who)}, encrypted end to end.`));
+      }
+      case 'safety': {
+        const c = await device.contact(needUser());
+        if (!c.ready) return out(dim(`${who} has not set up encrypted messages yet.`));
+        out(`${bold('Safety number with')} ${cyan(who)}:
+  ${c.safety}
+${dim(`${who} sees the same number. If yours match, no one is in between.`)}${c.pin === 'changed' ? red(`
+Their key changed; after comparing, run: gitcha messages trust ${who}`) : ''}`);
+        return;
+      }
+      case 'trust': {
+        await device.acceptKey(needUser());
+        return out(green(`✓ You now trust ${who}'s current key.`));
+      }
+      case 'block': case 'unblock': {
+        await device.block(needUser(), sub === 'block');
+        return out(green(`✓ ${sub === 'block' ? 'Blocked' : 'Unblocked'} ${who}.`));
+      }
+      default:
+        throw new Error('Usage: gitcha messages [list|setup|unlock|read|send|safety|trust|block|unblock|check-page] (gitcha --help lists them)');
+    }
   },
 
   // `gitcha topoforge <sub>`: TopoForge drawings, both ways. export and import work offline, on files.
