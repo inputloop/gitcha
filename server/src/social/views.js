@@ -119,7 +119,7 @@ export const agentsPage = ({ csrf, agents, keys = [], error, notice, newKey }) =
 ${alert(notice, 'info')}${alert(error)}
 ${newKey ? h`<div class="alert info">Sandbox key for ${newKey.agent} (shown once; Gitcha keeps only its hash):<br><code class="secret">${newKey.token}</code></div>` : ''}
 <div class="account-grid">
-<section>
+<section class="agent-cards">
 ${agents.length ? agents.map((a) => h`<div class="card">
   <h2><a href="/a/${a.handle}">${a.byline}</a></h2>
   <form method="post" action="/agents/${a.handle}/review">${csrfField(csrf)}
@@ -159,13 +159,13 @@ ${newKey ? h`<div class="alert info">Console key "${newKey.name}" (shown once; G
 <div class="account-grid">
 <section>
   <div class="card"><h2>SSH keys</h2><p class="small muted">For git over SSH. A key can belong to you or to one of your agents, which then pushes as itself.</p>
-  <table class="table compact"><tbody>${ssh.map((k) => h`<tr><td><code>${k.fingerprint}</code><br><span class="small muted">${k.type} ${k.title}</span></td><td>${k.holder}</td>
-    <td><form method="post" action="/keys/ssh/remove">${csrfField(csrf)}<input type="hidden" name="id" value="${k.fingerprint}"><button class="btn danger small">Remove</button></form></td></tr>`)}</tbody></table>
+  <div class="table-wrap"><table class="table compact"><tbody>${ssh.map((k) => h`<tr><td><code>${k.fingerprint}</code><br><span class="small muted">${k.type} ${k.title}</span></td><td>${k.holder}</td>
+    <td><form method="post" action="/keys/ssh/remove">${csrfField(csrf)}<input type="hidden" name="id" value="${k.fingerprint}"><button class="btn danger small">Remove</button></form></td></tr>`)}</tbody></table></div>
   <form method="post" action="/keys/ssh">${csrfField(csrf)}<label>Public key <textarea name="key" rows="2" placeholder="ssh-ed25519 AAAA... you@laptop" required></textarea></label>
     <label>For <select name="agent"><option value="">me</option>${agents.map((a) => h`<option value="${a.handle}">${a.byline}</option>`)}</select></label><button class="btn">Add SSH key</button></form></div>
   <div class="card"><h2>GPG keys</h2><p class="small muted">To show which commits carry a good signature. Paste the public key only.</p>
-  <table class="table compact"><tbody>${gpg.map((k) => h`<tr><td><code>${k.fingerprint ?? 'not checked'}</code><br><span class="small muted">${k.uids.join(', ')}</span></td><td>${k.holder}</td>
-    <td><form method="post" action="/keys/gpg/remove">${csrfField(csrf)}<input type="hidden" name="id" value="${k.fingerprint}"><button class="btn danger small">Remove</button></form></td></tr>`)}</tbody></table>
+  <div class="table-wrap"><table class="table compact"><tbody>${gpg.map((k) => h`<tr><td><code>${k.fingerprint ?? 'not checked'}</code><br><span class="small muted">${k.uids.join(', ')}</span></td><td>${k.holder}</td>
+    <td><form method="post" action="/keys/gpg/remove">${csrfField(csrf)}<input type="hidden" name="id" value="${k.fingerprint}"><button class="btn danger small">Remove</button></form></td></tr>`)}</tbody></table></div>
   <form method="post" action="/keys/gpg">${csrfField(csrf)}<label>Public key block <textarea name="key" rows="4" placeholder="-----BEGIN PGP PUBLIC KEY BLOCK-----" required></textarea></label>
     <label>For <select name="agent"><option value="">me</option>${agents.map((a) => h`<option value="${a.handle}">${a.byline}</option>`)}</select></label><button class="btn">Add GPG key</button></form></div>
 </section>
@@ -198,7 +198,7 @@ ${alert(notice, 'info')}${alert(error)}
     ${p.cloneSsh ? h`<pre class="install"><code>git clone ${p.cloneSsh}</code></pre>` : ''}
     <p class="small muted">Over HTTPS, the password is a console key or device token. An agent pushes as itself with its handle as the username, or with its own SSH key.</p></div>
   <div class="card"><h3>Tasks ${p.taskTracking ? '' : h`<span class="badge">off</span>`}</h3>
-    ${tasks.length ? h`<table class="table compact"><tbody>${tasks.map((t) => h`<tr><td><a href="/tasks/${t.id}">${t.title}</a></td><td><span class="badge ${t.kind === 'second_reader' ? 'agent' : ''}">${t.kind.replace('_', ' ')}</span></td><td>${t.status}</td><td class="muted small">${ago(t.createdAt)}</td></tr>`)}</tbody></table>` : h`<p class="muted">No tasks.</p>`}
+    ${tasks.length ? h`<div class="table-wrap"><table class="table compact"><tbody>${tasks.map((t) => h`<tr><td><a href="/tasks/${t.id}">${t.title}</a></td><td><span class="badge ${t.kind === 'second_reader' ? 'agent' : ''}">${t.kind.replace('_', ' ')}</span></td><td>${t.status}</td><td class="muted small">${ago(t.createdAt)}</td></tr>`)}</tbody></table></div>` : h`<p class="muted">No tasks.</p>`}
     ${p.canWrite && p.taskTracking ? h`<form method="post" action="/projects/${p.owner}/${p.name}/tasks" class="row gap">${csrfField(csrf)}<input name="title" placeholder="A task" required><button class="btn small">Add task</button></form>` : ''}</div>
   <div class="card"><h3>Recent pushes</h3>${p.pushes.length ? h`<ul class="small">${p.pushes.map((x) => h`<li>${ago(x.at)} by <code>${x.by}</code>: ${x.commits.map((c) => h`<br><code>${c.sha.slice(0, 10)}</code> ${c.subject} ${c.agent ? h`<a href="/a/${c.agent}" class="badge agent">${c.agent}</a>` : ''} ${c.verified ? h`<span class="badge ok">signed</span>` : ''}`)}</li>`)}</ul>` : h`<p class="muted">Nothing pushed yet.</p>`}</div>
 </section>
@@ -220,8 +220,8 @@ ${alert(notice, 'info')}${alert(error)}
   ${t.commits.length ? h`<p class="small muted">Commits: ${t.commits.slice(0, 20).map((c) => h`<code>${c.slice(0, 10)}</code> `)}</p>` : ''}</div>
   ${t.review ? h`<div class="card"><h3>Review: ${t.review.verdict.replace('_', ' ')}</h3><p class="muted small">by <code>${t.review.by}</code>, ${ago(t.review.at)}. ${t.review.status === 'proposed' ? 'Waiting for a maintainer to accept or reject it.' : `${t.review.status ?? 'accepted'}${t.review.decidedBy ? ` by ${t.review.decidedBy}` : ''}.`}</p><p>${t.review.summary}</p>
     ${t.canDecide && t.review.status === 'proposed' ? h`<form method="post" action="/tasks/${t.id}/decision" class="row">${csrfField(csrf)}<button name="accept" value="yes" class="btn small">Accept the review</button><button name="accept" value="no" class="btn ghost small">Reject it</button></form>` : ''}
-    ${t.review.findings.length ? h`<table class="table compact"><thead><tr><th>Finding</th><th>Severity</th><th>Status</th><th></th></tr></thead><tbody>${t.review.findings.map((f) => h`<tr><td><strong>${f.title}</strong>${f.path ? h`<br><code class="small">${f.path}</code>` : ''}${f.detail ? h`<br><span class="small">${f.detail}</span>` : ''}</td><td>${f.severity}</td><td>${f.status}</td>
-      <td>${t.canDecide && f.status === 'proposed' ? h`<form method="post" action="/tasks/${t.id}/findings/${f.id}" class="row">${csrfField(csrf)}<button name="accept" value="yes" class="btn small">Accept</button><button name="accept" value="no" class="btn ghost small">Reject</button></form>` : ''}</td></tr>`)}</tbody></table>` : ''}</div>` : ''}
+    ${t.review.findings.length ? h`<div class="table-wrap"><table class="table compact"><thead><tr><th>Finding</th><th>Severity</th><th>Status</th><th></th></tr></thead><tbody>${t.review.findings.map((f) => h`<tr><td><strong>${f.title}</strong>${f.path ? h`<br><code class="small">${f.path}</code>` : ''}${f.detail ? h`<br><span class="small">${f.detail}</span>` : ''}</td><td>${f.severity}</td><td>${f.status}</td>
+      <td>${t.canDecide && f.status === 'proposed' ? h`<form method="post" action="/tasks/${t.id}/findings/${f.id}" class="row">${csrfField(csrf)}<button name="accept" value="yes" class="btn small">Accept</button><button name="accept" value="no" class="btn ghost small">Reject</button></form>` : ''}</td></tr>`)}</tbody></table></div>` : ''}</div>` : ''}
   ${t.status === 'claimed' && mine ? h`<form class="card" method="post" action="/tasks/${t.id}/review">${csrfField(csrf)}<h3>Submit the review</h3>
     <label>Verdict <select name="verdict"><option value="approve">approve</option><option value="request_changes">request changes</option><option value="comment">comment</option></select></label>
     <label>What you read and found <textarea name="summary" rows="4" required minlength="20"></textarea></label>
@@ -240,7 +240,7 @@ ${alert(notice, 'info')}${alert(error)}
 export const supportPage = ({ csrf, tickets, tenants, error, notice }) => h`
 <div class="page-head"><h1>Support and feedback</h1></div>${alert(notice, 'info')}${alert(error)}
 <div class="social-grid">
-<section>${tickets.length ? h`<table class="table card"><thead><tr><th>Ticket</th><th>For</th><th>Status</th><th>Changed</th></tr></thead><tbody>${tickets.map((t) => h`<tr><td><a href="/support/${t.id}">${t.id}</a> ${t.title}</td><td>${t.tenant ?? 'you'}</td><td>${t.status.replace('_', ' ')}</td><td class="muted small">${ago(t.updatedAt)}</td></tr>`)}</tbody></table>` : h`<div class="card empty"><p>No tickets yet.</p></div>`}</section>
+<section>${tickets.length ? h`<div class="table-wrap card"><table class="table"><thead><tr><th>Ticket</th><th>For</th><th>Status</th><th>Changed</th></tr></thead><tbody>${tickets.map((t) => h`<tr><td><a href="/support/${t.id}">${t.id}</a> ${t.title}</td><td>${t.tenant ?? 'you'}</td><td>${t.status.replace('_', ' ')}</td><td class="muted small">${ago(t.updatedAt)}</td></tr>`)}</tbody></table></div>` : h`<div class="card empty"><p>No tickets yet.</p></div>`}</section>
 <aside class="card"><h3>Tell us</h3><form method="post" action="/support">${csrfField(csrf)}
   <label>What kind <select name="kind"><option value="feedback">feedback</option><option value="bug">bug</option><option value="question">question</option><option value="request">request</option></select></label>
   <label>About <select name="tenant"><option value="">me</option>${tenants.map((x) => h`<option value="${x}">${x.replace(/^team:/, 'team ')} (billing account)</option>`)}</select></label>

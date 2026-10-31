@@ -178,3 +178,12 @@ test('a package homepage must be an http or https address; any other kind is ref
     assert.match(old, /<dd>javascript:alert\(1\)<\/dd>/);
   } finally { await srv.close(); }
 });
+
+test('a README\'s HTML comments (a licence header, say) are not shown, except inside a code block', async () => {
+  const { markdown } = await import('../src/views.js');
+  const html = markdown('<!-- Licence header: example only -->\n<!--\nmore\n-->\n# Title\n\nText <!-- hidden --> here.\n\n```\n<!-- shown in the example -->\n```\n').__html;
+  assert.doesNotMatch(html, /Licence header|more|hidden/);
+  assert.match(html, /<h2>Title<\/h2>/);
+  assert.match(html, /Text  here\./);
+  assert.match(html, /&lt;!-- shown in the example --&gt;/);
+});

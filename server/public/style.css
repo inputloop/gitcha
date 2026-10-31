@@ -3,7 +3,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later */
 :root {
   --bg: #f6f7fb; --surface: #ffffff; --text: #151a2d; --muted: #646b85; --border: #e3e6f0;
-  --brand: #6a4cf5; --brand-2: #18c5a8; --brand-ink: #ffffff; --danger: #d6365a;
+  --brand: #6a4cf5; --link: #6a4cf5; --brand-2: #18c5a8; --brand-ink: #ffffff; --danger: #d6365a;
   --info-bg: #eef2ff; --info: #3b4bc8; --err-bg: #fdecef; --ok-bg: #e6f8f3; --ok: #0f8a71;
   --code-bg: #f0f2f8; --shadow: 0 1px 2px rgba(20,26,45,.06), 0 6px 24px rgba(20,26,45,.06);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -11,14 +11,15 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0f1220; --surface: #171b2e; --text: #e8eaf4; --muted: #9aa1bd; --border: #2a3050;
+    --bg: #0f1220; --surface: #171b2e; --link: #a99bff; --text: #e8eaf4; --muted: #9aa1bd; --border: #2a3050;
     --info-bg: #1d2350; --info: #b5bdff; --err-bg: #3a1622; --ok-bg: #0f3129; --ok: #5fe0c2; --code-bg: #20253d;
     --shadow: 0 1px 2px rgba(0,0,0,.3), 0 6px 24px rgba(0,0,0,.25);
   }
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); line-height: 1.55; font-size: 15px; }
-a { color: var(--brand); text-decoration: none; }
+/* --link is the link color. It is lighter in dark mode so links stay easy to read on the dark background. */
+a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
 code, pre { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em; }
 code { background: var(--code-bg); padding: .1em .35em; border-radius: 5px; }
@@ -29,9 +30,34 @@ pre code { background: none; padding: 0; }
   background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 2; }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 750; font-size: 19px; color: var(--text); letter-spacing: -.01em; }
 .brand:hover { text-decoration: none; }
-nav { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
 nav a { color: var(--muted); font-weight: 550; }
 nav a.btn { color: var(--brand-ink); }
+.topbar nav a:not(.btn):hover { color: var(--text); }
+
+/* The header links. On wide screens they sit in one row (.nav-wide).
+   On small screens that row hides and a "Menu" button (.nav-menu) opens the same links in a list.
+   The menu is a <details> element, so it opens and closes by touch, mouse or keyboard with no script. */
+.nav-wide { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.nav-menu { display: none; }
+.nav-menu summary { list-style: none; display: inline-flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 14px;
+  border: 1px solid var(--border); border-radius: 10px; font-weight: 650; cursor: pointer; user-select: none; }
+.nav-menu summary::-webkit-details-marker { display: none; }
+.nav-menu summary:hover { border-color: var(--link); }
+/* Three short lines drawn with borders: the usual "menu" picture. It turns into an X when the menu is open. */
+.burger { position: relative; width: 18px; height: 2px; background: currentColor; border-radius: 2px; }
+.burger::before, .burger::after { content: ""; position: absolute; left: 0; width: 18px; height: 2px; background: currentColor; border-radius: 2px; }
+.burger::before { top: -6px; }
+.burger::after { top: 6px; }
+.nav-menu[open] .burger { background: transparent; }
+.nav-menu[open] .burger::before { top: 0; transform: rotate(45deg); }
+.nav-menu[open] .burger::after { top: 0; transform: rotate(-45deg); }
+/* The open menu drops down under the top bar and is as wide as the screen. */
+.nav-menu nav { position: absolute; left: 0; right: 0; top: 100%; display: flex; flex-direction: column; padding: 6px 16px 14px;
+  background: var(--surface); border-bottom: 1px solid var(--border); box-shadow: var(--shadow); }
+.nav-menu nav a, .nav-menu nav button.link { display: flex; align-items: center; min-height: 48px; width: 100%; color: var(--text);
+  border-bottom: 1px solid var(--border); font-size: 17px; text-align: left; }
+.nav-menu nav a.btn { justify-content: center; color: var(--brand-ink); border: 0; margin-top: 12px; font-size: 16px; }
+.nav-menu nav form.inline { display: block; }
 form.inline { display: inline; margin: 0; }
 button.link { background: none; border: 0; color: var(--muted); font: inherit; font-weight: 550; cursor: pointer; padding: 0; }
 button.link:hover { color: var(--text); }
@@ -54,7 +80,8 @@ h3 { font-size: 15px; margin: 0 0 8px; }
 .btn:hover { filter: brightness(1.07); text-decoration: none; }
 .btn.block { width: 100%; margin-top: 6px; }
 .btn.small { padding: 6px 12px; font-size: 13px; }
-.btn.ghost { background: transparent; color: var(--brand); border-color: var(--border); }
+.btn.ghost { background: transparent; color: var(--link); border-color: var(--border); }
+.btn.ghost:hover { border-color: var(--link); }
 .btn.danger { background: var(--danger); }
 
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px; box-shadow: var(--shadow); margin-bottom: 18px; }
@@ -69,7 +96,7 @@ label { display: block; font-weight: 600; margin: 0 0 14px; }
 input[type=text], input[type=password], input[type=email], input:not([type]), input[inputmode] {
   display: block; width: 100%; margin-top: 6px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
   background: var(--bg); color: var(--text); font: inherit; }
-input:focus { outline: 2px solid var(--brand); outline-offset: 1px; }
+input:focus, textarea:focus, select:focus { outline: 2px solid var(--brand); outline-offset: 1px; }
 input.otp { font-family: ui-monospace, monospace; font-size: 24px; letter-spacing: .35em; text-align: center; }
 .hint { color: var(--muted); font-size: 13px; margin-top: -6px; }
 
@@ -79,7 +106,7 @@ input.otp { font-family: ui-monospace, monospace; font-size: 24px; letter-spacin
 .steps { display: flex; gap: 6px; list-style: none; padding: 0; margin: 0 0 18px; font-size: 12px; font-weight: 650; counter-reset: s; }
 .steps li { flex: 1; padding: 6px 0; border-top: 3px solid var(--border); color: var(--muted); counter-increment: s; }
 .steps li::before { content: counter(s) ". "; }
-.steps li.active { border-color: var(--brand); color: var(--brand); }
+.steps li.active { border-color: var(--brand); color: var(--link); }
 .steps li.done { border-color: var(--brand-2); color: var(--ok); }
 .enroll { display: grid; grid-template-columns: 220px 1fr; gap: 24px; align-items: start; }
 .qr { background: #fff; padding: 10px; border-radius: 12px; border: 1px solid var(--border); }
@@ -103,9 +130,9 @@ input.otp { font-family: ui-monospace, monospace; font-size: 24px; letter-spacin
 .search input[name], .search .btn { margin: 0; }
 .pkg-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
 .pkg { display: block; color: var(--text); margin: 0; transition: border-color .15s; }
-.pkg:hover { border-color: var(--brand); text-decoration: none; }
+.pkg:hover { border-color: var(--link); text-decoration: none; }
 .pkg-top { display: flex; justify-content: space-between; align-items: center; }
-.pkg-name { font-size: 17px; color: var(--brand); }
+.pkg-name { font-size: 17px; color: var(--link); }
 .pkg p { margin: 8px 0 12px; color: var(--muted); }
 .meta { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
 .empty { text-align: center; padding: 40px; }
@@ -121,7 +148,7 @@ pre.install { margin: 0 0 8px; }
 .versions tr.sha code { font-size: 11.5px; }
 .versions .yanked { opacity: .55; text-decoration: line-through; }
 
-.account-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; }
+.account-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 18px; align-items: start; }
 .toggle { display: flex; gap: 14px; align-items: flex-start; font-weight: 400; padding: 12px 0; border-bottom: 1px solid var(--border); cursor: pointer; }
 .toggle input { position: absolute; opacity: 0; }
 .switch { flex: 0 0 42px; height: 24px; border-radius: 999px; background: var(--border); position: relative; transition: background .15s; margin-top: 2px; }
@@ -141,7 +168,6 @@ pre.install { margin: 0 0 8px; }
   .qr { max-width: 240px; }
   .topbar { padding: 12px 16px; }
   .hero h1 { font-size: 32px; }
-  .table { display: block; overflow-x: auto; }
 }
 
 /* teams */
@@ -168,6 +194,7 @@ form.row > .btn { margin-top: 0; }
 .tabs { display: flex; gap: 6px; }
 .tabs a { padding: 6px 12px; border-radius: 999px; color: var(--muted); font-weight: 600; }
 .tabs a.on { background: var(--info-bg); color: var(--info); }
+.tabs a:not(.on):hover { background: var(--code-bg); color: var(--text); text-decoration: none; }
 .post { display: flex; gap: 14px; align-items: flex-start; }
 .post-main { flex: 1; min-width: 0; }
 .post h3 { margin: 4px 0 6px; font-size: 17px; }
@@ -177,8 +204,8 @@ form.row > .btn { margin-top: 0; }
 .votes { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 34px; }
 .votes form { margin: 0; }
 .vote { background: none; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); cursor: pointer; width: 28px; height: 22px; font-size: 11px; line-height: 1; }
-.vote.on, .vote:hover { color: var(--brand); border-color: var(--brand); }
-.tag { color: var(--brand); font-weight: 600; }
+.vote.on, .vote:hover { color: var(--link); border-color: var(--link); }
+.tag { color: var(--link); font-weight: 600; }
 .author { font-weight: 650; }
 .badge.agent { background: #e7f8f4; color: #0d6e5b; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .badge.agent { background: #0f3129; color: #5fe0c2; } }
@@ -197,3 +224,108 @@ textarea { display: block; width: 100%; margin-top: 6px; padding: 10px 12px; bor
 .bylines li { margin: 6px 0; }
 .card.staff { border-left: 4px solid var(--brand); }
 @media (max-width: 820px) { .social-grid { grid-template-columns: 1fr; } .replies { margin-left: 12px; } }
+
+/* ---- fitting every screen -------------------------------------------------------------
+   Phones are up to about 600px wide, tablets up to about 1100px, and desktops are wider.
+   Each rule below says which screens it is for. */
+
+/* Wide tables sit in a box that scrolls sideways by itself, so the page never does. */
+.table-wrap { overflow-x: auto; max-width: 100%; }
+.table-wrap.card { padding: 8px 12px; }
+.table tbody tr:hover { background: color-mix(in srgb, var(--code-bg) 60%, transparent); }
+
+/* Grid columns may shrink below the width of their content. Without this, one long line of code
+   would push the whole page wider than the screen. */
+.pkg-grid > *, .social-grid > *, .account-grid > *, .profile > * { min-width: 0; }
+.pkg-list { grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); }
+.features { grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); }
+/* Long words, links and hashes break onto the next line instead of running off the edge. */
+.post-main { overflow-wrap: anywhere; }
+.card p, .kv dd { overflow-wrap: break-word; }
+:not(pre) > code { overflow-wrap: anywhere; }
+/* Inside a table, short codes stay on one line. The table box scrolls instead. */
+.table td code, .table th { overflow-wrap: normal; white-space: nowrap; }
+pre { max-width: 100%; }
+img, video, audio { max-width: 100%; }
+
+/* Keep lines of reading text to about 75 letters, so long paragraphs stay easy to read on big screens. */
+.readme p, .readme li, .post .body, .lead, .card > p { max-width: 75ch; }
+.hero .lead { max-width: 620px; }
+
+/* A clear ring shows which thing has keyboard focus. It shows for keyboard use, not for mouse clicks. */
+a:focus-visible, button:focus-visible, summary:focus-visible, select:focus-visible, .btn:focus-visible {
+  outline: 3px solid var(--link); outline-offset: 2px; border-radius: 6px; }
+button.link:focus-visible { color: var(--text); }
+
+/* Tablets and small laptops: the side column gets a bit narrower so the main column keeps its room. */
+@media (max-width: 1100px) {
+  .social-grid { grid-template-columns: 1fr 260px; }
+  .pkg-grid { grid-template-columns: 1fr 280px; }
+}
+
+/* Up to 920px the header links do not fit in one row, so the "Menu" button takes their place. */
+@media (max-width: 920px) {
+  .nav-wide { display: none; }
+  .nav-menu { display: block; }
+}
+
+/* Phones and narrow tablets in portrait. */
+@media (max-width: 700px) {
+  .social-grid, .pkg-grid, .account-grid { grid-template-columns: 1fr; }
+}
+
+/* Phones: bigger text, full width forms, and things to tap that are at least 44px tall
+   (about the size of a fingertip). Touch screens of any size also get the big tap targets. */
+@media (max-width: 600px) {
+  body { font-size: 16px; }
+  .small, .hint, .meta, footer { font-size: 14px; }
+  .table.compact td { font-size: 14px; }
+  main { padding: 22px 16px 48px; }
+  h1 { font-size: 24px; }
+  .hero { padding: 20px 0 10px; }
+  .hero h1 { font-size: 30px; }
+  .cta { flex-direction: column; }
+  .card { padding: 16px; }
+  .auth-card { padding: 20px 16px; margin: 0 auto; border-radius: 14px; }
+  .page-head { align-items: flex-start; }
+  .page-head > form, .search { width: 100%; min-width: 0; }
+  .search input[name] { flex: 1; min-width: 0; }
+  /* Forms use the whole width, and buttons that end a form stretch across it. */
+  form > .btn, form > button.btn { width: 100%; }
+  form.row, .row.gap { flex-wrap: wrap; }
+  form.row > select, form.row > input { flex: 1 1 140px; }
+  .add-member, .add-member label { width: 100%; }
+  .add-member select { width: 100%; }
+  select { width: 100%; }
+  .tabs a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; }
+  .replies { margin-left: 0; padding-left: 10px; border-left: 2px solid var(--border); }
+  .profile { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .post { gap: 10px; }
+  .codes code { font-size: 14px; }
+  .steps { font-size: 11px; }
+  footer { padding: 20px 16px; }
+  footer a { display: inline-block; padding: 10px 4px; }
+}
+@media (max-width: 600px), (pointer: coarse) {
+  .btn, button, select, summary,
+  input[type=text], input[type=password], input[type=email], input:not([type]), input[inputmode] { min-height: 44px; }
+  .btn.small { padding: 8px 14px; font-size: 14px; }
+  /* Vote buttons become fingertip-sized squares. */
+  .votes { min-width: 44px; }
+  .vote { width: 44px; height: 44px; font-size: 14px; }
+  .toggle { min-height: 44px; }
+}
+
+/* Large desktops: the page grows to use the extra width, and lists gain columns. */
+@media (min-width: 1400px) {
+  main.wide { max-width: 1280px; }
+  .topbar { padding: 12px 40px; }
+  .social-grid { grid-template-columns: 1fr 320px; }
+  .pkg-grid { grid-template-columns: 1fr 360px; }
+  .pkg-list.single { grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
+  .agent-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 0 18px; align-items: start; }
+}
+@media (min-width: 1800px) {
+  main.wide { max-width: 1320px; }
+  main { max-width: 820px; }
+}

@@ -16,6 +16,7 @@
     "start": "npm --workspace server start",
     "test": "npm --workspace server test && npm --workspace extension test && npm --workspace runner test && npm --workspace medic test && npm --workspace omni test",
     "screenshots": "node scripts/screenshots.mjs",
+    "check:responsive": "node scripts/responsive-check.mjs",
     "docs": "node scripts/how-it-works.mjs",
     "docs:check": "node scripts/how-it-works.mjs --check"
   },

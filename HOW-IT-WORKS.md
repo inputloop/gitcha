@@ -82,17 +82,17 @@ with [`extension/lib/manifest.js`](extension/lib/manifest.js).
    key yet, it makes one, but [`config.js:73`](server/src/config.js#L73) refuses
    to do that when the database already has accounts: a new key could never
    open the old secrets, so it is safer to stop.
-3. [`app.js:56`](server/src/app.js#L56) builds every part of the server (the
+3. [`app.js:58`](server/src/app.js#L58) builds every part of the server (the
    "services") and connects them. The order matters, because some services need
    others. For example, the task service needs the projects service, and the
    social feed listens for pushes from projects.
 4. `createApp` then registers the routes (the URL patterns each part answers),
-   starting at [`app.js:98`](server/src/app.js#L98).
+   starting at [`app.js:100`](server/src/app.js#L100).
 5. The server listens on `127.0.0.1:4873` by default, in plain HTTP. Only a TLS
    proxy (such as Caddy) should face the internet: see "The reverse proxy"
    below.
 6. A timer runs every 30 seconds to clean up: it ends old jobs and expired
-   sign-ups ([`app.js:168`](server/src/app.js#L168)).
+   sign-ups ([`app.js:172`](server/src/app.js#L172)).
 
 If something goes badly wrong later, [`http.js:112`](server/src/http.js#L112)
 logs the error and keeps serving, instead of letting one bad request stop the
@@ -101,7 +101,7 @@ whole server.
 ### The reverse proxy
 
 The server never does TLS. It uses Node's plain `http` module
-([`app.js:158`](server/src/app.js#L158)), and the reverse proxy in front of
+([`app.js:162`](server/src/app.js#L162)), and the reverse proxy in front of
 it (Caddy, nginx, Apache or HAProxy) does the https, holds the certificates
 and owns ports 80 and 443. The server reads three things the proxy tells it:
 
@@ -125,7 +125,7 @@ the settings for running without one.
 ## 3. How a request is handled
 
 Every HTTP request goes through one function, set up in
-[`app.js:56`](server/src/app.js#L56):
+[`app.js:58`](server/src/app.js#L58):
 
 1. It works out the address of the person calling with
    [`http.js:275`](server/src/http.js#L275). Behind a proxy, the real address is in the
@@ -192,7 +192,7 @@ memory, and every change goes through [`store.js:203`](server/src/store.js#L203)
    [`store.js:232`](server/src/store.js#L232) reloads the last good copy, so memory and
    disk agree again. A half-made change can never be saved by a later write.
    This is why `createApp` saves once at start-up
-   ([`app.js:167`](server/src/app.js#L167)): from then on every collection
+   ([`app.js:171`](server/src/app.js#L171)): from then on every collection
    is on disk, so going back to the file never loses one.
 
 Two rules follow for code that uses the store:
@@ -310,7 +310,7 @@ The browser pages are in [`server/src/web.js`](server/src/web.js) (the routes) a
   only inserted as raw HTML when the code wraps it in `raw(...)`, and that is
   done only for text Gitcha made itself (like the QR code). So a username such
   as `<script>` shows up as text.
-- **README files** are turned into HTML by [`views.js:187`](server/src/views.js#L187),
+- **README files** are turned into HTML by [`views.js:192`](server/src/views.js#L192),
   which escapes the text first and allows only `http` and `https` links.
 - **Forms are protected from CSRF** (a trick where another site makes your
   browser send a request to Gitcha). Every form carries a token tied to your
@@ -643,6 +643,27 @@ session's code time, so making keys never stretches the follow-up checks.
 Tasks of public projects are copied to NextTime, through
 [`nexttime.js:24`](server/src/social/nexttime.js#L24). Private projects' tasks
 never leave the server.
+
+### Encrypted direct messages
+
+Messages are encrypted in the browser, so most of the work is in
+[`server/public/dm.js`](server/public/dm.js), and the server side is small:
+
+- [`dm.js:44`](server/src/social/dm.js#L44) stores public keys
+  ([`dm.js:33`](server/src/social/dm.js#L33) refuses anything that is not a
+  P-256 public key), locked backups, ciphertext, blocks and daily counts.
+  [`dm.js:121`](server/src/social/dm.js#L121) checks what it can without the key: the
+  shape and size of the ciphertext, that the message names both people's
+  current keys, blocks and the 300-a-day limit.
+- [`dm-web.js:17`](server/src/social/dm-web.js#L17) serves the Messages page and the
+  `/api/v1/dm/` routes. Every call needs the session and the CSRF header (or a
+  device token); setting a key and fetching the backup need a fresh code.
+- In the browser, [`dm.js:97`](server/public/dm.js#L97) makes the key pair and the
+  optional passphrase-locked backup, [`dm.js:131`](server/public/dm.js#L131)
+  turns two keys into an AES-GCM key, and
+  [`dm.js:185`](server/public/dm.js#L185) decrypts a conversation, checks the
+  contact's key against the one it remembers, and shows the safety number
+  ([`dm.js:146`](server/public/dm.js#L146)).
 
 ### Posts and media
 

@@ -644,6 +644,27 @@ Tasks of public projects are copied to NextTime, through
 [[server/src/social/nexttime.js#NextTimeClient]]. Private projects' tasks
 never leave the server.
 
+### Encrypted direct messages
+
+Messages are encrypted in the browser, so most of the work is in
+[[server/public/dm.js]], and the server side is small:
+
+- [[server/src/social/dm.js#DmService]] stores public keys
+  ([[server/src/social/dm.js#checkPublicKey]] refuses anything that is not a
+  P-256 public key), locked backups, ciphertext, blocks and daily counts.
+  [[server/src/social/dm.js#send]] checks what it can without the key: the
+  shape and size of the ciphertext, that the message names both people's
+  current keys, blocks and the 300-a-day limit.
+- [[server/src/social/dm-web.js#registerDm]] serves the Messages page and the
+  `/api/v1/dm/` routes. Every call needs the session and the CSRF header (or a
+  device token); setting a key and fetching the backup need a fresh code.
+- In the browser, [[server/public/dm.js#makeKey]] makes the key pair and the
+  optional passphrase-locked backup, [[server/public/dm.js#conversationKey]]
+  turns two keys into an AES-GCM key, and
+  [[server/public/dm.js#openThread]] decrypts a conversation, checks the
+  contact's key against the one it remembers, and shows the safety number
+  ([[server/public/dm.js#safetyNumber]]).
+
 ### Posts and media
 
 [[server/src/social/social.js#SocialService]] keeps the crawl: posts, replies,

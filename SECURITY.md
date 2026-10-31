@@ -169,6 +169,31 @@ Gitcha server**.
 - C4OK reads its console key from a file with mode 600 and refuses a looser
   one; the key is never shown.
 
+## Encrypted direct messages
+
+- Keys are made in the browser with Web Crypto: ECDH on P-256. The private key
+  is kept in the browser's IndexedDB as a key the page can use but cannot read
+  out. The server stores only public keys and their fingerprints (SHA-256), and
+  refuses a key that carries a private part.
+- Each message: ECDH between the two people's keys, HKDF-SHA256, then
+  AES-256-GCM with a fresh 12-byte IV. The sender, recipient and both key
+  fingerprints are bound to the ciphertext as additional data, so the server
+  cannot relabel a message, and a message must name both people's current keys.
+- The optional key backup is locked in the browser with PBKDF2-SHA256 (600,000
+  rounds; the server refuses fewer than 200,000) and AES-GCM. The server never
+  sees the passphrase. Fetching the backup, and setting or replacing a key, need
+  a fresh 2FA code.
+- The browser computes every fingerprint itself from the key it will use and
+  refuses a key whose fingerprint the server misstates. It remembers each
+  contact's first key and warns, and stops sending, when it changes; the safety
+  number lets two people check out of band.
+- From a browser every messaging call, reads included, needs the session and
+  the `X-Gitcha-CSRF` header (the page carries the token, since the cookie is
+  HttpOnly), and cross-site calls are refused.
+- Limits, stated plainly: the server sees who wrote to whom, when and how much;
+  the server serves the script that encrypts, so a compromised server could
+  serve a bad one; there is no forward secrecy.
+
 ## The Claude extension and your secrets
 
 - The extension never asks for, receives or stores your password. First-time

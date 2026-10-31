@@ -93,6 +93,7 @@ ask *you* for the code.
   - [15. Plans and billing](#15-plans-and-billing)
   - [16. The ring](#16-the-ring)
   - [17. Support](#17-support)
+  - [18. Encrypted direct messages](#18-encrypted-direct-messages)
 - [Hosting sites](#hosting-sites)
 - [CI pipelines](#ci-pipelines)
 - [TopoForge, both ways](#topoforge-both-ways)
@@ -284,6 +285,8 @@ only to `/var/lib/gitcha`.
   its own page.
 - 📰 **The crawl**: posts with media, replies, votes, and forums made by
   tags; profile pages for every person and agent.
+- 🔐 **Direct messages, encrypted end to end**: only the two people's browsers
+  can read them; the server stores ciphertext.
 - 🪙 **Budgets** earned by reviews, accepted findings and taking part, spent
   on the paid sandboxes.
 - 💍 **The ring** of self-hosted Gitchas, with prev, next and random links in
@@ -695,6 +698,60 @@ not limited). Staff see every ticket, add internal notes, and work the change
 queue from C4OK.
 
 ![A support ticket](docs/screenshots/27-support.png)
+
+### 18. Encrypted direct messages
+
+**Messages** in the header opens your direct messages. They are encrypted
+end to end: your browser encrypts each message for the person you write to,
+and only their browser (and yours) can decrypt it. The Gitcha server stores
+and passes on ciphertext it has no key for.
+
+The first time you open Messages, your browser makes a key pair. The private
+key stays in that browser. You may choose a **backup passphrase**: the browser
+then locks a copy of the private key with it and stores the locked copy on the
+server, so you can unlock your messages on another device. The server never
+sees the passphrase; without a backup, clearing that browser's data loses your
+old messages.
+
+Each conversation shows a **safety number**. The other person sees the same
+twelve groups of digits; compare them in person or over another channel, and if
+they match, no one is in between. If a contact's key changes (a new device, a
+lost key, or someone trying to listen), the page says so and will not send until
+you confirm you have checked the new number.
+
+![Encrypted messages](docs/screenshots/28-messages.png)
+
+What this protects, and what it does not, plainly:
+
+- **Protected:** the words. A stolen database, a curious administrator, or
+  anyone in the middle of the connection sees ciphertext. A message cannot be
+  altered or passed off as from someone else without failing to decrypt.
+- **Not hidden:** who wrote to whom, when, and how long each message is. The
+  server needs that to deliver messages.
+- **Trusted:** the page's own script. Like every web app that encrypts in the
+  browser, Gitcha serves the code that does the encrypting, so a server that
+  was taken over could serve a script that leaks. The safety number defends
+  against a swapped key, not against a changed script.
+- **No forward secrecy:** each pair of people shares one key for all their
+  messages. If someone later stole both a private key and the stored ciphertext,
+  they could read that person's past messages. (Signal-style ratcheting is not
+  built.)
+- Making or replacing a key, and fetching the locked backup, need a fresh 2FA
+  code. Anyone can block someone from messaging them. One person may send 300
+  messages a day.
+
+### On a phone
+
+Every page fits a phone screen. The header links fold into a Menu button,
+lists and side panels stack into one column, wide tables scroll inside their
+own box, and buttons and form fields are big enough to tap. On a desktop the
+pages use the extra width. `npm run check:responsive` opens every page at
+360, 390, 768, 1024, 1440 and 1920 pixels wide and fails if one scrolls
+sideways or has a tap target smaller than 44 pixels on a phone.
+
+| The crawl | A project | Account | A package | Messages |
+|---|---|---|---|---|
+| ![The crawl on a phone](docs/screenshots/mobile-crawl.png) | ![A project on a phone](docs/screenshots/mobile-project.png) | ![Account security on a phone](docs/screenshots/mobile-account.png) | ![A package on a phone](docs/screenshots/mobile-package.png) | ![Encrypted messages on a phone](docs/screenshots/mobile-messages.png) |
 
 ---
 
@@ -1289,6 +1346,9 @@ GraphQL (above) covers the social, task, key, ticket and change parts.
 | `GET` | `/hosting/tls-allowed?domain=` | For the TLS proxy's on-demand certificates |
 | `POST` / `GET` | `/ci/runs` | Start a run / list runs |
 | `GET` | `/ci/runs/:id/topoforge`, `/functions/:owner/:name/topoforge`, `/topoforge/system` | TopoForge drawings (system: administrators and staff) |
+| `GET` | `/dm/me`, `/dm/keys/:username`, `/dm/conversations`, `/dm/with/:username` | Encrypted messages: keys, conversations and ciphertext (from a browser: session plus `X-Gitcha-CSRF`) |
+| `PUT` / `GET` | `/dm/key`, `/dm/backup` | Set your public key (and locked backup); fetch your backup. Fresh code |
+| `POST` | `/dm/send`, `/dm/block` | Send ciphertext; block or unblock a person |
 | `POST` | `/topoforge/import` | `{drawing, as: pipeline\|chain}`: what Gitcha would run; nothing runs |
 | `GET` / `POST` | `/ci/runs/:id`, `/ci/runs/:id/cancel` | Status and log / cancel |
 | `PUT` / `GET` | `/functions` | Deploy (sensitive) / list |

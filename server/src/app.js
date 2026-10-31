@@ -35,6 +35,8 @@ import { makePrincipals } from './social/principal.js';
 import { makeGraphql } from './social/graphql.js';
 import { registerSocialApi } from './social/api.js';
 import { registerSocialWeb } from './social/web.js';
+import { DmService } from './social/dm.js';
+import { registerDm } from './social/dm-web.js';
 import { ProjectService } from './git/projects.js';
 import { registerGit } from './git/http.js';
 import { OpsService } from './ops/ops.js';
@@ -46,7 +48,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(here, '..', 'public');
 const VERSION = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8')).version;
 // The only file types served from the public/ folder, and the Content-Type sent for each.
-const MIME = { '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png' };
+const MIME = { '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.js': 'text/javascript; charset=utf-8' };
 
 /**
  * Create the app from a loaded config (see config.js). Tests may pass a fake `clock`, a fake DNS
@@ -106,6 +108,8 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
   registerSocialApi(router, services);
   services.web = registerWeb(router, { auth, packages, teams, config, billing: services.billing });
   registerSocialWeb(router, services);
+  services.dm = new DmService({ store, clock });
+  registerDm(router, services);
 
   // Static files (CSS, images). path.basename strips any folder part, so a request cannot reach
   // files outside public/, and only the types listed in MIME are served.

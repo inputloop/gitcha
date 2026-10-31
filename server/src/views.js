@@ -33,7 +33,12 @@ const bytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(
 
 // The page frame around every page: head, top bar (with a sign-out form when signed in), main, footer.
 // `body` should come from h``, because out() escapes plain strings.
+// The same links show twice: in a row on wide screens, and in a "Menu" that opens on small screens.
+// The CSS shows only one of the two at a time, so a screen reader hears them once.
 export function layout({ title, user, csrf, body, wide = false }) {
+  const links = user ? `<a href="/crawl">Crawl</a><a href="/projects">Projects</a><a href="/packages">Packages</a><a href="/agents">Agents</a><a href="/teams">Teams</a><a href="/messages">Messages</a><a href="/account">Account</a>
+    <form method="post" action="/logout" class="inline"><input type="hidden" name="_csrf" value="${esc(csrf)}"><button class="link">Sign out (${esc(user.username)})</button></form>`
+    : `<a href="/login">Sign in</a><a class="btn small" href="/register">Create account</a>`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -46,11 +51,11 @@ export function layout({ title, user, csrf, body, wide = false }) {
 <body>
 <header class="topbar">
   <a class="brand" href="/"><img src="/static/logo.svg" alt="" width="28" height="28"> Gitcha</a>
-  <nav>
-    ${user ? `<a href="/crawl">Crawl</a><a href="/projects">Projects</a><a href="/packages">Packages</a><a href="/agents">Agents</a><a href="/teams">Teams</a><a href="/account">Account</a>
-    <form method="post" action="/logout" class="inline"><input type="hidden" name="_csrf" value="${esc(csrf)}"><button class="link">Sign out (${esc(user.username)})</button></form>`
-    : `<a href="/login">Sign in</a><a class="btn small" href="/register">Create account</a>`}
-  </nav>
+  <nav class="nav-wide" aria-label="Main">${links}</nav>
+  <details class="nav-menu">
+    <summary><span class="burger" aria-hidden="true"></span>Menu</summary>
+    <nav aria-label="Main menu">${links}</nav>
+  </details>
 </header>
 <main class="${wide ? 'wide' : ''}">${out(body)}</main>
 <footer><a href="/ring/prev" rel="prev">&#9664; prev</a> · <a href="/ring">Gitcha ring</a> · <a href="/ring/next" rel="next">next &#9654;</a> · <a href="/ring/random">random</a><br>Gitcha · free software forge and registry · <a href="/support">Support</a> · <a href="/api/v1/health">API status</a></footer>
@@ -185,7 +190,13 @@ ${results.map((p) => h`<a class="pkg card" href="/packages/${encodeURIComponent(
  * so README text can never add its own HTML. Links must start with http:// or https://.
  */
 export function markdown(src) {
-  const lines = String(src).replace(/\r/g, '').split('\n');
+  // HTML comments (such as a README's licence header) are notes for the file's readers, not for the page:
+  // they are left out, except inside a ``` code block, where they are part of the example and stay as text.
+  let code = false;
+  const cleaned = String(src).replace(/\r/g, '').split(/^(```.*)$/m)
+    .map((part, i) => { if (i % 2) { code = !code; return part; } return code ? part : part.replace(/<!--[\s\S]*?-->\n?/g, ''); })
+    .join('');
+  const lines = cleaned.split('\n');
   let html = '', inCode = false, inList = false, para = [];
   const inline = (s) => esc(s)
     .replace(/`([^`]+)`/g, '<code>$1</code>')
@@ -296,7 +307,7 @@ ${alert(notice, 'info')}${alert(error)}
 </div>
 <section class="card">
   <h2>Signed-in browsers & devices</h2>
-  <table class="table">
+  <div class="table-wrap"><table class="table">
     <thead><tr><th>Name</th><th>Type</th><th>Last used</th><th>Last 2FA</th><th></th></tr></thead>
     <tbody>
     ${sessions.map((s) => h`<tr>
@@ -305,7 +316,7 @@ ${alert(notice, 'info')}${alert(error)}
       <td>${s.hash === currentHash ? '' : h`<form method="post" action="/account/sessions/${s.hash.slice(0, 16)}/revoke">${csrfField(csrf)}<button class="btn danger small">Revoke</button></form>`}</td>
     </tr>`)}
     </tbody>
-  </table>
+  </table></div>
 </section>
 ${activitySection('Recent security activity', 'Things done with your account: sign-ins, codes, devices, settings, publishing.', activity.security, 'activity')}
 ${activity.others.total ? activitySection('Changes other people made to you', 'A team owner adding or re-roling you. Kept apart so it cannot bury your own activity.', activity.others) : ''}
@@ -319,9 +330,9 @@ function activitySection(title, help, list, id) {
   return h`<section class="card"${id ? raw(` id="${id}"`) : ''}>
   <h2>${title}</h2>
   <p class="small muted">${help}</p>
-  <table class="table compact"><tbody>
+  <div class="table-wrap"><table class="table compact"><tbody>
   ${list.rows.map(activityRow)}
-  </tbody></table>
+  </tbody></table></div>
   ${list.pages > 1 ? h`<p class="small muted">Page ${list.page} of ${list.pages}: ${list.page > 1 ? link(list.page - 1, '‹ Newer') : ''} ${list.page < list.pages ? link(list.page + 1, 'Older ›') : ''}</p>` : ''}
 </section>`;
 }
@@ -377,9 +388,9 @@ ${alert(notice, 'info')}${alert(error)}
   <section class="card">
     <h2>Shared packages</h2>
     ${packages.length === 0 ? h`<p class="muted">No packages yet. Publish with <code>gitcha publish --team ${team.name}</code>, or open one of your packages and choose <em>Share with a team</em>.</p>` : ''}
-    <table class="table"><tbody>
+    <div class="table-wrap"><table class="table"><tbody>
     ${packages.map((p) => h`<tr><td><a href="/packages/${p.name}"><strong>${p.name}</strong></a> <span class="badge">${p.latest ? `v${p.latest}` : 'no release'}</span>${p.visibility === 'team' ? h` <span class="badge lock">🔒 team only</span>` : ''}<br><span class="muted small">${p.description}</span></td><td class="muted small">${p.downloads} install${p.downloads === 1 ? '' : 's'}</td></tr>`)}
-    </tbody></table>
+    </tbody></table></div>
   </section>
   <section class="card">
     <h2>Roles</h2>
@@ -388,7 +399,7 @@ ${alert(notice, 'info')}${alert(error)}
 </div>
 <section class="card">
   <h2>Members</h2>
-  <table class="table">
+  <div class="table-wrap"><table class="table">
     <thead><tr><th>User</th><th>Role</th><th>Added</th><th></th></tr></thead>
     <tbody>
     ${team.members.map((m) => h`<tr>
@@ -401,7 +412,7 @@ ${alert(notice, 'info')}${alert(error)}
       <td>${isOwner || m.username === me.username ? h`<form method="post" action="/teams/${team.name}/members/${m.username}/remove">${csrfField(csrf)}<button class="btn danger small">${m.username === me.username ? 'Leave' : 'Remove'}</button></form>` : ''}</td>
     </tr>`)}
     </tbody>
-  </table>
+  </table></div>
   ${isOwner ? h`<form method="post" action="/teams/${team.name}/members" class="add-member">
     ${csrfField(csrf)}
     <label>Add a member <input name="username" placeholder="username" required></label>
@@ -453,9 +464,9 @@ ${view.enabled ? '' : h`<div class="alert info">Billing is switched off on this 
 <div class="account-grid">
   <section class="card">
     <h2>${view.planName} plan <span class="badge">${view.subscription ? `${view.subscription.status} via ${view.subscription.provider}` : 'no subscription'}</span></h2>
-    <table class="table compact"><thead><tr><th>This month</th><th>Used</th><th>Limit</th></tr></thead><tbody>
+    <div class="table-wrap"><table class="table compact"><thead><tr><th>This month</th><th>Used</th><th>Limit</th></tr></thead><tbody>
     ${Object.entries({ fn_invocations: 'Function invocations', build_minutes: 'Build minutes', sites: 'Sites (total)' }).map(([k, label]) => h`<tr><td>${label}</td><td>${fmt(view.usage[k] ?? 0)}</td><td>${fmt(view.limits?.[k])}</td></tr>`)}
-    </tbody></table>
+    </tbody></table></div>
     ${view.subscription && ['active', 'past_due'].includes(view.subscription.status) ? h`<div class="row gap">
       ${view.subscription.provider === 'stripe' ? h`<form method="post" action="/billing/portal">${csrfField(csrf)}<input type="hidden" name="owner" value="${view.owner}"><button class="btn ghost">Update card and invoices</button></form>` : ''}
       <form method="post" action="/billing/cancel">${csrfField(csrf)}<input type="hidden" name="owner" value="${view.owner}"><button class="btn danger">Cancel subscription</button></form>
