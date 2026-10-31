@@ -67,6 +67,11 @@ export class GitchaClient {
   }
 
   health() { return this.request('GET', '/api/v1/health'); }
+  // TopoForge drawings (see server/src/topoforge.js): a build, a function, the instance; and a drawing checked.
+  topoforgeBuild(id) { return this.request('GET', `/api/v1/ci/runs/${encodeURIComponent(id)}/topoforge`); }
+  topoforgeFunction(owner, name) { return this.request('GET', `/api/v1/functions/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/topoforge`); }
+  topoforgeSystem() { return this.request('GET', '/api/v1/topoforge/system'); }
+  topoforgeImport(drawing, as = 'pipeline') { return this.request('POST', '/api/v1/topoforge/import', { body: { drawing, as } }); }
   login(username, password) { return this.request('POST', '/api/v1/auth/login', { body: { username, password } }); }
   loginMfa(ticket, code, deviceName) { return this.request('POST', '/api/v1/auth/login/mfa', { body: { ticket, code, device_name: deviceName } }); }
   stepUp(code) { return this.request('POST', '/api/v1/auth/step-up', { body: { code } }); }

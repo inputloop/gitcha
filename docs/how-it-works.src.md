@@ -498,6 +498,34 @@ A pipeline can be written three ways, and
   ([[server/src/compute/formats.js#pipelineFromTopoForge]],
   [[server/src/compute/formats.js#topoOrder]]).
 
+The org and TopoForge readers themselves are in [[extension/lib/formats.js]],
+which the CLI shares, so a drawing means the same thing to `gitcha topoforge
+import` on a laptop as to the server. A mistake in what someone wrote is a
+[[extension/lib/formats.js#FormatError]]; the server's `formats.js` turns it
+into a 400 reply.
+
+### TopoForge, both ways
+
+Gitcha also writes TopoForge drawings, with [[extension/lib/topoforge.js]]:
+
+- [[extension/lib/topoforge.js#pipelineToDrawing]] draws a pipeline: a box per
+  step with its command in the custom field `run`, arrows in run order, and a
+  note holding the settings. It is made to meet
+  [[extension/lib/formats.js#pipelineFromDrawing]]: a pipeline drawn and read
+  back is the same pipeline.
+- [[extension/lib/topoforge.js#stepResults]] reads which steps of a finished
+  build passed, failed or never ran from the markers the runner prints
+  ([[runner/lib/script.js#ciScript]]), and the drawing colours them.
+- [[extension/lib/topoforge.js#chainToDrawing]] draws a chain function, and
+  [[extension/lib/topoforge.js#systemToDrawing]] a map of the instance from
+  [[server/src/topoforge.js#systemSnapshot]].
+
+The routes are in [[server/src/topoforge.js#registerTopoForgeApi]]. Each uses
+the same "who may see this" rule as the thing it draws, sends the drawing as a
+download, and the instance map is for administrators and staff only. The CLI's
+`gitcha topoforge` ([[extension/bin/gitcha.js#"async topoforge("]]) and the
+Claude tool `gitcha_topoforge` use them.
+
 [[server/src/compute/ci.js#run]] starts a build. It checks deploy rights, room
 in the queue and the billing quota, then queues the job. When it ends,
 [[server/src/compute/ci.js#afterJob]] counts the minutes once and, if the build

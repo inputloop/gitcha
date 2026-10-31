@@ -82,17 +82,17 @@ with [`extension/lib/manifest.js`](extension/lib/manifest.js).
    key yet, it makes one, but [`config.js:73`](server/src/config.js#L73) refuses
    to do that when the database already has accounts: a new key could never
    open the old secrets, so it is safer to stop.
-3. [`app.js:55`](server/src/app.js#L55) builds every part of the server (the
+3. [`app.js:56`](server/src/app.js#L56) builds every part of the server (the
    "services") and connects them. The order matters, because some services need
    others. For example, the task service needs the projects service, and the
    social feed listens for pushes from projects.
 4. `createApp` then registers the routes (the URL patterns each part answers),
-   starting at [`app.js:97`](server/src/app.js#L97).
+   starting at [`app.js:98`](server/src/app.js#L98).
 5. The server listens on `127.0.0.1:4873` by default, in plain HTTP. Only a TLS
    proxy (such as Caddy) should face the internet: see "The reverse proxy"
    below.
 6. A timer runs every 30 seconds to clean up: it ends old jobs and expired
-   sign-ups ([`app.js:166`](server/src/app.js#L166)).
+   sign-ups ([`app.js:168`](server/src/app.js#L168)).
 
 If something goes badly wrong later, [`http.js:112`](server/src/http.js#L112)
 logs the error and keeps serving, instead of letting one bad request stop the
@@ -101,7 +101,7 @@ whole server.
 ### The reverse proxy
 
 The server never does TLS. It uses Node's plain `http` module
-([`app.js:156`](server/src/app.js#L156)), and the reverse proxy in front of
+([`app.js:158`](server/src/app.js#L158)), and the reverse proxy in front of
 it (Caddy, nginx, Apache or HAProxy) does the https, holds the certificates
 and owns ports 80 and 443. The server reads three things the proxy tells it:
 
@@ -125,7 +125,7 @@ the settings for running without one.
 ## 3. How a request is handled
 
 Every HTTP request goes through one function, set up in
-[`app.js:55`](server/src/app.js#L55):
+[`app.js:56`](server/src/app.js#L56):
 
 1. It works out the address of the person calling with
    [`http.js:275`](server/src/http.js#L275). Behind a proxy, the real address is in the
@@ -192,7 +192,7 @@ memory, and every change goes through [`store.js:203`](server/src/store.js#L203)
    [`store.js:232`](server/src/store.js#L232) reloads the last good copy, so memory and
    disk agree again. A half-made change can never be saved by a later write.
    This is why `createApp` saves once at start-up
-   ([`app.js:165`](server/src/app.js#L165)): from then on every collection
+   ([`app.js:167`](server/src/app.js#L167)): from then on every collection
    is on disk, so going back to the file never loses one.
 
 Two rules follow for code that uses the store:
@@ -491,12 +491,40 @@ A pipeline can be written three ways, and
 [`server/src/compute/formats.js`](server/src/compute/formats.js) turns each into the same plan:
 
 - `gitcha-ci.json`: written by hand, checked by
-  [`formats.js:189`](server/src/compute/formats.js#L189).
+  [`formats.js:68`](server/src/compute/formats.js#L68).
 - `gitcha-ci.org`: each named `step-*` source block in an org file is a step
-  ([`formats.js:90`](server/src/compute/formats.js#L90)).
+  ([`formats.js:54`](server/src/compute/formats.js#L54)).
 - `gitcha-ci.topoforge.json`: a TopoForge drawing. The arrows give the order
-  ([`formats.js:154`](server/src/compute/formats.js#L154),
-  [`formats.js:120`](server/src/compute/formats.js#L120)).
+  ([`formats.js:56`](server/src/compute/formats.js#L56),
+  [`formats.js:55`](server/src/compute/formats.js#L55)).
+
+The org and TopoForge readers themselves are in [`extension/lib/formats.js`](extension/lib/formats.js),
+which the CLI shares, so a drawing means the same thing to `gitcha topoforge
+import` on a laptop as to the server. A mistake in what someone wrote is a
+[`formats.js:12`](extension/lib/formats.js#L12); the server's `formats.js` turns it
+into a 400 reply.
+
+### TopoForge, both ways
+
+Gitcha also writes TopoForge drawings, with [`extension/lib/topoforge.js`](extension/lib/topoforge.js):
+
+- [`topoforge.js:72`](extension/lib/topoforge.js#L72) draws a pipeline: a box per
+  step with its command in the custom field `run`, arrows in run order, and a
+  note holding the settings. It is made to meet
+  [`formats.js:149`](extension/lib/formats.js#L149): a pipeline drawn and read
+  back is the same pipeline.
+- [`topoforge.js:118`](extension/lib/topoforge.js#L118) reads which steps of a finished
+  build passed, failed or never ran from the markers the runner prints
+  ([`script.js:42`](runner/lib/script.js#L42)), and the drawing colours them.
+- [`topoforge.js:141`](extension/lib/topoforge.js#L141) draws a chain function, and
+  [`topoforge.js:159`](extension/lib/topoforge.js#L159) a map of the instance from
+  [`topoforge.js:39`](server/src/topoforge.js#L39).
+
+The routes are in [`topoforge.js:52`](server/src/topoforge.js#L52). Each uses
+the same "who may see this" rule as the thing it draws, sends the drawing as a
+download, and the instance map is for administrators and staff only. The CLI's
+`gitcha topoforge` ([`gitcha.js:319`](extension/bin/gitcha.js#L319)) and the
+Claude tool `gitcha_topoforge` use them.
 
 [`ci.js:83`](server/src/compute/ci.js#L83) starts a build. It checks deploy rights, room
 in the queue and the billing quota, then queues the job. When it ends,
@@ -680,7 +708,7 @@ Both live in [`extension`](extension) and share the same library.
   and only then moves it into place.
 - [`extension/bin/gitcha.js`](extension/bin/gitcha.js) is the `gitcha` command. When the server asks
   for a code, `withStepUp` asks you for one and tries again
-  ([`gitcha.js:112`](extension/bin/gitcha.js#L112)).
+  ([`gitcha.js:124`](extension/bin/gitcha.js#L124)).
 - [`extension/bin/gitcha-mcp.js`](extension/bin/gitcha-mcp.js) is the Claude extension: an MCP server (the
   Model Context Protocol, the way Claude calls outside tools) built on
   [`mcp.js:65`](extension/lib/mcp.js#L65). Every tool's input is checked

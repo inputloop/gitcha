@@ -22,6 +22,7 @@ import { JobService } from './compute/jobs.js';
 import { CiService } from './compute/ci.js';
 import { FunctionService } from './compute/functions.js';
 import { registerComputeApi } from './compute/api.js';
+import { registerTopoForgeApi } from './topoforge.js';
 import { BillingService } from './billing/billing.js';
 import { registerBillingApi } from './billing/api.js';
 import { KeyService } from './social/keys.js';
@@ -97,6 +98,7 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
   registerApi(router, { auth, packages, teams, config, version: VERSION, hooks: { onPublish: (...a) => services.ci.onPublish(...a) } });
   registerHostingApi(router, services);
   registerComputeApi(router, services);
+  registerTopoForgeApi(router, { ...services, version: VERSION });
   registerBillingApi(router, services);
   registerGit(router, services);
   services.ops = new OpsService({ ...services, clock });

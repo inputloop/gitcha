@@ -14,6 +14,8 @@ import { resolveServer, getCredentials, saveCredentials, removeCredentials, cred
 import { pack } from '../lib/pack.js';
 import { installOne, installAll, parseSpec } from '../lib/installer.js';
 import { ask } from '../lib/prompt.js';
+import { pipelineFromOrg, pipelineFromDrawing, chainFromDrawing } from '../lib/formats.js';
+import { pipelineToDrawing } from '../lib/topoforge.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const VERSION = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf8')).version;
@@ -56,6 +58,16 @@ ${bold('Security')}
                                                 view or toggle follow-up 2FA checks
   gitcha logout [--local-only]                  revoke this device's token (--local-only: just forget it here)
 
+${bold('TopoForge')} (drawings you open in TopoForge with File > Open)
+  gitcha topoforge export <gitcha-ci.json|.org> [--out FILE]   draw a pipeline (offline)
+  gitcha topoforge import <drawing.json> [--out FILE] [--as chain] [--check]
+                                                read a drawing back as gitcha-ci.json (offline;
+                                                --check asks the server what it would run)
+  gitcha topoforge build <id> [--out FILE]      a build, each step coloured by its result
+  gitcha topoforge function <owner>/<name> [--out FILE]   a function, or a chain's steps
+  gitcha topoforge system [--out FILE]          this instance (administrators and staff)
+                                                (--out - writes to the terminal; --force replaces a file)
+
 ${bold('Claude')}
   gitcha mcp                                    run the Claude extension (MCP server on stdio)
 
@@ -70,7 +82,7 @@ function parseArgs(argv) {
     if (a.startsWith('--')) {
       const [k, v] = a.slice(2).split('=');
       if (v !== undefined) args.flags[k] = v;
-      else if (argv[i + 1] && !argv[i + 1].startsWith('--') && !['json', 'undo', 'help', 'version', 'hook', 'private', 'dry-run', 'allow-yanked', 'local-only'].includes(k)) args.flags[k] = argv[++i];
+      else if (argv[i + 1] && !argv[i + 1].startsWith('--') && !['json', 'undo', 'help', 'version', 'hook', 'private', 'dry-run', 'allow-yanked', 'local-only', 'check', 'force'].includes(k)) args.flags[k] = argv[++i];
       else args.flags[k] = true;
     } else args._.push(a);
   }
@@ -301,6 +313,60 @@ const commands = {
     const client = authedClient(flags);
     const res = await withStepUp(client, () => client.setVisibility(_[1], _[2] === 'team-only'));
     out(green(`✓ ${bold(res.name)} is now ${res.visibility === 'team' ? `visible only to team ${res.team}` : 'visible to every registry user'}.`));
+  },
+
+  // `gitcha topoforge <sub>`: TopoForge drawings, both ways. export and import work offline, on files.
+  async topoforge({ _, flags }) {
+    const [, sub, arg] = _;
+    const readJsonFile = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch (err) { throw new Error(`Cannot read ${f} as JSON: ${err.message}`); } };
+    // Write the result to --out (or a name made from the input), never over a file unless --force. "--out -" prints it.
+    const save = (text, fallback) => {
+      const file = typeof flags.out === 'string' ? flags.out : fallback;
+      if (file === '-') return out(text);
+      if (fs.existsSync(file) && !flags.force) throw new Error(`${file} already exists. Choose another --out, or add --force to replace it.`);
+      fs.writeFileSync(file, text.endsWith('\n') ? text : `${text}\n`);
+      out(green(`✓ Wrote ${bold(file)}.`) + (/\.topoforge\.json$/.test(file) ? dim(' Open it in TopoForge with File > Open.') : ''));
+    };
+    const base = (f) => path.basename(f).replace(/(\.topoforge)?\.(json|org)$/i, '');
+    switch (sub) {
+      case 'export': {
+        if (!arg) throw new Error('Usage: gitcha topoforge export <gitcha-ci.json|gitcha-ci.org> [--out FILE]');
+        const pipeline = /\.org$/i.test(arg) ? pipelineFromOrg(fs.readFileSync(arg, 'utf8')) : readJsonFile(arg);
+        return save(JSON.stringify(pipelineToDrawing(pipeline, { name: base(arg) }), null, 1), `${base(arg)}.topoforge.json`);
+      }
+      case 'import': {
+        if (!arg) throw new Error('Usage: gitcha topoforge import <drawing.json> [--out FILE] [--as chain] [--check]');
+        const drawing = readJsonFile(arg);
+        const as = flags.as === 'chain' ? 'chain' : 'pipeline';
+        if (flags.check) {
+          const client = authedClient(flags);
+          const res = await withStepUp(client, () => client.topoforgeImport(drawing, as));
+          return out(JSON.stringify(res, null, 2));
+        }
+        if (as === 'chain') return out(JSON.stringify({ chain: chainFromDrawing(drawing) }, null, 2));
+        const p = pipelineFromDrawing(drawing);
+        const clean = Object.fromEntries(Object.entries(p).filter(([, v]) => v !== undefined));
+        return save(JSON.stringify(clean, null, 2), 'gitcha-ci.json');
+      }
+      case 'build': case 'function': case 'system': {
+        const client = authedClient(flags);
+        let doc;
+        if (sub === 'build') {
+          if (!arg) throw new Error('Usage: gitcha topoforge build <id> [--out FILE]');
+          doc = await withStepUp(client, () => client.topoforgeBuild(arg));
+        } else if (sub === 'function') {
+          const [owner, name] = String(arg ?? '').split('/');
+          if (!owner || !name) throw new Error('Usage: gitcha topoforge function <owner>/<name> [--out FILE]');
+          doc = await withStepUp(client, () => client.topoforgeFunction(owner, name));
+        } else {
+          doc = await withStepUp(client, () => client.topoforgeSystem());
+        }
+        const fallback = sub === 'build' ? `build-${arg}` : sub === 'function' ? `function-${String(arg).replace('/', '-')}` : 'gitcha-instance';
+        return save(JSON.stringify(doc, null, 1), `${fallback.replace(/[^\w.-]+/g, '-')}.topoforge.json`);
+      }
+      default:
+        throw new Error('Usage: gitcha topoforge export|import|build|function|system ... (gitcha --help lists them)');
+    }
   },
 
   // `gitcha team <sub>`: list, create, info, add, remove or delete.

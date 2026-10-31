@@ -1,6 +1,6 @@
 ---
 name: gitcha
-description: Use when the user wants to find, install, publish or yank packages on their Gitcha registry, manage Gitcha teams or share packages with a team, check their Gitcha sign-in, or change Gitcha two-factor check settings. Explains the 2FA rules the gitcha_* tools enforce.
+description: Use when the user wants to find, install, publish or yank packages on their Gitcha registry, manage Gitcha teams or share packages with a team, check their Gitcha sign-in, change Gitcha two-factor check settings, or draw a build, function or instance in TopoForge (or check a TopoForge drawing as a pipeline). Explains the 2FA rules the gitcha_* tools enforce.
 ---
 
 # Working with a Gitcha registry
@@ -93,3 +93,15 @@ Sign-in always needs 2FA. The follow-up checks (`interval`, `new_network`,
 the user explicitly asks. The 6-digit code the user just typed goes in the same
 call as `code` and is used up by the change. Some checks may be locked on by
 the administrator.
+
+## TopoForge drawings
+
+`gitcha_topoforge` saves a drawing the user can open in TopoForge (File > Open):
+a build with each step coloured by its result (`action: build`, `id`), a
+function or chain (`action: function`, `function: owner/name`), or the whole
+instance (`action: system`, administrators and staff only). Give `out`, a new
+file name ending in `.json`; the tool never replaces a file. Before the user
+pushes a hand-drawn `gitcha-ci.topoforge.json`, offer `action: check` with
+`drawing` set to its path: it says what Gitcha would run, and runs nothing.
+In a terminal, `gitcha topoforge export|import` converts pipeline files and
+drawings offline.

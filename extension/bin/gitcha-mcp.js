@@ -214,6 +214,52 @@ const tools = [
     }),
   },
   {
+    name: 'gitcha_topoforge',
+    title: 'Gitcha and TopoForge drawings',
+    description: 'Save a TopoForge drawing (open it in TopoForge with File > Open) of a CI build (each step coloured by its result), a function, or the whole instance (administrators and staff only); or check a drawing as a pipeline or a chain without running it. Drawings are written to a file, never over an existing one; the answer is a short summary.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['build', 'function', 'system', 'check'] },
+        id: { type: 'string', description: 'build: the build id' },
+        function: { type: 'string', description: 'function: owner/name' },
+        out: { type: 'string', description: 'build, function, system: the file to write (ends in .json; must not exist yet)' },
+        drawing: { type: 'string', description: 'check: the drawing file to read' },
+        as: { type: 'string', enum: ['pipeline', 'chain'], description: 'check: read the drawing as a pipeline (default) or a chain' },
+      },
+      required: ['action'], additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false },
+    handler: ({ action, id, function: fnRef, out, drawing, as = 'pipeline' }) => call(async (c) => {
+      if (action === 'check') {
+        if (!drawing) return text('Give "drawing": the path of the TopoForge file to check.');
+        let doc;
+        try { doc = JSON.parse(fs.readFileSync(drawing, 'utf8')); } catch (err) { return text(`Cannot read ${JSON.stringify(String(drawing).slice(0, 300))} as JSON: ${plain(err.message, 200)}`); }
+        const res = await c.topoforgeImport(doc, as);
+        if (res.chain) return text(theirs(`As a chain, Gitcha would call, in order: ${res.chain.join(' -> ')}.`));
+        const p = res.pipeline;
+        return text(theirs(`As a pipeline, Gitcha would run ${p.steps.length} step(s) in ${p.image} (time limit ${Math.round(p.timeoutMs / 1000)}s), on ${p.on.join(', ')}:\n${p.steps.map((s, i) => `${i + 1}. ${s.name}: ${s.run.split('\n')[0].slice(0, 200)}`).join('\n')}${p.deploy ? `\nThen deploy ${p.artifacts} to the site ${p.deploy.site}.` : ''}`));
+      }
+      if (!out || !/\.json$/i.test(out)) return text('Give "out": a file name ending in .json to write the drawing to.');
+      if (fs.existsSync(out)) return text(`${JSON.stringify(String(out).slice(0, 300))} already exists. Choose another name; this tool never replaces a file.`);
+      let doc;
+      if (action === 'build') {
+        if (!id) return text('Give "id": the build to draw.');
+        doc = await c.topoforgeBuild(id);
+      } else if (action === 'function') {
+        const [owner, name] = String(fnRef ?? '').split('/');
+        if (!owner || !name) return text('Give "function" as owner/name.');
+        doc = await c.topoforgeFunction(owner, name);
+      } else {
+        doc = await c.topoforgeSystem();
+      }
+      fs.writeFileSync(out, `${JSON.stringify(doc, null, 1)}\n`, { flag: 'wx' });
+      const nodes = doc.pages?.[0]?.nodes ?? [];
+      const results = nodes.filter((n) => n.data?.result).map((n) => `${n.data.step}: ${n.data.result}`);
+      return text(theirs(`Wrote ${out}: "${doc.name}", ${nodes.length} shapes.${results.length ? `\nSteps: ${results.join('; ')}.` : ''}\nOpen it in TopoForge with File > Open.`));
+    }),
+  },
+  {
     name: 'gitcha_team_create',
     title: 'Create a Gitcha team',
     description: 'Create a team that can own packages together. The user becomes its owner.',

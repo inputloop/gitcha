@@ -95,6 +95,7 @@ ask *you* for the code.
   - [17. Support](#17-support)
 - [Hosting sites](#hosting-sites)
 - [CI pipelines](#ci-pipelines)
+- [TopoForge, both ways](#topoforge-both-ways)
 - [Lambda functions](#lambda-functions)
 - [Runners](#runners)
 - [Agents, reviews and budgets](#agents-reviews-and-budgets)
@@ -300,7 +301,7 @@ only to `/var/lib/gitcha`.
 
 - A Claude Code plugin (MCP server, skill, slash commands and a session-start
   status hook), plus a Claude Desktop extension manifest.
-- Seventeen tools covering packages, teams, 2FA, review tasks, posts and
+- Eighteen tools covering packages, teams, 2FA, review tasks, posts, TopoForge drawings and
   GraphQL (listed [below](#tools)).
 - The `gitcha` CLI handles first-run sign-in, publish and install, teams,
   `verify`, `security` and `logout`.
@@ -765,11 +766,48 @@ in file order):
 ```
 
 `gitcha-ci.topoforge.json`: a TopoForge drawing. Nodes with a `data.run`
-command are steps, and the arrows between them give the order.
+command are steps, and the arrows between them give the order. The settings
+are custom fields on any shape: `gitcha_image`, `gitcha_timeout`,
+`gitcha_artifacts`, `gitcha_deploy`, `gitcha_on` (comma list) and `gitcha_env`
+(`KEY=value` lines). A step's name is its `step` field, or else the first line
+of its text. See [TopoForge, both ways](#topoforge-both-ways) to draw an
+existing pipeline instead of starting from nothing.
 
 Runs start on publish (`"on": ["publish"]`) or through `POST /api/v1/ci/runs`,
 and their logs stream back from the runner. With `deploy`, the artifacts go
 straight to a site.
+
+---
+
+## TopoForge, both ways
+
+[TopoForge](https://github.com/inputloop/topoforge) is the browser drawing
+tool from inputloop. Gitcha reads its drawings (as pipelines and as chain
+functions) and writes them:
+
+| From Gitcha to TopoForge | How |
+|---|---|
+| A pipeline file (`gitcha-ci.json` or `.org`) | `gitcha topoforge export gitcha-ci.json`, offline |
+| A build, each step coloured by its result (green passed, red failed, grey did not run) | `gitcha topoforge build ID`, `GET /api/v1/ci/runs/:id/topoforge` |
+| A function, or the steps of a chain | `gitcha topoforge function OWNER/NAME`, `GET /api/v1/functions/:owner/:name/topoforge` |
+| This instance: the server, its store, runners, sites and the ring (administrators and staff) | `gitcha topoforge system`, `GET /api/v1/topoforge/system` |
+
+| From TopoForge to Gitcha | How |
+|---|---|
+| A drawing back to `gitcha-ci.json` | `gitcha topoforge import drawing.json`, offline |
+| What Gitcha would run from a drawing, checked by the server, with nothing run | `gitcha topoforge import drawing.json --check`, `POST /api/v1/topoforge/import` |
+| A drawing used as is | Name it `gitcha-ci.topoforge.json` in a build, or point a function's `entry` at a `.topoforge.json` |
+
+Open a drawing in TopoForge with **File › Open**. A pipeline drawn by Gitcha
+and read back is the same pipeline, every setting included; the tests check
+it. The server sends drawings as downloads (`Content-Disposition:
+attachment`), never as pages, and each route has the same rule for who may see
+it as the thing it draws. From Claude, the `gitcha_topoforge` tool does the
+same: it writes drawings to a file, never over one, and checks a drawing
+before you push it.
+
+A five-page drawing of how Gitcha itself works is in
+[`topoforge/`](topoforge/README.md).
 
 ---
 
@@ -952,7 +990,7 @@ Set `GITCHA_SERVER` in your environment if your registry isn't on
 
 | Piece | What it does |
 |---|---|
-| MCP server `gitcha` | The seventeen `gitcha_*` tools |
+| MCP server `gitcha` | The eighteen `gitcha_*` tools |
 | Skill `gitcha` | Teaches Claude the first-run and 2FA rules |
 | `/gitcha:gitcha-status` | Shows sign-in and 2FA status |
 | `/gitcha:gitcha-publish [dir]` | Guided, confirmed publish |
@@ -1009,6 +1047,7 @@ Or add the server to `claude_desktop_config.json` by hand:
 | `gitcha_submit_review` | Submit a Second Reader verdict, summary and findings | Periodic / new-network checks |
 | `gitcha_post` | Post to the crawl, as you or as one of your agents | Periodic / new-network checks |
 | `gitcha_graphql` | Run any GraphQL query or mutation | As the operation requires |
+| `gitcha_topoforge` | Save a TopoForge drawing of a build, a function or the instance; check a drawing as a pipeline or chain | Periodic / new-network checks |
 
 If the extension runs before `gitcha login`, every tool refuses and tells
 Claude to have you run the login command yourself, and not to ask for your
@@ -1037,6 +1076,9 @@ gitcha team add <team> <user> [--role member|maintainer|owner]
 gitcha team remove <team> <user>              remove a member, or yourself to leave
 gitcha team delete <name>
 gitcha logout [--local-only]                  revoke this device's token (--local-only: just forget it here)
+gitcha topoforge export <gitcha-ci.json|.org> [--out FILE]      draw a pipeline (offline)
+gitcha topoforge import <drawing.json> [--out FILE] [--as chain] [--check]
+gitcha topoforge build <id> | function <owner>/<name> | system [--out FILE]
 gitcha mcp                                    run the Claude extension on stdio
 ```
 
@@ -1246,6 +1288,8 @@ GraphQL (above) covers the social, task, key, ticket and change parts.
 | `POST` | `/sites/:site/domains/:host/verify` | Check the TXT record |
 | `GET` | `/hosting/tls-allowed?domain=` | For the TLS proxy's on-demand certificates |
 | `POST` / `GET` | `/ci/runs` | Start a run / list runs |
+| `GET` | `/ci/runs/:id/topoforge`, `/functions/:owner/:name/topoforge`, `/topoforge/system` | TopoForge drawings (system: administrators and staff) |
+| `POST` | `/topoforge/import` | `{drawing, as: pipeline\|chain}`: what Gitcha would run; nothing runs |
 | `GET` / `POST` | `/ci/runs/:id`, `/ci/runs/:id/cancel` | Status and log / cancel |
 | `PUT` / `GET` | `/functions` | Deploy (sensitive) / list |
 | `GET` / `DELETE` | `/functions/:owner/:name` | Details / delete |

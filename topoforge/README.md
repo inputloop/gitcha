@@ -43,6 +43,11 @@ filled in.
 
 The same files are in TopoForge's repository, in `examples/`.
 
+Gitcha also draws and reads TopoForge files itself: a pipeline, a build
+with its results, a function, or a live instance (`gitcha topoforge`, the
+`gitcha_topoforge` tool, and the API). See "TopoForge, both ways" in the
+[main README](../README.md#topoforge-both-ways).
+
 ## The pages
 
 ![1 The whole system](page-1.png)
