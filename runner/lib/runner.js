@@ -10,7 +10,7 @@ import path from 'node:path';
 import * as processBackend from './backends/process.js';
 import * as bcontainBackend from './backends/bcontain.js';
 import { prepare, readOutput } from './script.js';
-import { secretMasker } from '../../extension/lib/secrets-mask.js';
+import { secretMasker } from '../../extension/lib/log-mask.js';
 
 // The ways a job can run. "bcontain" isolates each job in a VM; "process" does not isolate at all.
 export const BACKENDS = { process: processBackend, bcontain: bcontainBackend };

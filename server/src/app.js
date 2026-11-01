@@ -20,7 +20,7 @@ import { RingService } from './hosting/ring.js';
 import { registerHostingApi, serveHosted } from './hosting/api.js';
 import { JobService } from './compute/jobs.js';
 import { CiService } from './compute/ci.js';
-import { SecretService } from './compute/secrets.js';
+import { SecretService } from './compute/vault.js';
 import { FunctionService } from './compute/functions.js';
 import { registerComputeApi } from './compute/api.js';
 import { registerTopoForgeApi } from './topoforge.js';

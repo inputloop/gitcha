@@ -86,7 +86,7 @@ export function normalizePipeline(p, { maxTimeoutMs = 3_600_000, defaultImage } 
   const deploy = p.deploy?.site ? { site: String(p.deploy.site).toLowerCase() } : null;
   if (deploy && !artifacts) throw bad('"deploy" needs "artifacts": the directory to publish.');
   const on = Array.isArray(p.on) ? p.on.filter((x) => ['publish', 'manual'].includes(x)) : ['manual'];
-  // The secret settings the steps use, by name (their values live on the server: compute/secrets.js).
+  // The secret settings the steps use, by name (their values live on the server: compute/vault.js).
   if (p.secrets !== undefined && !Array.isArray(p.secrets)) throw bad('"secrets" is a list of names, like ["APT_SIGNING_KEY"].');
   const secrets = [...new Set((p.secrets ?? []).map(String))];
   if (secrets.length > 20) throw bad('A pipeline uses at most 20 secrets.');

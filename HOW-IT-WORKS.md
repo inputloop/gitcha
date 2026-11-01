@@ -550,11 +550,11 @@ in the queue and the billing quota, then queues the job. When it ends,
 passed and asked for it, deploys the artifacts to a site. A package publish can
 start a build too ([`ci.js:172`](server/src/compute/ci.js#L172)).
 
-Secrets a pipeline names (`"secrets"`) live in [`secrets.js:19`](server/src/compute/secrets.js#L19),
+Secrets a pipeline names (`"secrets"`) live in [`vault.js:22`](server/src/compute/vault.js#L22),
 sealed with their own key and never read back through the API. `run` refuses a build
 whose secrets are missing, or whose starter may not use them, or that is an agent's
 sandbox run. When a runner takes the job, [`ci.js:162`](server/src/compute/ci.js#L162) opens
-them for that answer only, and [`secrets-mask.js:7`](extension/lib/secrets-mask.js#L7) hides
+them for that answer only, and [`log-mask.js:10`](extension/lib/log-mask.js#L10) hides
 them in the log, on the runner and again on the server. The runner hands them to the
 steps through a file that the build script reads and deletes
 ([`script.js:29`](runner/lib/script.js#L29)).

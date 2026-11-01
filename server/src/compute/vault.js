@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Secret settings for CI pipelines: values a build needs but its source must not hold, like a signing key.
 //
 // A secret belongs to an account (a person, or a team) and has a name in capitals (APT_SIGNING_KEY). Its
@@ -7,11 +10,11 @@
 // A pipeline names the secrets it uses ("secrets": ["APT_SIGNING_KEY"]). A build gets them only when the
 // person who started it may use the account's secrets (the person themselves, or a maintainer of the
 // team), never in an agent's sandbox run. They are opened when a runner takes the job and handed to that
-// runner alone; the job record keeps only their names. Logs are masked (secrets-mask.js).
+// runner alone; the job record keeps only their names. Logs are masked (log-mask.js).
 // Changing a secret is a sensitive action: it needs a fresh two-factor code (the API checks that).
 import { HttpError } from '../errors.js';
 import { createSecretBox, deriveKey } from '../crypto.js';
-import { SECRET_NAME_RE } from '../../../extension/lib/secrets-mask.js';
+import { SECRET_NAME_RE } from '../../../extension/lib/log-mask.js';
 
 const MAX_VALUE = 64 * 1024; // enough for an armored GPG key or a certificate chain
 const MAX_PER_ACCOUNT = 50;

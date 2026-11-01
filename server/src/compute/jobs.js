@@ -18,7 +18,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { HttpError } from '../errors.js';
 import { randomToken, sha256 } from '../crypto.js';
-import { secretMasker } from '../../../extension/lib/secrets-mask.js';
+import { secretMasker } from '../../../extension/lib/log-mask.js';
 
 // A job's log is cut off at 5 MB. The store keeps the newest 1000 finished jobs.
 const LOG_LIMIT = 5 * 1024 * 1024;

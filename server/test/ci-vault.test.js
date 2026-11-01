@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
+// SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Secret settings for CI pipelines: set and listed but never read back, sealed at rest, a fresh code to
 // change; a build gets only the secrets its pipeline names, only for someone who may use them, never in a
 // sandbox run, handed to the runner that takes the job and masked in the log; the runner's side too.
@@ -9,7 +12,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { startServer, createUser, api, deviceLogin } from './helpers.js';
 import { packFiles } from '../../extension/lib/tar.js';
-import { secretMasker } from '../../extension/lib/secrets-mask.js';
+import { secretMasker } from '../../extension/lib/log-mask.js';
 import { prepare } from '../../runner/lib/script.js';
 
 const KEY = '-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlQVYBGc0c2VjcmV0LWtleS1saW5lLW9uZQ\nc2Vjb25kLWxpbmUtb2YtdGhlLWtleQ==\n-----END PGP PRIVATE KEY BLOCK-----\n';
