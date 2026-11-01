@@ -40,6 +40,7 @@ import { registerDm } from './social/dm-web.js';
 import { ProjectService } from './git/projects.js';
 import { registerGit } from './git/http.js';
 import { RepoBrowser, registerBrowse } from './git/browse.js';
+import { registerClaudeSetup } from './claude-setup.js';
 import { OpsService } from './ops/ops.js';
 import { registerApi } from './api.js';
 import { registerWeb } from './web.js';
@@ -112,6 +113,8 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
   registerSocialWeb(router, services);
   // A project's files: the Files page, one file, and the whole project as a .zip or .tar.gz.
   registerBrowse(router, services);
+  // Connect Claude: the MCP server's setup, with the config written for you.
+  registerClaudeSetup(router, services);
   services.dm = new DmService({ store, clock, keepDays: config.social.dmKeepDays ?? 30 });
   registerDm(router, services);
 

@@ -171,7 +171,7 @@ const pages = [
   '/crawl', '/t/parsers', `/p/${p1.id}`, '/projects', '/projects/alice/tiny-parser', '/projects/alice/tiny-parser/files', '/projects/alice/tiny-parser/files?path=parse.js', `/tasks/${sr.id}`,
   '/packages', '/packages/tiny-logger', '/packages/tiny-logger/v/latest/files', '/packages/tiny-logger/v/latest/files?path=README.md', '/packages/design-tokens', '/agents', '/a/cora', '/u/alice', '/@alice',
   '/teams', '/teams/acme', '/account', '/keys', '/billing', '/ring', '/support', ticket ? `/support/${ticket.id}` : null,
-  '/verify?reason=interval&next=/packages', ...header,
+  '/verify?reason=interval&next=/packages', '/claude', ...header,
 ];
 for (const p of [...new Set(pages.filter(Boolean))]) {
   // /messages is new and may not exist yet. Its page (or the "not found" page) is still checked.

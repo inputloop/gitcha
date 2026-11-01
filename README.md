@@ -55,7 +55,7 @@ never sees your password**. When Gitcha asks for a 2FA check, Claude has to
 ask *you* for the code.
 
 > **Status, honestly.** Everything below is built and covered by the test
-> suite (461 tests), and the screenshots come from a real running server. Some
+> suite (464 tests), and the screenshots come from a real running server. Some
 > parts have only been tested against stand-ins, not the real thing:
 > git over a real `sshd`, a job inside a real bContain VM, the Stripe and
 > PayPal sandboxes, a live NextTime instance, and C4OK's door inside a full
@@ -75,7 +75,9 @@ ask *you* for the code.
 - [Features](#features)
 - [Quick start](#quick-start)
 - [Step-by-step install](INSTALL.md): on your own computer, on a VPS, and on HostGator
+- [Windows, upgrading, and putting your code on Gitcha](#windows-upgrading-and-putting-your-code-on-gitcha)
 - [The reverse proxy, and running without one](#the-reverse-proxy-and-running-without-one)
+- [Reaching your Gitcha over WireGuard](#reaching-your-gitcha-over-wireguard)
 - [Walkthrough with screenshots](#walkthrough-with-screenshots)
   - [1. Create an account (2FA required)](#1-create-an-account-2fa-required)
   - [2. Sign in](#2-sign-in)
@@ -103,7 +105,7 @@ ask *you* for the code.
 - [Agents, reviews and budgets](#agents-reviews-and-budgets)
 - [The GraphQL API](#the-graphql-api)
 - [Operations and C4OK](#operations-and-c4ok)
-- [Installing the Claude extension](#installing-the-claude-extension)
+- [Installing the Claude extension](#installing-the-claude-extension) (or open **Connect Claude** at `/claude`)
 - [CLI reference](#cli-reference)
 - [Package format](#package-format)
 - [Server configuration](#server-configuration)
@@ -316,8 +318,8 @@ only to `/var/lib/gitcha`.
 ## Quick start
 
 Requires **Node.js 20+** and `git`. [INSTALL.md](INSTALL.md) walks through every step, for
-your own computer (Linux, macOS or Windows with WSL2), an Ubuntu VPS, and HostGator's VPS plans
-(Ubuntu, or AlmaLinux with or without cPanel).
+your own computer (Linux, macOS or Windows), an Ubuntu VPS, and HostGator's VPS plans (Ubuntu, or
+AlmaLinux with or without cPanel).
 
 ```bash
 git clone https://github.com/inputloop/gitcha.git
@@ -363,6 +365,96 @@ use. Packages keep the database in Apache Cassandra unless built
 `--without-cassandra`; `npm start` from a checkout uses one JSON file.
 [DEPLOY.md](DEPLOY.md) is the full guide: TLS, DNS, SSH, runners, billing,
 C4OK, NextTime and joining the ring.
+
+**Then connect Claude:** open **Connect Claude** (<http://localhost:4873/claude>, also in the page
+footer). It writes the Claude Desktop config and the Claude Code command for your computer
+([below](#installing-the-claude-extension)).
+
+## Windows, upgrading, and putting your code on Gitcha
+
+### On Windows
+
+Gitcha runs directly on Windows: install Node.js 22 (<https://nodejs.org>) and
+[Git for Windows](https://git-scm.com/download/win), then use Command Prompt.
+
+```cmd
+git clone https://github.com/inputloop/gitcha.git C:\gitcha
+```
+
+```cmd
+cd C:\gitcha
+```
+
+```cmd
+npm install
+```
+
+```cmd
+npm start
+```
+
+- **Use an NTFS drive** (C: usually is). npm links Gitcha's parts together, which exFAT and FAT32
+  drives (most USB sticks and many external drives) cannot hold: `npm install` then fails with
+  `EISDIR: illegal operation on a directory, symlink`.
+- The CLI is `node extension\bin\gitcha.js` (for example `node extension\bin\gitcha.js login`).
+- Its sign-in is saved in `%APPDATA%\gitcha`, so sign in on the same system Claude runs on: Windows
+  and WSL keep separate ones.
+- Cloning from and pushing to a Gitcha that itself runs on Windows has not been tested yet. WSL2
+  (Ubuntu inside Windows) is the most tested way; [INSTALL.md](INSTALL.md) has both.
+
+### Upgrading to a new version
+
+Stop Gitcha (Ctrl+C in its window), back up the data folder (`server/gitcha-data`, with its
+`secret.key`), then in the code folder:
+
+```bash
+git pull
+```
+
+```bash
+npm install
+```
+
+```bash
+npm start
+```
+
+Accounts, projects, packages and settings are kept. Restart Claude Desktop (or start a new Claude Code
+session) afterwards so the Claude extension loads the new code. `git log --oneline HEAD..origin/main`
+(after `git fetch`) shows what is new before you pull.
+
+- **`git pull` says "Your local changes ... would be overwritten"**: run `git stash`, then
+  `git pull`. `git stash pop` puts your changes back if you made them on purpose, and
+  `git stash drop` throws them away if not. When every line shows as changed it is only Windows
+  line endings: `git config core.autocrlf true` stops it happening again.
+- On a server, or to go back to an older version if a new one will not start, see
+  [INSTALL.md: Upgrading](INSTALL.md#upgrading-to-a-new-version).
+
+### Putting a repository you already have on Gitcha
+
+1. **Make the project:** **Projects** in Gitcha, then a name and *public* or *private*. (Claude can do
+   this too: the `gitcha_graphql` tool's `createProject` mutation.)
+2. **Make a console key** for git: **Keys**, then *console key*. It asks for an authenticator code
+   and is shown once. Git uses it as the password.
+3. **Push**, from the repository's folder, with your own user and project names:
+
+```bash
+git remote add gitcha http://localhost:4873/git/YOU/PROJECT.git
+```
+
+```bash
+git push gitcha --all
+```
+
+```bash
+git push gitcha --tags
+```
+
+The username is yours and the password is the console key; Windows and macOS remember it. Your
+other remotes (such as GitHub's `origin`) stay as they are: push to each with `git push origin main`
+and `git push gitcha main`. When a push says *your periodic two-factor check is due*, run
+`gitcha verify`, type the code, and push again. The project's **Files** page then shows the code,
+with **Download ZIP**.
 
 ---
 
@@ -439,8 +531,121 @@ installation), or set `GITCHA_STORE=file`. [DEPLOY.md](DEPLOY.md#when-it-does-no
 usual reasons.
 
 Never put plain http on the open internet: a session cookie read off the wire
-is as good as the account. [DEPLOY.md](DEPLOY.md#running-without-a-reverse-proxy)
+is as good as the account. (A VPN such as WireGuard encrypts it for you:
+[next section](#reaching-your-gitcha-over-wireguard).) [DEPLOY.md](DEPLOY.md#running-without-a-reverse-proxy)
 has the details (firewall, Docker, hosted sites, moving to a proxy later).
+
+---
+
+## Reaching your Gitcha over WireGuard
+
+To use a Gitcha that runs on your own computer from your laptop or phone, anywhere, without putting
+it on the internet: join them with [WireGuard](https://www.wireguard.com), an encrypted private
+network. Below, the computer running Gitcha is `10.8.0.1` on the tunnel and each other device gets
+the next number (`10.8.0.2`, `10.8.0.3`...).
+
+One rule shapes this: the CLI and the Claude extension refuse plain `http://` to any address except
+`localhost`, and the Messages page needs https or localhost (browsers keep their encryption for
+those). So on each laptop, **`localhost:4873` is forwarded through the tunnel**, and everything works
+exactly as on the Gitcha computer itself, with WireGuard doing the encryption.
+
+**1. WireGuard on the Gitcha computer.** Install it from <https://www.wireguard.com/install/>,
+then *Add Tunnel > Add empty tunnel* (the app fills in the keys) and make it:
+
+```ini
+[Interface]
+PrivateKey = (filled in by the app)
+Address = 10.8.0.1/24
+ListenPort = 51820
+
+[Peer]
+# a laptop: one [Peer] block per device, each with its own address
+PublicKey = THE_LAPTOPS_PUBLIC_KEY
+AllowedIPs = 10.8.0.2/32
+```
+
+Let WireGuard in, and Gitcha's port only from the tunnel. On Windows, in PowerShell as
+administrator:
+
+```powershell
+New-NetFirewallRule -DisplayName "WireGuard" -Direction Inbound -Protocol UDP -LocalPort 51820 -Action Allow
+```
+
+```powershell
+New-NetFirewallRule -DisplayName "Gitcha over WireGuard" -Direction Inbound -Protocol TCP -LocalPort 4873 -RemoteAddress 10.8.0.0/24 -Action Allow
+```
+
+On Linux with ufw: `sudo ufw allow 51820/udp` and `sudo ufw allow from 10.8.0.0/24 to any port 4873 proto tcp`.
+To connect from outside your home, forward **UDP 51820** on your router to this computer (and use a
+dynamic DNS name if your home address changes). On the same Wi-Fi this is not needed.
+
+**2. Start Gitcha listening on the tunnel**, from Gitcha's folder. Windows (Command Prompt):
+
+```cmd
+set GITCHA_HOST=0.0.0.0
+```
+
+```cmd
+set GITCHA_TRUST_PROXY=false
+```
+
+```cmd
+npm start
+```
+
+macOS or Linux: `GITCHA_HOST=0.0.0.0 GITCHA_TRUST_PROXY=false npm start`. `0.0.0.0` means every
+network on the computer; the firewall above lets in only the tunnel. Keep `GITCHA_TRUST_PROXY=false`
+(no proxy is in front, so no forwarded address may be believed). `GITCHA_PUBLIC_URL` stays
+`http://localhost:4873`, which is what the laptops use too.
+
+**3. WireGuard on each device**, with that device's address and the Gitcha computer's public key
+(and put this device's public key in the Gitcha computer's `[Peer]` block):
+
+```ini
+[Interface]
+PrivateKey = (filled in by the app)
+Address = 10.8.0.2/24
+
+[Peer]
+PublicKey = THE_GITCHA_COMPUTERS_PUBLIC_KEY
+Endpoint = YOUR_HOME_ADDRESS_OR_DNS_NAME:51820
+AllowedIPs = 10.8.0.1/32
+PersistentKeepalive = 25
+```
+
+`AllowedIPs = 10.8.0.1/32` sends only Gitcha's traffic through the tunnel. Check it with
+`curl http://10.8.0.1:4873/api/v1/health`.
+
+**4. On each laptop, forward `localhost:4873` to the Gitcha computer.** Windows (Command Prompt as
+administrator, once; it stays after a restart):
+
+```cmd
+netsh interface portproxy add v4tov4 listenaddress=127.0.0.1 listenport=4873 connectaddress=10.8.0.1 connectport=4873
+```
+
+macOS or Linux (`brew install socat` or `sudo apt install socat`; it runs while the window is open):
+
+```bash
+socat TCP-LISTEN:4873,bind=127.0.0.1,fork,reuseaddr TCP:10.8.0.1:4873
+```
+
+Now, on the laptop, use Gitcha exactly as on its own computer: <http://localhost:4873> in the
+browser (Messages included), `gitcha login`, Claude Desktop and Claude Code through
+[Connect Claude](#installing-the-claude-extension), and `git clone http://localhost:4873/git/YOU/PROJECT.git`.
+Do not run a second Gitcha on the laptop: it would want the same port.
+
+**Phones** cannot forward a port. With WireGuard on, open `http://10.8.0.1:4873`: signing in,
+projects, packages and downloads work; encrypted Messages do not (they need https or localhost).
+
+| What you see | Check |
+|---|---|
+| WireGuard shows 0 bytes received | The router forwards UDP 51820; `Endpoint` is right; each side has the other's public key |
+| The tunnel is up, but `curl http://10.8.0.1:4873/...` times out | Gitcha was started with `GITCHA_HOST=0.0.0.0`; the "Gitcha over WireGuard" firewall rule exists |
+| The CLI says `Refusing to use plain http:// for 10.8.0.1` | Use `localhost` through the forward (step 4), not the tunnel address |
+| `localhost:4873` on the laptop does not answer | `netsh interface portproxy show all`; the Windows "IP Helper" service must be running |
+
+This setup is built from standard parts (WireGuard, the system firewall, a port forward and Gitcha's
+no-proxy mode); it has not yet been run end to end with Gitcha on Windows.
 
 ---
 
@@ -1110,6 +1315,24 @@ Setup is in [DEPLOY.md](DEPLOY.md#operations-and-c4ok).
 The extension lives in [`extension/`](extension). It has no dependencies and
 contains the MCP server, the CLI, and the plugin/extension manifests.
 
+**The easy way: Connect Claude.** Open `/claude` on your Gitcha (<http://localhost:4873/claude>,
+or *Connect Claude* in the footer and on your Account page). Choose your system and type or paste
+Gitcha's folder; opened on the computer Gitcha runs on, while signed in, the folder is filled in for
+you. The page then shows the sign-in command, the Claude Desktop config and the Claude Code command,
+each with a Copy button. Pick your existing `claude_desktop_config.json` and it adds Gitcha to it,
+keeping every other setting, ready to download. You can also pick `gitcha-mcp.js` to check that the
+folder holds the right file. Everything happens in your browser; no file is uploaded. (A browser never
+tells a page where a picked file is on disk, only its name, which is why the folder is typed.)
+
+<table><tr>
+<td width="70%"><img src="docs/screenshots/30-claude-setup.png" alt="The Connect Claude page"><br><sub>On a computer</sub></td>
+<td width="30%"><img src="docs/screenshots/mobile-30-claude-setup.png" alt="Connect Claude, on a phone"><br><sub>On a phone</sub></td>
+</tr></table>
+
+The same steps by hand follow. **Claude in the cloud** (a claude.ai/code session) runs on
+Anthropic's computers, so it can reach only a Gitcha on the internet with https, never one on your
+own computer.
+
 ### Step 1: sign in once (required for every option)
 
 ```bash
@@ -1130,6 +1353,9 @@ Claude Code:
 /plugin install gitcha@gitcha
 ```
 
+The repository is private, so if Claude Code cannot fetch it, add your own copy instead:
+`/plugin marketplace add C:\gitcha` (or wherever Gitcha's folder is).
+
 Set `GITCHA_SERVER` in your environment if your registry isn't on
 `localhost:4873` (the plugin's `.mcp.json` passes it through). The plugin adds:
 
@@ -1144,8 +1370,12 @@ Set `GITCHA_SERVER` in your environment if your registry isn't on
 ### Option B: add only the MCP server to Claude Code
 
 ```bash
-claude mcp add gitcha --env GITCHA_SERVER=https://packages.example.org -- node /path/to/gitcha/extension/bin/gitcha-mcp.js
+claude mcp add --scope user gitcha --env GITCHA_SERVER=https://packages.example.org -- node /path/to/gitcha/extension/bin/gitcha-mcp.js
 ```
+
+`--scope user` makes it available in every folder; without it, only in the folder you ran it in. On
+Windows the path looks like `C:\gitcha\extension\bin\gitcha-mcp.js`. If `/plugin` says plugins are
+not available where you are, this option is the one to use.
 
 ### Option C: Claude Desktop
 
@@ -1157,7 +1387,10 @@ file in Claude Desktop. It asks for your registry URL.
 npx @anthropic-ai/mcpb pack extension
 ```
 
-Or add the server to `claude_desktop_config.json` by hand:
+Or add the server to `claude_desktop_config.json` by hand (Settings > Developer > Edit Config;
+on Windows it is `%APPDATA%\Claude\claude_desktop_config.json`, on macOS
+`~/Library/Application Support/Claude/claude_desktop_config.json`). On Windows, write each `\` in
+the path as `\\`. Then quit Claude Desktop completely and open it again:
 
 ```json
 {
@@ -1577,7 +1810,7 @@ against Cassandra 5.0), point them at a node:
 GITCHA_TEST_STORE=cassandra GITCHA_TEST_CASSANDRA=127.0.0.1:9042 npm --workspace server test
 ```
 
-The tests (461 of them: 307 for the server, 89 for the extension and CLI,
+The tests (464 of them: 310 for the server, 89 for the extension and CLI,
 17 for the runner, 36 for the medic and 12 for Omni) cover RFC 4226/6238 TOTP vectors, encryption at rest,
 replay protection, enrollment and the follow-up checks, CSRF and sign-in
 hardening, proxy addresses, the store's locking and crash safety, teams,

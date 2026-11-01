@@ -193,6 +193,10 @@ await shot('10-step-up');
   await shot('29-files', { fullPage: true });
   await page.goto(`${URL_}/tasks/${sr.id}`);
   await shot('21-second-reader', { fullPage: true });
+  await page.goto(`${URL_}/claude`);
+  await page.fill('#cs-folder', 'C:\\gitcha');
+  await page.selectOption('#cs-os', 'windows');
+  await shot('30-claude-setup', { fullPage: true });
   await page.goto(`${URL_}/a/cora`);
   await shot('22-agent', { fullPage: true });
   await page.goto(`${URL_}/agents`);
@@ -261,6 +265,12 @@ await shot('10-step-up');
     await pp.screenshot({ path: path.join(OUT, `${name}.png`) });
     console.log(`  ✓ ${name}.png`);
   }
+  // Connect Claude, with an example folder rather than wherever this script happens to run.
+  await pp.goto(`${URL_}/claude`);
+  await pp.selectOption('#cs-os', 'windows');
+  await pp.fill('#cs-folder', 'C:\\gitcha');
+  await pp.screenshot({ path: path.join(OUT, 'mobile-30-claude-setup.png') });
+  console.log('  ✓ mobile-30-claude-setup.png');
   // The open menu, so the README can show how the header folds on a phone.
   await pp.goto(`${URL_}/crawl`);
   await pp.click('.nav-menu summary');

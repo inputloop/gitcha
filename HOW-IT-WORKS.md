@@ -82,17 +82,17 @@ with [`extension/lib/manifest.js`](extension/lib/manifest.js).
    key yet, it makes one, but [`config.js:73`](server/src/config.js#L73) refuses
    to do that when the database already has accounts: a new key could never
    open the old secrets, so it is safer to stop.
-3. [`app.js:59`](server/src/app.js#L59) builds every part of the server (the
+3. [`app.js:60`](server/src/app.js#L60) builds every part of the server (the
    "services") and connects them. The order matters, because some services need
    others. For example, the task service needs the projects service, and the
    social feed listens for pushes from projects.
 4. `createApp` then registers the routes (the URL patterns each part answers),
-   starting at [`app.js:101`](server/src/app.js#L101).
+   starting at [`app.js:102`](server/src/app.js#L102).
 5. The server listens on `127.0.0.1:4873` by default, in plain HTTP. Only a TLS
    proxy (such as Caddy) should face the internet: see "The reverse proxy"
    below.
 6. A timer runs every 30 seconds to clean up: it ends old jobs and expired
-   sign-ups ([`app.js:176`](server/src/app.js#L176)).
+   sign-ups ([`app.js:179`](server/src/app.js#L179)).
 
 If something goes badly wrong later, [`http.js:112`](server/src/http.js#L112)
 logs the error and keeps serving, instead of letting one bad request stop the
@@ -101,7 +101,7 @@ whole server.
 ### The reverse proxy
 
 The server never does TLS. It uses Node's plain `http` module
-([`app.js:166`](server/src/app.js#L166)), and the reverse proxy in front of
+([`app.js:169`](server/src/app.js#L169)), and the reverse proxy in front of
 it (Caddy, nginx, Apache or HAProxy) does the https, holds the certificates
 and owns ports 80 and 443. The server reads three things the proxy tells it:
 
@@ -125,7 +125,7 @@ the settings for running without one.
 ## 3. How a request is handled
 
 Every HTTP request goes through one function, set up in
-[`app.js:59`](server/src/app.js#L59):
+[`app.js:60`](server/src/app.js#L60):
 
 1. It works out the address of the person calling with
    [`http.js:275`](server/src/http.js#L275). Behind a proxy, the real address is in the
@@ -192,7 +192,7 @@ memory, and every change goes through [`store.js:203`](server/src/store.js#L203)
    [`store.js:232`](server/src/store.js#L232) reloads the last good copy, so memory and
    disk agree again. A half-made change can never be saved by a later write.
    This is why `createApp` saves once at start-up
-   ([`app.js:175`](server/src/app.js#L175)): from then on every collection
+   ([`app.js:178`](server/src/app.js#L178)): from then on every collection
    is on disk, so going back to the file never loses one.
 
 Two rules follow for code that uses the store:
@@ -768,6 +768,12 @@ Both live in [`extension`](extension) and share the same library.
   wrapped and labelled by [`mcp.js:54`](extension/lib/mcp.js#L54), so Claude
   treats it as data, not as instructions. The 2FA tool takes only a 6-digit
   code, so recovery codes stay in your terminal.
+- [`server/src/claude-setup.js`](server/src/claude-setup.js) is the Connect Claude page (`/claude`). It
+  writes the Claude Desktop config and the Claude Code command with the same
+  functions the browser runs ([`claude-setup.js:55`](server/public/claude-setup.js#L55) adds
+  Gitcha to a config file the person picks, inside the browser). It fills in
+  where Gitcha's code is only for someone signed in on the server's own
+  computer, since a web page cannot see paths on disk.
 
 ## 16. Packaging and deployment
 

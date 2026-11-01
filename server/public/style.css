@@ -93,7 +93,7 @@ h3 { font-size: 15px; margin: 0 0 8px; }
 .badge.ok { background: var(--ok-bg); color: var(--ok); }
 
 label { display: block; font-weight: 600; margin: 0 0 14px; }
-input[type=text], input[type=password], input[type=email], input:not([type]), input[inputmode] {
+input[type=text], input[type=password], input[type=email], input[type=url], input:not([type]), input[inputmode] {
   display: block; width: 100%; margin-top: 6px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border);
   background: var(--bg); color: var(--text); font: inherit; }
 input:focus, textarea:focus, select:focus { outline: 2px solid var(--brand); outline-offset: 1px; }
@@ -308,7 +308,7 @@ button.link:focus-visible { color: var(--text); }
 }
 @media (max-width: 600px), (pointer: coarse) {
   .btn, button, select, summary,
-  input[type=text], input[type=password], input[type=email], input:not([type]), input[inputmode] { min-height: 44px; }
+  input[type=text], input[type=password], input[type=email], input[type=url], input:not([type]), input[inputmode] { min-height: 44px; }
   .btn.small { padding: 8px 14px; font-size: 14px; }
   /* Vote buttons become fingertip-sized squares. */
   .votes { min-width: 44px; }
@@ -357,3 +357,14 @@ button.link:focus-visible { color: var(--text); }
 .readme .table-wrap { margin: 12px 0; }
 .versions tr.current td { font-weight: 650; }
 .versions .right { text-align: right; }
+
+/* Connect Claude: the setup page's copyable snippets and file checks. */
+.cs .card label { display: block; margin: 10px 0; }
+.cs input[type=text], .cs input[type=url] { width: 100%; }
+.cs-copy { position: relative; }
+.cs-copy pre { padding-right: 84px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cs-copy .btn { position: absolute; top: 6px; right: 6px; margin: 0; }
+.cs-ok { color: var(--ok, #0a7d55); }
+.cs-bad { color: #b42318; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .cs-bad { color: #ff9a8f; } }
+.cs input[type=file] { display: block; min-height: 44px; padding: 8px 0; max-width: 100%; }

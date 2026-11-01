@@ -161,6 +161,20 @@ npm link --workspace extension
 
 Then `gitcha whoami`, `gitcha messages list`, `gitcha --help`.
 
+### Connect Claude
+
+Open <http://localhost:4873/claude> (*Connect Claude* in the page footer). It fills in where Gitcha's
+code is (when you are signed in on this same computer) and writes the Claude Desktop config and the
+Claude Code command for you, with Copy buttons; pick your existing `claude_desktop_config.json` and it
+adds Gitcha to it, keeping your other settings. The README's
+[Installing the Claude extension](README.md#installing-the-claude-extension) has the same steps by hand.
+
+### From your other computers and phone, anywhere: WireGuard
+
+The README's [Reaching your Gitcha over WireGuard](README.md#reaching-your-gitcha-over-wireguard) sets
+up an encrypted private network to this computer, with Gitcha, the CLI and Claude working on your
+laptop as if Gitcha ran there.
+
 ### Try it from your phone on the same Wi-Fi
 
 Your phone cannot reach `localhost` on your computer, so let Gitcha listen on your network and tell

@@ -58,7 +58,7 @@ export function layout({ title, user, csrf, body, wide = false }) {
   </details>
 </header>
 <main class="${wide ? 'wide' : ''}">${out(body)}</main>
-<footer><a href="/ring/prev" rel="prev">&#9664; prev</a> · <a href="/ring">Gitcha ring</a> · <a href="/ring/next" rel="next">next &#9654;</a> · <a href="/ring/random">random</a><br>Gitcha · free software forge and registry · <a href="/support">Support</a> · <a href="/api/v1/health">API status</a></footer>
+<footer><a href="/ring/prev" rel="prev">&#9664; prev</a> · <a href="/ring">Gitcha ring</a> · <a href="/ring/next" rel="next">next &#9654;</a> · <a href="/ring/random">random</a><br>Gitcha · free software forge and registry · <a href="/claude">Connect Claude</a> · <a href="/support">Support</a> · <a href="/api/v1/health">API status</a></footer>
 </body>
 </html>`;
 }
@@ -335,7 +335,7 @@ ${at && at.version !== pkg.latest ? alert(h`You are looking at version ${at.vers
     <div class="card">
       <h3>Install</h3>
       <pre class="install"><code>gitcha install ${pkg.name}${at && at.version !== pkg.latest ? `@${at.version}` : ''}</code></pre>
-      <p class="muted small">Or ask Claude: “install ${pkg.name} from Gitcha”.</p>
+      <p class="muted small">Or ask Claude: “install ${pkg.name} from Gitcha” (<a href="/claude">connect Claude</a>).</p>
     </div>
     ${base ? h`<div class="card">
       <h3>Files</h3>
@@ -416,6 +416,7 @@ const hours = (ms) => (ms % 3600000 === 0 ? `${ms / 3600000} hours` : `${Math.ro
 export const accountPage = ({ csrf, user, email, checks, sessions, currentHash, activity, notice, error, recoveryLeft, mfaState }) => h`
 <div class="page-head"><h1>Account security</h1><span class="badge ok">2FA enabled</span></div>
 ${alert(notice, 'info')}${alert(error)}
+<p class="card small">Use Gitcha from Claude Desktop or Claude Code: <a href="/claude">Connect Claude</a> writes the settings for you.</p>
 <div class="account-grid">
   <section class="card">
     <h2>Two-factor checks after sign-in</h2>

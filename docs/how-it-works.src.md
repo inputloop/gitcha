@@ -768,6 +768,12 @@ Both live in [[extension]] and share the same library.
   wrapped and labelled by [[extension/lib/mcp.js#untrusted]], so Claude
   treats it as data, not as instructions. The 2FA tool takes only a 6-digit
   code, so recovery codes stay in your terminal.
+- [[server/src/claude-setup.js]] is the Connect Claude page (`/claude`). It
+  writes the Claude Desktop config and the Claude Code command with the same
+  functions the browser runs ([[server/public/claude-setup.js#mergeConfig]] adds
+  Gitcha to a config file the person picks, inside the browser). It fills in
+  where Gitcha's code is only for someone signed in on the server's own
+  computer, since a web page cannot see paths on disk.
 
 ## 16. Packaging and deployment
 
