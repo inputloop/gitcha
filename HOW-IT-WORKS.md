@@ -107,11 +107,11 @@ and owns ports 80 and 443. The server reads three things the proxy tells it:
 
 - the **`Host` header**, to tell its own pages from hosted sites
   ([`sites.js:318`](server/src/hosting/sites.js#L318)) and to check where a form
-  came from ([`web.js:115`](server/src/web.js#L115));
+  came from ([`web.js:116`](server/src/web.js#L116));
 - **`X-Forwarded-For`**, the caller's address, believed only with
   `GITCHA_TRUST_PROXY=true` ([`http.js:275`](server/src/http.js#L275));
 - **`X-Forwarded-Proto`**: when it says `https`, cookies get the `Secure` flag
-  ([`web.js:75`](server/src/web.js#L75)).
+  ([`web.js:76`](server/src/web.js#L76)).
 
 And the proxy asks the server one question before it orders a certificate for
 a name: [`domains.js:241`](server/src/hosting/domains.js#L241).
@@ -310,18 +310,18 @@ The browser pages are in [`server/src/web.js`](server/src/web.js) (the routes) a
   only inserted as raw HTML when the code wraps it in `raw(...)`, and that is
   done only for text Gitcha made itself (like the QR code). So a username such
   as `<script>` shows up as text.
-- **README files** are turned into HTML by [`views.js:192`](server/src/views.js#L192),
+- **README files** are turned into HTML by [`views.js:222`](server/src/views.js#L222),
   which escapes the text first and allows only `http` and `https` links.
 - **Forms are protected from CSRF** (a trick where another site makes your
   browser send a request to Gitcha). Every form carries a token tied to your
-  session ([`web.js:87`](server/src/web.js#L87)), and every POST is checked by
-  [`web.js:132`](server/src/web.js#L132), which also checks where the request came
+  session ([`web.js:88`](server/src/web.js#L88)), and every POST is checked by
+  [`web.js:133`](server/src/web.js#L133), which also checks where the request came
   from.
-- **Redirects** after sign-in go through [`web.js:56`](server/src/web.js#L56), so a
+- **Redirects** after sign-in go through [`web.js:57`](server/src/web.js#L57), so a
   link cannot send you to another site.
-- **Pages that need a fresh code** use [`web.js:166`](server/src/web.js#L166),
+- **Pages that need a fresh code** use [`web.js:167`](server/src/web.js#L167),
   which sends you to the "Confirm it's you" page and back.
-- The Account page ([`web.js:482`](server/src/web.js#L482)) shows the
+- The Account page ([`web.js:552`](server/src/web.js#L552)) shows the
   follow-up checks, the email, recovery codes, signed-in devices and the
   security log.
 
@@ -360,7 +360,7 @@ device token.
 5. The tarball is saved as a blob, and the version record is saved in one
    transaction.
 
-Downloads ([`packages.js:191`](server/src/packages.js#L191)) send the hash in the
+Downloads ([`packages.js:207`](server/src/packages.js#L207)) send the hash in the
 `X-Gitcha-Integrity` header, and the installer checks it.
 
 ### Teams
@@ -423,18 +423,18 @@ A **project** is a git repository, owned by a person or a team. The code is in
 
 [`server/src/git/browse.js`](server/src/git/browse.js) serves the Files page, one file, and the whole
 project as a .zip or .tar.gz, from the web and from the API
-([`browse.js:173`](server/src/git/browse.js#L173)). Who may read is the same as for
-`git clone` ([`browse.js:198`](server/src/git/browse.js#L198)). Everything is read with git
+([`browse.js:176`](server/src/git/browse.js#L176)). Who may read is the same as for
+`git clone` ([`browse.js:201`](server/src/git/browse.js#L201)). Everything is read with git
 from the bare repository, after two checks on what the address asked for:
 
 1. A branch, tag or commit must look like one (`REF_RE`): it cannot start with
    `-`, so git never reads it as an option, and cannot use `..` or `@{`.
-   [`browse.js:82`](server/src/git/browse.js#L82) then asks git for the commit it names.
+   [`browse.js:85`](server/src/git/browse.js#L85) then asks git for the commit it names.
 2. A path is split on `/`, and any `.` or `..` part is refused, not resolved
-   ([`browse.js:51`](server/src/git/browse.js#L51)).
+   ([`browse.js:54`](server/src/git/browse.js#L54)).
 
 A file is sent as plain text or as a download, never as HTML, with a CSP that
-forbids scripts. [`browse.js:147`](server/src/git/browse.js#L147) streams `git archive`
+forbids scripts. [`browse.js:150`](server/src/git/browse.js#L150) streams `git archive`
 straight to the reply, and at most eight run at once.
 
 ## 9. Hosting sites, custom domains and the ring
