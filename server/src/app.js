@@ -39,6 +39,7 @@ import { DmService } from './social/dm.js';
 import { registerDm } from './social/dm-web.js';
 import { ProjectService } from './git/projects.js';
 import { registerGit } from './git/http.js';
+import { RepoBrowser, registerBrowse } from './git/browse.js';
 import { OpsService } from './ops/ops.js';
 import { registerApi } from './api.js';
 import { registerWeb } from './web.js';
@@ -107,7 +108,10 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
   services.graphql = makeGraphql(services);
   registerSocialApi(router, services);
   services.web = registerWeb(router, { auth, packages, teams, config, billing: services.billing });
+  services.browse = new RepoBrowser(services);
   registerSocialWeb(router, services);
+  // A project's files: the Files page, one file, and the whole project as a .zip or .tar.gz.
+  registerBrowse(router, services);
   services.dm = new DmService({ store, clock, keepDays: config.social.dmKeepDays ?? 30 });
   registerDm(router, services);
 

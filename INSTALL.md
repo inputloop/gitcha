@@ -77,16 +77,23 @@ How to get Node.js and git:
   ```
 
   (Or use the installer from <https://nodejs.org>.)
-- **Windows:** use **WSL2** (Windows Subsystem for Linux) with Ubuntu, and follow the Linux steps
-  inside it. In PowerShell, as administrator:
+- **Windows, directly:** install Node.js 22 (the LTS installer from <https://nodejs.org>) and
+  [Git for Windows](https://git-scm.com/download/win), then use Command Prompt or PowerShell.
+  `npm install`, `npm start` and the CLI have been run this way. Two things to know:
+  - **Keep the code on an NTFS drive** (C: usually is). npm links Gitcha's parts together, and an
+    exFAT or FAT32 drive (most USB sticks and many external drives) cannot hold those links:
+    `npm install` then fails with `EISDIR: illegal operation on a directory, symlink`.
+  - Cloning from and pushing to a Gitcha that itself runs on Windows has not been tried yet.
+- **Windows, with WSL2** (the Linux that comes with Windows): the most tested way, since Gitcha is
+  built and tested on Linux. In PowerShell, as administrator:
 
   ```powershell
   wsl --install -d Ubuntu-22.04
   ```
 
-  Gitcha runs `git` and `gpg` as programs and is built and tested on Linux; running it directly on
-  Windows has not been tried. Pages you open in your Windows browser at `http://localhost:4873`
-  reach the server inside WSL2.
+  Then follow the Linux steps inside Ubuntu, and keep the code in its home folder (`~/gitcha`), not
+  under `/mnt/c`. Pages you open in your Windows browser at `http://localhost:4873` reach the server
+  inside WSL2.
 
 ### Run it (rehearsed)
 
@@ -766,6 +773,121 @@ Check `deploy/gitcha.env` in the new code for new settings now and then; your
 
 ---
 
+## Upgrading to a new version
+
+A new version of Gitcha is new commits on the `main` branch of `inputloop/gitcha`. Upgrading means
+fetching them, installing what they need, and restarting Gitcha. Your accounts, projects and settings
+stay where they are: nothing below touches the data folder.
+
+**Before every upgrade:**
+
+1. **Back up the data folder** (and keep `secret.key` with it): `server/gitcha-data` on your own
+   computer, `/var/lib/gitcha` on a server. See [Back it up](#back-it-up).
+2. **See what you have and what is new.** In the code folder:
+
+   ```bash
+   git fetch origin
+   ```
+
+   ```bash
+   git log --oneline HEAD..origin/main
+   ```
+
+   That lists the new commits (empty means you are up to date). The running server says its version
+   at `/api/v1/health` (for example <http://localhost:4873/api/v1/health>).
+3. **Read the notes.** README.md, INSTALL.md and `deploy/gitcha.env` say when something new needs a
+   setting. Your own settings file is never changed by an upgrade, so a new setting stays at its
+   default until you add it.
+
+### On your own computer (Windows, macOS, Linux)
+
+Stop Gitcha (Ctrl+C in its window), then in the code folder (`C:\gitcha\server\gitcha` or wherever
+yours is):
+
+```bash
+git pull
+```
+
+```bash
+npm install
+```
+
+```bash
+npm start
+```
+
+`npm install` brings in any new libraries the update needs; run it every time, even when nothing
+seems to have changed. Then:
+
+- **The Claude extension** runs from the same folder, so it is upgraded too. Restart Claude Desktop
+  (quit it from the tray) or start a new Claude Code session to load it.
+- **If you installed the Claude Code plugin** with `/plugin marketplace add`, also run
+  `/plugin marketplace update gitcha` in Claude Code.
+- **If `git pull` refuses** because you changed files yourself, `git stash`, then `git pull`, then
+  `git stash pop`.
+
+### On an Ubuntu VPS (the package, Part 2)
+
+The same as [Update it](#update-it) in Part 2:
+
+```bash
+cd /opt/gitcha-src && git pull
+```
+
+```bash
+rm -rf /opt/gitcha-build && sh deploy/build-debian.sh /opt/gitcha-build --without-cassandra
+```
+
+```bash
+apt-get install -y /opt/gitcha-build/inputloop-gitcha_*_all.deb
+```
+
+The package restarts Gitcha by itself. Check it came back:
+
+```bash
+curl -s http://127.0.0.1:4873/api/v1/health
+```
+
+The package's version names the commit it was built from (`0.2.0+git20261101...` and the commit's
+first seven characters), so apt always sees a newer commit as newer. If apt says `is already the
+newest version`, the pull brought nothing new.
+
+### On AlmaLinux from source (Part 3)
+
+```bash
+cd /opt/gitcha && git pull && npm ci --omit=dev --omit=optional --workspace server && systemctl restart gitcha
+```
+
+Then check `/api/v1/health` as above.
+
+### With Docker
+
+```bash
+git pull && docker compose build && docker compose up -d
+```
+
+The data is in the `gitcha-data` volume, which the new container uses as it is.
+
+### If the new version will not start
+
+`journalctl -u gitcha -e` on a server (or the window it runs in, on your own computer) shows a line
+beginning `gitcha: cannot start:` with the reason. To go back to the version you had:
+
+```bash
+git log --oneline -5
+```
+
+```bash
+git checkout COMMIT
+```
+
+using the commit you were on before the pull, then repeat the install step for your setup (`npm
+install`, or the package build and `apt-get install`, or `npm ci`) and restart. If the new version
+already ran, restore the backup you made first as well: a newer version may have saved the data in
+a way the older one does not expect. `git checkout main` returns to the newest version later.
+
+---
+
 ## Troubleshooting
 
 Start here, on the server:
@@ -794,6 +916,7 @@ with the reason.
 | `could not listen on 127.0.0.1:4873 (EADDRINUSE)` | Something else uses the port, often a second Gitcha you started by hand | `ss -ltnp \| grep 4873` |
 | `another process (pid N) is already using /var/lib/gitcha` | Two Gitchas on one data folder | Stop the extra one; only the service should run |
 | `... was written with a different secret key` | The data was restored without its own `secret.key` | Put back the `secret.key` that was saved with that data |
+| `npm install` says `EISDIR: illegal operation on a directory, symlink` (Windows) | The code is on an exFAT or FAT32 drive, which cannot hold npm's links | Clone it onto an NTFS drive such as C:, or use WSL2 |
 | Uploading a big site fails | The proxy limits request size | Caddy has no limit; with Apache, check `LimitRequestBody` (Part 3) |
 | The Messages page says it needs https | You are on plain http at an address other than localhost | Use the https address, or `http://localhost:4873` |
 | Everyone shares one rate limit; sign-in history shows 127.0.0.1 | Gitcha sees the proxy's address, not the visitor's | Part 3's note on `GITCHA_TRUSTED_PROXIES` |

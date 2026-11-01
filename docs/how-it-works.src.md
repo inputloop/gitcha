@@ -419,6 +419,24 @@ A **project** is a git repository, owned by a person or a team. The code is in
 4. If two different agents worked on the same branches within a week, the task
    service opens a Second Reader review (see section 12).
 
+### Downloading without git
+
+[[server/src/git/browse.js]] serves the Files page, one file, and the whole
+project as a .zip or .tar.gz, from the web and from the API
+([[server/src/git/browse.js#registerBrowse]]). Who may read is the same as for
+`git clone` ([[server/src/git/browse.js#readable]]). Everything is read with git
+from the bare repository, after two checks on what the address asked for:
+
+1. A branch, tag or commit must look like one (`REF_RE`): it cannot start with
+   `-`, so git never reads it as an option, and cannot use `..` or `@{`.
+   [[server/src/git/browse.js#resolve]] then asks git for the commit it names.
+2. A path is split on `/`, and any `.` or `..` part is refused, not resolved
+   ([[server/src/git/browse.js#cleanPath]]).
+
+A file is sent as plain text or as a download, never as HTML, with a CSP that
+forbids scripts. [[server/src/git/browse.js#pipeArchive]] streams `git archive`
+straight to the reply, and at most eight run at once.
+
 ## 9. Hosting sites, custom domains and the ring
 
 ### Sites

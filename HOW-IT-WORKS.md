@@ -82,17 +82,17 @@ with [`extension/lib/manifest.js`](extension/lib/manifest.js).
    key yet, it makes one, but [`config.js:73`](server/src/config.js#L73) refuses
    to do that when the database already has accounts: a new key could never
    open the old secrets, so it is safer to stop.
-3. [`app.js:58`](server/src/app.js#L58) builds every part of the server (the
+3. [`app.js:59`](server/src/app.js#L59) builds every part of the server (the
    "services") and connects them. The order matters, because some services need
    others. For example, the task service needs the projects service, and the
    social feed listens for pushes from projects.
 4. `createApp` then registers the routes (the URL patterns each part answers),
-   starting at [`app.js:100`](server/src/app.js#L100).
+   starting at [`app.js:101`](server/src/app.js#L101).
 5. The server listens on `127.0.0.1:4873` by default, in plain HTTP. Only a TLS
    proxy (such as Caddy) should face the internet: see "The reverse proxy"
    below.
 6. A timer runs every 30 seconds to clean up: it ends old jobs and expired
-   sign-ups ([`app.js:172`](server/src/app.js#L172)).
+   sign-ups ([`app.js:176`](server/src/app.js#L176)).
 
 If something goes badly wrong later, [`http.js:112`](server/src/http.js#L112)
 logs the error and keeps serving, instead of letting one bad request stop the
@@ -101,7 +101,7 @@ whole server.
 ### The reverse proxy
 
 The server never does TLS. It uses Node's plain `http` module
-([`app.js:162`](server/src/app.js#L162)), and the reverse proxy in front of
+([`app.js:166`](server/src/app.js#L166)), and the reverse proxy in front of
 it (Caddy, nginx, Apache or HAProxy) does the https, holds the certificates
 and owns ports 80 and 443. The server reads three things the proxy tells it:
 
@@ -125,7 +125,7 @@ the settings for running without one.
 ## 3. How a request is handled
 
 Every HTTP request goes through one function, set up in
-[`app.js:58`](server/src/app.js#L58):
+[`app.js:59`](server/src/app.js#L59):
 
 1. It works out the address of the person calling with
    [`http.js:275`](server/src/http.js#L275). Behind a proxy, the real address is in the
@@ -192,7 +192,7 @@ memory, and every change goes through [`store.js:203`](server/src/store.js#L203)
    [`store.js:232`](server/src/store.js#L232) reloads the last good copy, so memory and
    disk agree again. A half-made change can never be saved by a later write.
    This is why `createApp` saves once at start-up
-   ([`app.js:171`](server/src/app.js#L171)): from then on every collection
+   ([`app.js:175`](server/src/app.js#L175)): from then on every collection
    is on disk, so going back to the file never loses one.
 
 Two rules follow for code that uses the store:
@@ -419,6 +419,24 @@ A **project** is a git repository, owned by a person or a team. The code is in
 4. If two different agents worked on the same branches within a week, the task
    service opens a Second Reader review (see section 12).
 
+### Downloading without git
+
+[`server/src/git/browse.js`](server/src/git/browse.js) serves the Files page, one file, and the whole
+project as a .zip or .tar.gz, from the web and from the API
+([`browse.js:173`](server/src/git/browse.js#L173)). Who may read is the same as for
+`git clone` ([`browse.js:198`](server/src/git/browse.js#L198)). Everything is read with git
+from the bare repository, after two checks on what the address asked for:
+
+1. A branch, tag or commit must look like one (`REF_RE`): it cannot start with
+   `-`, so git never reads it as an option, and cannot use `..` or `@{`.
+   [`browse.js:82`](server/src/git/browse.js#L82) then asks git for the commit it names.
+2. A path is split on `/`, and any `.` or `..` part is refused, not resolved
+   ([`browse.js:51`](server/src/git/browse.js#L51)).
+
+A file is sent as plain text or as a download, never as HTML, with a CSP that
+forbids scripts. [`browse.js:147`](server/src/git/browse.js#L147) streams `git archive`
+straight to the reply, and at most eight run at once.
+
 ## 9. Hosting sites, custom domains and the ring
 
 ### Sites
@@ -523,7 +541,7 @@ Gitcha also writes TopoForge drawings, with [`extension/lib/topoforge.js`](exten
 The routes are in [`topoforge.js:52`](server/src/topoforge.js#L52). Each uses
 the same "who may see this" rule as the thing it draws, sends the drawing as a
 download, and the instance map is for administrators and staff only. The CLI's
-`gitcha topoforge` ([`gitcha.js:430`](extension/bin/gitcha.js#L430)) and the
+`gitcha topoforge` ([`gitcha.js:487`](extension/bin/gitcha.js#L487)) and the
 Claude tool `gitcha_topoforge` use them.
 
 [`ci.js:83`](server/src/compute/ci.js#L83) starts a build. It checks deploy rights, room
@@ -665,7 +683,7 @@ files the browser page and the `gitcha` CLI share:
   [`dm-client.js:251`](extension/lib/dm-client.js#L251) seals one envelope for the recipient and
   one for the sender's own inbox.
 - [`server/public/dm.js`](server/public/dm.js) draws the Messages page on top of `DmDevice`, and
-  `gitcha messages` ([`gitcha.js:335`](extension/bin/gitcha.js#L335)) does the
+  `gitcha messages` ([`gitcha.js:392`](extension/bin/gitcha.js#L392)) does the
   same in a terminal, keeping the keys in a mode-600 file
   ([`dm-store.js:18`](extension/lib/dm-store.js#L18)).
 
@@ -729,7 +747,7 @@ apply as everywhere else.
 
 Both live in [`extension`](extension) and share the same library.
 
-- [`client.js:20`](extension/lib/client.js#L20) talks to the server. It refuses
+- [`client.js:28`](extension/lib/client.js#L28) talks to the server. It refuses
   plain `http://` except for your own machine, and it does not follow
   redirects.
 - [`extension/lib/credentials.js`](extension/lib/credentials.js) saves the device token in a file only you
@@ -742,7 +760,7 @@ Both live in [`extension`](extension) and share the same library.
   and only then moves it into place.
 - [`extension/bin/gitcha.js`](extension/bin/gitcha.js) is the `gitcha` command. When the server asks
   for a code, `withStepUp` asks you for one and tries again
-  ([`gitcha.js:138`](extension/bin/gitcha.js#L138)).
+  ([`gitcha.js:151`](extension/bin/gitcha.js#L151)).
 - [`extension/bin/gitcha-mcp.js`](extension/bin/gitcha-mcp.js) is the Claude extension: an MCP server (the
   Model Context Protocol, the way Claude calls outside tools) built on
   [`mcp.js:65`](extension/lib/mcp.js#L65). Every tool's input is checked

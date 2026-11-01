@@ -17,6 +17,14 @@ export class GitchaError extends Error {
 }
 
 // One client per server. It sends the saved device token, if any, as a Bearer token.
+// "owner/name" for an address, each part escaped. Refuses anything else, so a typo cannot reach another route.
+function projectPath(project) {
+  const m = /^(@?[^/\s]+)\/([^/\s]+?)(?:\.git)?$/.exec(String(project ?? ''));
+  if (!m) throw new GitchaError(0, 'bad_project', `"${project}" is not a project: write it as owner/name (or @team/name).`);
+  return `${encodeURIComponent(m[1])}/${encodeURIComponent(m[2])}`;
+}
+const query = (o) => new URLSearchParams(Object.entries(o).filter(([, v]) => v)).toString();
+
 export class GitchaClient {
   // timeoutMs limits the whole exchange, body included. That way a server that stalls cannot hang a command or a hook.
   constructor({ server, token = null, userAgent = 'gitcha-cli', timeoutMs = 60_000 }) {
@@ -67,6 +75,12 @@ export class GitchaClient {
   }
 
   health() { return this.request('GET', '/api/v1/health'); }
+  // A project's files (see server/src/git/browse.js). `project` is "owner/name" (a team owner is "@team").
+  projectTree(project, { ref, path } = {}) { return this.request('GET', `/api/v1/projects/${projectPath(project)}/tree?${query({ ref, path })}`); }
+  // The bare response, to stream to a file: one file (with `path`), else the whole project as zip or tar.gz.
+  projectDownload(project, { ref, path, format = 'zip' } = {}) {
+    return this.request('GET', path ? `/api/v1/projects/${projectPath(project)}/raw?${query({ ref, path })}` : `/api/v1/projects/${projectPath(project)}/archive?${query({ ref, format })}`, { raw: true });
+  }
   // TopoForge drawings (see server/src/topoforge.js): a build, a function, the instance; and a drawing checked.
   topoforgeBuild(id) { return this.request('GET', `/api/v1/ci/runs/${encodeURIComponent(id)}/topoforge`); }
   topoforgeFunction(owner, name) { return this.request('GET', `/api/v1/functions/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/topoforge`); }

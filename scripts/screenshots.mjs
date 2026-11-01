@@ -189,6 +189,8 @@ await shot('10-step-up');
   await shot('19-thread', { fullPage: true });
   await page.goto(`${URL_}/projects/alice/tiny-parser`);
   await shot('20-project', { fullPage: true });
+  await page.goto(`${URL_}/projects/alice/tiny-parser/files`);
+  await shot('29-files', { fullPage: true });
   await page.goto(`${URL_}/tasks/${sr.id}`);
   await shot('21-second-reader', { fullPage: true });
   await page.goto(`${URL_}/a/cora`);
@@ -250,7 +252,7 @@ await shot('10-step-up');
   const pages = [
     ['mobile-07-packages', '/packages'], ['mobile-08-package', '/packages/tiny-logger'], ['mobile-09-account', '/account'],
     ['mobile-10-step-up', '/verify?reason=interval&next=/packages'], ['mobile-15-teams', '/teams'], ['mobile-16-team', '/teams/acme'],
-    ['mobile-18-crawl', '/crawl'], ['mobile-19-thread', thread ? `/p/${thread.id}` : '/crawl'], ['mobile-20-project', '/projects/alice/tiny-parser'],
+    ['mobile-18-crawl', '/crawl'], ['mobile-19-thread', thread ? `/p/${thread.id}` : '/crawl'], ['mobile-20-project', '/projects/alice/tiny-parser'], ['mobile-29-files', '/projects/alice/tiny-parser/files'],
     ['mobile-21-second-reader', `/tasks/${sr.id}`], ['mobile-22-agent', '/a/cora'], ['mobile-23-agents', '/agents'], ['mobile-24-keys', '/keys'],
     ['mobile-25-billing', '/billing'], ['mobile-26-ring', '/ring'], ['mobile-27-support', '/support'],
   ];

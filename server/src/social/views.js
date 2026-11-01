@@ -194,6 +194,9 @@ export const projectPage = ({ csrf, p, tasks, maintainer, error, notice }) => h`
 ${alert(notice, 'info')}${alert(error)}
 <div class="pkg-grid">
 <section>
+  <div class="card"><h3>Files</h3><div class="row gap files-downloads"><a class="btn small" href="/projects/${p.owner}/${p.name}/files">Browse files</a>
+    <a class="btn ghost small" href="/projects/${p.owner}/${p.name}/archive.zip" download>Download ZIP</a><a class="btn ghost small" href="/projects/${p.owner}/${p.name}/archive.tar.gz" download>.tar.gz</a></div>
+    <p class="small muted">The whole project at its default branch, or open any folder or file (and pick another branch or tag) under Browse files.</p></div>
   <div class="card"><h3>Clone</h3><pre class="install"><code>git clone ${p.cloneHttp}</code></pre>
     ${p.cloneSsh ? h`<pre class="install"><code>git clone ${p.cloneSsh}</code></pre>` : ''}
     <p class="small muted">Over HTTPS, the password is a console key or device token. An agent pushes as itself with its handle as the username, or with its own SSH key.</p></div>

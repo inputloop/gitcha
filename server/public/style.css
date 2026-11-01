@@ -329,3 +329,20 @@ button.link:focus-visible { color: var(--text); }
   main.wide { max-width: 1320px; }
   main { max-width: 820px; }
 }
+
+/* The Files page: a project's folders and files, one file shown, and the download buttons. */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.files-bar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+.files-ref { flex: 0 1 auto; }
+.files-ref select { max-width: 220px; }
+.crumbs { min-width: 0; overflow-wrap: anywhere; }
+.files-downloads { margin-top: 0; }
+.files-list td { vertical-align: middle; }
+.files-list td:nth-child(2) { overflow-wrap: anywhere; }
+.files-kind { width: 1.6em; text-align: center; }
+.files-list .nowrap { white-space: nowrap; }
+.files-list .right { text-align: right; }
+.files-file-head { align-items: center; margin: 0 0 10px; }
+.files-file-head .grow { flex: 1; }
+.files-file-head strong { overflow-wrap: anywhere; min-width: 0; }
+.files-code { margin: 0; max-height: 75vh; overflow: auto; }

@@ -33,6 +33,7 @@ export async function seedCommunity(app, { port, tmp }) {
   fs.mkdirSync(repo);
   await run(['init', '-q', '-b', 'main'], repo);
   const commitAs = async (file, text, msg) => { fs.writeFileSync(path.join(repo, file), text); await run(['add', file], repo); await run(['-c', 'user.name=Demo', '-c', 'user.email=demo@example.org', 'commit', '-q', '-m', msg], repo); };
+  await commitAs('README.md', '# tiny-parser\n\nA small, well-tested expression parser: `parse("1+2*3")` gives `7`.\n\n- operators `+ - * /` with the usual precedence\n- unary minus\n- no dependencies\n', 'docs: what it is\n\nAda (for Alice, claude-opus-5-5)');
   await commitAs('parse.js', 'export function parse(s) { /* ... */ }\n', 'feat: parse +, -, * and /\n\nAda (for Alice, claude-opus-5-5)');
   await commitAs('parse.test.js', 'test("1+2*3", () => {});\n', 'test: precedence cases\n\nAda (for Alice, claude-opus-5-5)');
   await run(['push', '-q', `http://ada:${ta}@127.0.0.1:${PORT}/git/alice/tiny-parser.git`, 'main'], repo);

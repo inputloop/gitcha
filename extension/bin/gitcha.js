@@ -45,6 +45,13 @@ ${bold('Packages')}
   gitcha transfer <name> <team>                 share a package by moving it into a team
   gitcha access <name> team-only|public         who can see a team package
 
+${bold('Projects')} (git repositories; owner/name, or @team/name)
+  gitcha files <owner/name> [PATH] [--ref R]    list a folder (or show a file's size) at a branch, tag or commit
+  gitcha download <owner/name> [--ref R] [--format zip|tar.gz] [--out FILE]
+                                                the whole project as one archive (default: zip, default branch)
+  gitcha download <owner/name> --path P [--ref R] [--out FILE]
+                                                one file (--out - writes to the terminal; --force replaces a file)
+
 ${bold('Teams')}
   gitcha team list                              teams you belong to
   gitcha team create <name> [--description D]   start a team (you become its owner)
@@ -129,6 +136,12 @@ function authedClient(flags) {
   if (!creds) throw new Error(`You are not signed in to ${server}.\nRun ${cyan('gitcha login' + (flags.server ? ` --server ${server}` : ''))} first: a password and an authenticator code are required.`);
   // The SessionStart hook runs every time a Claude session starts, so it gets a short timeout (5 seconds).
   return new GitchaClient({ server, token: creds.token, userAgent: `gitcha-cli/${VERSION}`, ...(flags.hook ? { timeoutMs: HOOK_TIMEOUT_MS } : {}) });
+}
+
+/** A client for reading a project: signed in when there is a saved sign-in for the server, else anonymous (public projects). */
+function projectClient(flags) {
+  const server = resolveServer(flags.server);
+  return getCredentials(server) ? authedClient(flags) : new GitchaClient({ server, userAgent: `gitcha-cli/${VERSION}` });
 }
 
 /**
@@ -266,6 +279,50 @@ const commands = {
     if (flags.json) return out(JSON.stringify(packages, null, 2));
     if (!packages.length) return out(dim('No packages found.'));
     for (const p of packages) out(packageLine(p));
+  },
+
+  // A project's folder (or one file's size). Works without signing in for public projects when the server allows it.
+  async files({ _, flags }) {
+    const [, project, sub] = _;
+    if (!project) throw new Error('Usage: gitcha files <owner/name> [PATH] [--ref R]');
+    const client = projectClient(flags);
+    const t = await withStepUp(client, () => client.projectTree(project, { ref: flags.ref, path: sub }));
+    if (flags.json) return out(JSON.stringify(t, null, 2));
+    if (t.empty) return out(yellow('● Nothing has been pushed to this project yet.'));
+    out(`${bold(t.project)}${t.path ? ` ${dim('/')} ${t.path}` : ''}  ${dim(`at ${t.ref} (${t.commit.slice(0, 10)})`)}`);
+    if (t.type === 'blob') return out(`  file, ${t.size} bytes. ${dim(`gitcha download ${project} --path ${t.path}${flags.ref ? ` --ref ${flags.ref}` : ''}`)}`);
+    for (const e of t.entries) out(e.type === 'tree' ? `  ${cyan(e.name + '/')}` : e.type === 'commit' ? `  ${e.name} ${dim('(submodule)')}` : `  ${e.name}  ${dim(`${e.size} B`)}`);
+    if (!t.entries.length) out(dim('  (empty folder)'));
+    out(dim(`  Branches: ${t.branches.join(', ') || 'none'}${t.tags.length ? `   Tags: ${t.tags.join(', ')}` : ''}`));
+  },
+
+  // The whole project as a zip or tar.gz, or one file. It is written next to you under the name the server
+  // gives (or --out), through a temporary file, so a broken download never leaves a half file under the real name.
+  async download({ _, flags }) {
+    const [, project] = _;
+    if (!project) throw new Error('Usage: gitcha download <owner/name> [--ref R] [--path P] [--format zip|tar.gz] [--out FILE]');
+    const format = flags.format ?? 'zip';
+    if (!['zip', 'tar.gz'].includes(format)) throw new Error('--format must be zip or tar.gz.');
+    const client = projectClient(flags);
+    client.timeoutMs = 30 * 60_000; // a big project takes a while; the server stops one at ten minutes
+    const res = await withStepUp(client, () => client.projectDownload(project, { ref: flags.ref, path: flags.path, format }));
+    const given = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1];
+    const name = path.basename(String(flags.out ?? given ?? (flags.path ? path.basename(flags.path) : `download.${format}`)));
+    const { Readable } = await import('node:stream');
+    const { pipeline } = await import('node:stream/promises');
+    if (flags.out === '-') return pipeline(Readable.fromWeb(res.body), process.stdout);
+    const file = flags.out ? path.resolve(String(flags.out)) : path.resolve(name);
+    if (fs.existsSync(file) && !flags.force) throw new Error(`${file} already exists. Choose another --out, or add --force to replace it.`);
+    const part = `${file}.part`;
+    try {
+      await pipeline(Readable.fromWeb(res.body), fs.createWriteStream(part));
+      fs.renameSync(part, file);
+    } catch (err) {
+      fs.rmSync(part, { force: true });
+      throw new Error(`The download broke off (${err.message}). Nothing was saved; try again.`);
+    }
+    const commit = res.headers.get('x-gitcha-commit');
+    out(green(`✓ Saved ${bold(path.relative(process.cwd(), file) || file)}`) + dim(` (${fs.statSync(file).size} bytes, ${res.headers.get('x-gitcha-ref') ?? ''} at ${commit ? commit.slice(0, 10) : '?'})`));
   },
 
   async info({ _, flags }) {

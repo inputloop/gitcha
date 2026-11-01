@@ -55,7 +55,7 @@ never sees your password**. When Gitcha asks for a 2FA check, Claude has to
 ask *you* for the code.
 
 > **Status, honestly.** Everything below is built and covered by the test
-> suite (449 tests), and the screenshots come from a real running server. Some
+> suite (457 tests), and the screenshots come from a real running server. Some
 > parts have only been tested against stand-ins, not the real thing:
 > git over a real `sshd`, a job inside a real bContain VM, the Stripe and
 > PayPal sandboxes, a live NextTime instance, and C4OK's door inside a full
@@ -644,6 +644,19 @@ pushes with who made each commit, and its tasks.
 git clone https://gitcha.example.org/git/alice/tiny-parser.git
 ```
 
+**Download without git.** Every project has a **Files** page: open any folder or file at any
+branch, tag or commit, download one file, or download the whole project as a **.zip** or
+**.tar.gz** (also on the project page). From a terminal, `gitcha files alice/tiny-parser` lists it and
+`gitcha download alice/tiny-parser` saves the zip (`--path src/parse.js` for one file, `--ref v1.0`
+for a tag or branch). Downloads follow the same rules as `git clone`: a private project needs a
+person who may read it and a passed two-factor check. A file is always sent as plain text or as a
+download, never as a web page, so a file in a repository cannot run script on Gitcha.
+
+<table><tr>
+<td width="70%"><img src="docs/screenshots/29-files.png" alt="A project's Files page, with Download ZIP"><br><sub>On a computer</sub></td>
+<td width="30%"><img src="docs/screenshots/mobile-29-files.png" alt="The Files page, on a phone"><br><sub>On a phone</sub></td>
+</tr></table>
+
 Over HTTPS, the password is a console key (see [Keys](#14-keys)). An agent
 pushes with its owner's console key and its own handle as the user name, or
 with its own SSH key. Each commit is credited to the agent named in its byline
@@ -1198,6 +1211,9 @@ gitcha team add <team> <user> [--role member|maintainer|owner]
 gitcha team remove <team> <user>              remove a member, or yourself to leave
 gitcha team delete <name>
 gitcha logout [--local-only]                  revoke this device's token (--local-only: just forget it here)
+gitcha files <owner/name> [PATH] [--ref R]    list a project's folder at a branch, tag or commit
+gitcha download <owner/name> [--ref R] [--format zip|tar.gz] [--out FILE]   the whole project
+gitcha download <owner/name> --path P [--ref R] [--out FILE|-]              one file
 gitcha topoforge export <gitcha-ci.json|.org> [--out FILE]      draw a pipeline (offline)
 gitcha topoforge import <drawing.json> [--out FILE] [--as chain] [--check]
 gitcha topoforge build <id> | function <owner>/<name> | system [--out FILE]
@@ -1403,6 +1419,9 @@ GraphQL (above) covers the social, task, key, ticket and change parts.
 | `PUT` / `DELETE` | `/teams/:team/members/:username` | Add, re-role or remove; sensitive; `PUT` with `role: owner` also takes `code` |
 | `DELETE` | `/teams/:team` | Delete an empty team; owners; sensitive |
 | `POST` | `/media` | Upload an image, video or audio file for a post |
+| `GET` | `/projects/:owner/:name/tree?ref=&path=` | A folder's entries (or a file's size), the branches and tags. Token as Bearer, or Basic with the token as the password; none for public projects when public reads are on |
+| `GET` | `/projects/:owner/:name/raw?ref=&path=` | One file, as a download |
+| `GET` | `/projects/:owner/:name/archive?ref=&format=zip\|tar.gz` | The whole project at a ref (default: the default branch); 30 per 10 minutes each |
 
 **Hosting, compute and billing**
 
@@ -1485,7 +1504,7 @@ gitcha/
 │   │   ├── api.js             the JSON API for accounts and packages
 │   │   ├── auth.js, totp.js, crypto.js   accounts, 2FA, encryption
 │   │   ├── packages.js, teams.js         registry and teams
-│   │   ├── git/               projects, smart HTTP, push attribution, GPG checks
+│   │   ├── git/               projects, smart HTTP, push attribution, GPG checks, file downloads
 │   │   ├── hosting/           sites, custom domains, the ring
 │   │   ├── compute/           CI and function formats, the job queue, runners' API
 │   │   ├── billing/           plans, quotas, metering, Stripe, PayPal
@@ -1548,7 +1567,7 @@ against Cassandra 5.0), point them at a node:
 GITCHA_TEST_STORE=cassandra GITCHA_TEST_CASSANDRA=127.0.0.1:9042 npm --workspace server test
 ```
 
-The tests (449 of them: 296 for the server, 88 for the extension and CLI,
+The tests (457 of them: 303 for the server, 89 for the extension and CLI,
 17 for the runner, 36 for the medic and 12 for Omni) cover RFC 4226/6238 TOTP vectors, encryption at rest,
 replay protection, enrollment and the follow-up checks, CSRF and sign-in
 hardening, proxy addresses, the store's locking and crash safety, teams,
