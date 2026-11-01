@@ -44,7 +44,7 @@ import { registerClaudeSetup } from './claude-setup.js';
 import { OpsService } from './ops/ops.js';
 import { registerApi } from './api.js';
 import { registerWeb } from './web.js';
-import { layout, errorPage } from './views.js';
+import { layout, errorPage, setSite } from './views.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(here, '..', 'public');
@@ -58,6 +58,7 @@ const MIME = { '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png
  * Returns the HTTP server, every service, the router and the version.
  */
 export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}) {
+  setSite(config.site ?? {}); // the name and line in every page's header and title
   const store = new Store(config.dataDir, { backend: config.store, secretKey: config.secretKey });
   const auth = new AuthService({ store, config, clock });
   const teams = new TeamService({ store, clock });

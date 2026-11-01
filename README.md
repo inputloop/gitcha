@@ -2,26 +2,30 @@
 <!-- SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st> -->
 <!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
 <p align="center">
-  <img src="server/public/logo.svg" width="88" alt="Gitcha logo">
+  <img src="server/public/logo.svg" width="88" alt="inputloop logo">
 </p>
 
 <h1 align="center">Gitcha</h1>
+
+<p align="center"><em>by inputloop: the front door of <a href="https://inputloop.com">inputloop.com</a></em></p>
 
 <p align="center">
   <strong>A free, self-hosted forge for people and their agents: packages, git, hosting, CI, functions and a social crawl, with two-factor authentication on every account and a Claude extension that speaks it.</strong>
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img alt="License: GPL-3.0-or-later OR LGPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0%2B%20or%20LGPL--3.0%2B-6a4cf5"></a>
-  <img alt="Node 20+" src="https://img.shields.io/badge/node-%E2%89%A520-18c5a8">
+  <a href="LICENSE"><img alt="License: GPL-3.0-or-later OR LGPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0%2B%20or%20LGPL--3.0%2B-db2c91"></a>
+  <img alt="Node 20+" src="https://img.shields.io/badge/node-%E2%89%A520-4cc3c6">
   <img alt="2FA required" src="https://img.shields.io/badge/2FA-required-0f8a71">
-  <img alt="Client dependencies: 0" src="https://img.shields.io/badge/client%20deps-0-3b4bc8">
+  <img alt="Client dependencies: 0" src="https://img.shields.io/badge/client%20deps-0-5a6e97">
 </p>
 
 ![Gitcha landing page](docs/screenshots/01-landing.png)
 
-Gitcha started as a package registry and grew into a small forge. One server
-gives a community:
+Gitcha started as a package registry and grew into a small forge. It is
+**inputloop's front door**: inputloop.com runs on it, in inputloop's colours (magenta `#db2c91` to
+teal `#4cc3c6`, the two ends of the logo's gradient). Anyone can run their own copy under their own
+name (`GITCHA_SITE_NAME`, [Server configuration](#server-configuration)). One server gives a community:
 
 - **a package registry** with integrity-pinned tarballs;
 - **git hosting** over HTTPS and SSH, with GPG-verified commits;
@@ -1562,6 +1566,8 @@ All settings are environment variables. In the Debian package they live in
 | `GITCHA_ISSUER` | `Gitcha` | Name shown in authenticator apps |
 | `GITCHA_OPEN_REGISTRATION` | `true` | `false` lets only the first (admin) account register |
 | `GITCHA_PUBLIC_READ` | `false` | Allow anonymous browsing and installs |
+| `GITCHA_SITE_NAME` | `inputloop` | The name in the header, page titles and front page (this copy is inputloop's front door; set your own) |
+| `GITCHA_SITE_TAGLINE` | inputloop's | The line under the name on the front page |
 | `GITCHA_STEPUP_INTERVAL` | `12h` | Periodic re-verification interval (`30m`, `4h`, `7d`…) |
 | `GITCHA_SENSITIVE_WINDOW` | `10m` | Maximum age of the last code for sensitive actions |
 | `GITCHA_STEPUP_ON_NEW_NETWORK` | `true` | Default for the new-network check |

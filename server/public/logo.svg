@@ -1,8 +1,21 @@
 <!-- SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors -->
 <!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c5cff"/><stop offset="1" stop-color="#18c5a8"/></linearGradient></defs>
-  <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#g)"/>
-  <path d="M32 14l14 6v10c0 9.5-6 16.5-14 20-8-3.5-14-10.5-14-20V20z" fill="#fff" fill-opacity=".95"/>
-  <path d="M25 32l5 5 10-11" fill="none" stroke="#5b46d6" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 225 225" role="img" aria-label="inputloop">
+  <defs>
+    <linearGradient id="il-g" x1="6.5" y1="0" x2="218.5" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#db2c91"/>
+      <stop offset=".234" stop-color="#bc75a5"/>
+      <stop offset=".469" stop-color="#9a98b4"/>
+      <stop offset=".703" stop-color="#76b1bf"/>
+      <stop offset="1" stop-color="#4cc3c6"/>
+    </linearGradient>
+  </defs>
+  <circle cx="112.5" cy="112.5" r="106" fill="url(#il-g)"/>
+  <g fill="#fff" fill-opacity=".25">
+    <circle cx="56.4" cy="61.9" r="14.6"/>
+    <circle cx="44.4" cy="114.7" r="29.7"/>
+    <circle cx="55.4" cy="167.2" r="14.6"/>
+  </g>
+  <path fill="#fff" d="M 71.75 202.02 C 70.01 200.81 69.14 199.09 69.14 196.86 C 69.14 193.21 70.93 190.80 74.50 189.64 C 77.44 188.66 79.16 188.06 79.65 187.83 C 80.14 187.61 80.65 187.10 81.19 186.29 C 82.26 184.87 82.79 182.59 82.79 179.47 L 82.79 45.53 C 82.79 42.40 82.26 40.13 81.19 38.70 C 80.65 37.90 80.14 37.39 79.65 37.16 C 79.16 36.94 77.44 36.34 74.50 35.36 C 70.93 34.20 69.14 31.79 69.14 28.13 C 69.14 25.90 70.01 24.18 71.75 22.98 C 73.49 21.77 75.97 21.17 79.18 21.17 L 145.81 21.17 C 149.03 21.17 151.50 21.77 153.24 22.98 C 154.98 24.18 155.85 25.90 155.85 28.13 C 155.85 31.79 154.07 34.20 150.50 35.36 C 147.55 36.34 145.84 36.94 145.35 37.16 C 144.86 37.39 144.34 37.90 143.81 38.70 C 142.74 40.13 142.20 42.40 142.20 45.53 L 142.20 179.47 C 142.20 182.59 142.74 184.87 143.81 186.29 C 144.34 187.10 144.86 187.61 145.35 187.83 C 145.84 188.06 147.55 188.66 150.50 189.64 C 154.07 190.80 155.85 193.21 155.85 196.86 C 155.85 199.09 154.98 200.81 153.24 202.02 C 151.50 203.22 149.03 203.82 145.81 203.82 L 79.18 203.82 C 75.97 203.82 73.49 203.22 71.75 202.02"/>
+  <circle cx="112.5" cy="112.5" r="109.25" fill="none" stroke="#5a6e97" stroke-width="6.5"/>
 </svg>

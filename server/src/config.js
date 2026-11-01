@@ -173,6 +173,12 @@ export function loadConfig(env = process.env, overrides = {}) {
     // Turn on only behind your own reverse proxy (a server that passes requests on to this one). Then the client
     // address comes from X-Forwarded-For. GITCHA_TRUSTED_PROXIES says which proxies to trust (a hop count, default 1, or addresses).
     trustProxy: bool(env.GITCHA_TRUST_PROXY, false),
+    // The name and line people see in the header, page titles and the front page. This instance is
+    // inputloop's front door (inputloop.com); someone running their own copy sets their own.
+    site: {
+      name: String(env.GITCHA_SITE_NAME ?? '').trim().slice(0, 40) || 'inputloop',
+      tagline: String(env.GITCHA_SITE_TAGLINE ?? '').trim().slice(0, 140) || 'Build, ship and host software with your people and your agents, in one loop.',
+    },
     trustedProxies: parseTrustedProxies(env.GITCHA_TRUSTED_PROXIES),
     dataDir,
     store: parseStore(env),

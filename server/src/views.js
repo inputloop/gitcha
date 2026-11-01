@@ -31,6 +31,11 @@ export const ago = (t) => {
 
 const bytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 
+// The site's own name and line (GITCHA_SITE_NAME, GITCHA_SITE_TAGLINE): inputloop's unless set. createApp
+// sets them at start; Gitcha, the software, is named beside them.
+export const site = { name: 'inputloop', tagline: 'Build, ship and host software with your people and your agents, in one loop.' };
+export function setSite({ name, tagline } = {}) { if (name) site.name = name; if (tagline) site.tagline = tagline; }
+
 // The page frame around every page: head, top bar (with a sign-out form when signed in), main, footer.
 // `body` should come from h``, because out() escapes plain strings.
 // The same links show twice: in a row on wide screens, and in a "Menu" that opens on small screens.
@@ -44,13 +49,14 @@ export function layout({ title, user, csrf, body, wide = false }) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(title)} · Gitcha</title>
+<title>${esc(title)} · ${esc(site.name)}</title>
+<meta name="theme-color" content="#db2c91">
 <link rel="stylesheet" href="/static/style.css">
 <link rel="icon" href="/static/logo.svg" type="image/svg+xml">
 </head>
 <body>
 <header class="topbar">
-  <a class="brand" href="/"><img src="/static/logo.svg" alt="" width="28" height="28"> Gitcha</a>
+  <a class="brand" href="/"><img src="/static/logo.svg" alt="" width="32" height="32"><span class="brand-name">${esc(site.name)}</span>${site.name.toLowerCase() === 'gitcha' ? '' : '<span class="brand-sub">Gitcha</span>'}</a>
   <nav class="nav-wide" aria-label="Main">${links}</nav>
   <details class="nav-menu">
     <summary><span class="burger" aria-hidden="true"></span>Menu</summary>
@@ -58,7 +64,7 @@ export function layout({ title, user, csrf, body, wide = false }) {
   </details>
 </header>
 <main class="${wide ? 'wide' : ''}">${out(body)}</main>
-<footer><a href="/ring/prev" rel="prev">&#9664; prev</a> · <a href="/ring">Gitcha ring</a> · <a href="/ring/next" rel="next">next &#9654;</a> · <a href="/ring/random">random</a><br>Gitcha · free software forge and registry · <a href="/claude">Connect Claude</a> · <a href="/support">Support</a> · <a href="/api/v1/health">API status</a></footer>
+<footer><a href="/ring/prev" rel="prev">&#9664; prev</a> · <a href="/ring">Gitcha ring</a> · <a href="/ring/next" rel="next">next &#9654;</a> · <a href="/ring/random">random</a><br>${esc(site.name)} · runs on Gitcha, a free software forge · <a href="/claude">Connect Claude</a> · <a href="/support">Support</a> · <a href="/api/v1/health">API status</a></footer>
 </body>
 </html>`;
 }
@@ -67,19 +73,23 @@ export function layout({ title, user, csrf, body, wide = false }) {
 export const csrfField = (csrf) => h`<input type="hidden" name="_csrf" value="${csrf}">`;
 export const alert = (err, kind = 'error') => (err ? h`<div class="alert ${kind}" role="alert">${err}</div>` : '');
 
-// The front page for visitors who are not signed in.
+// The front page for visitors who are not signed in: the site's front door (inputloop.com's, unless set).
 export const landing = () => h`
 <section class="hero">
-  <h1>Your own package registry,<br><span class="accent">locked down by default.</span></h1>
-  <p class="lead">Gitcha is a free, self-hosted software repository. Every account is protected by a password
-  <strong>and</strong> an authenticator app, and the registry asks you to re-confirm with a fresh code from time to time.</p>
+  <img class="hero-logo" src="/static/logo.svg" alt="" width="112" height="112">
+  <h1><span class="accent">${site.name}</span></h1>
+  <p class="hero-line">${site.tagline}</p>
+  <p class="lead">Git and packages, websites and CI, encrypted messages, and AI agents that work beside you,
+  in one place. Every account is protected by a password <strong>and</strong> an authenticator app.</p>
   <div class="cta"><a class="btn" href="/register">Create an account</a><a class="btn ghost" href="/login">Sign in</a></div>
 </section>
 <section class="features">
-  <div class="card"><h3>🔐 Two-factor everywhere</h3><p>TOTP codes from Google Authenticator, Authy, 1Password or Aegis are required to sign in and to install.</p></div>
-  <div class="card"><h3>⏱ Intermittent checks</h3><p>Sessions and devices re-verify periodically, on new networks, and before sensitive actions. You choose which checks stay on.</p></div>
-  <div class="card"><h3>🤖 Works with Claude</h3><p>The Gitcha Claude extension lets Claude search, install and publish packages, but never sees your password.</p></div>
-  <div class="card"><h3>📦 Integrity-checked</h3><p>Every tarball is pinned by SHA-256, versions are immutable, and installs are verified before extraction.</p></div>
+  <div class="card"><h3><span aria-hidden="true">🌿</span> Code</h3><p>Git over HTTPS and SSH, with every push credited to the person or agent who made it. Browse any branch, or download the whole project as a zip.</p></div>
+  <div class="card"><h3><span aria-hidden="true">📦</span> Packages</h3><p>Publish and install with integrity hashes. Every version keeps its own page, files and download.</p></div>
+  <div class="card"><h3><span aria-hidden="true">🌐</span> Sites and CI</h3><p>Static sites on your own domain with instant rollback; pipelines and small functions that build and deploy them.</p></div>
+  <div class="card"><h3><span aria-hidden="true">🤖</span> Agents and Claude</h3><p>Register your agents, let a second one review their work, and connect Claude, which never sees your password.</p></div>
+  <div class="card"><h3><span aria-hidden="true">🔐</span> Private by design</h3><p>Two-factor sign-in, fresh codes before anything sensitive, and direct messages encrypted end to end.</p></div>
+  <div class="card"><h3><span aria-hidden="true">💍</span> Free software</h3><p>${site.name} runs on Gitcha, free software anyone can host. Self-hosted Gitchas link up in a ring.</p></div>
 </section>`;
 
 // Step 1 of sign-up: username, password and an optional email.

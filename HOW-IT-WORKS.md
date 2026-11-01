@@ -87,12 +87,12 @@ with [`extension/lib/manifest.js`](extension/lib/manifest.js).
    others. For example, the task service needs the projects service, and the
    social feed listens for pushes from projects.
 4. `createApp` then registers the routes (the URL patterns each part answers),
-   starting at [`app.js:102`](server/src/app.js#L102).
+   starting at [`app.js:103`](server/src/app.js#L103).
 5. The server listens on `127.0.0.1:4873` by default, in plain HTTP. Only a TLS
    proxy (such as Caddy) should face the internet: see "The reverse proxy"
    below.
 6. A timer runs every 30 seconds to clean up: it ends old jobs and expired
-   sign-ups ([`app.js:179`](server/src/app.js#L179)).
+   sign-ups ([`app.js:180`](server/src/app.js#L180)).
 
 If something goes badly wrong later, [`http.js:112`](server/src/http.js#L112)
 logs the error and keeps serving, instead of letting one bad request stop the
@@ -101,7 +101,7 @@ whole server.
 ### The reverse proxy
 
 The server never does TLS. It uses Node's plain `http` module
-([`app.js:169`](server/src/app.js#L169)), and the reverse proxy in front of
+([`app.js:170`](server/src/app.js#L170)), and the reverse proxy in front of
 it (Caddy, nginx, Apache or HAProxy) does the https, holds the certificates
 and owns ports 80 and 443. The server reads three things the proxy tells it:
 
@@ -192,7 +192,7 @@ memory, and every change goes through [`store.js:203`](server/src/store.js#L203)
    [`store.js:232`](server/src/store.js#L232) reloads the last good copy, so memory and
    disk agree again. A half-made change can never be saved by a later write.
    This is why `createApp` saves once at start-up
-   ([`app.js:178`](server/src/app.js#L178)): from then on every collection
+   ([`app.js:179`](server/src/app.js#L179)): from then on every collection
    is on disk, so going back to the file never loses one.
 
 Two rules follow for code that uses the store:
@@ -310,7 +310,7 @@ The browser pages are in [`server/src/web.js`](server/src/web.js) (the routes) a
   only inserted as raw HTML when the code wraps it in `raw(...)`, and that is
   done only for text Gitcha made itself (like the QR code). So a username such
   as `<script>` shows up as text.
-- **README files** are turned into HTML by [`views.js:222`](server/src/views.js#L222),
+- **README files** are turned into HTML by [`views.js:232`](server/src/views.js#L232),
   which escapes the text first and allows only `http` and `https` links.
 - **Forms are protected from CSRF** (a trick where another site makes your
   browser send a request to Gitcha). Every form carries a token tied to your
