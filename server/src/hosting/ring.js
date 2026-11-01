@@ -200,7 +200,7 @@ export class RingService {
     }
     // The same answer for every way this can fail, so nobody learns what is
     // behind an address by asking.
-    const refused = new HttpError(400, 'ring_unreachable', `${origin} did not answer with a Gitcha ring manifest.`);
+    const refused = new HttpError(400, 'ring_unreachable', `${origin} did not answer with a ring manifest.`);
     let info;
     try { await this.assertPublic(origin); info = await this.fetchPeer(origin); } catch { throw refused; }
     this.store.tx((d) => {

@@ -60,7 +60,7 @@ export class DomainService {
     const h = String(hostname ?? '').trim().toLowerCase().replace(/\.$/, '');
     if (!HOST_RE.test(h)) throw new HttpError(400, 'bad_hostname', `"${hostname}" is not a valid domain name.`);
     const ui = new URL(this.config.publicUrl).hostname;
-    if (h === ui || h.endsWith(`.${ui}`)) throw new HttpError(400, 'bad_hostname', 'That name belongs to this Gitcha instance.');
+    if (h === ui || h.endsWith(`.${ui}`)) throw new HttpError(400, 'bad_hostname', 'That name belongs to this site itself.');
     for (const d of this.config.hosting.domains) {
       if (h === d || h.endsWith(`.${d}`)) throw new HttpError(400, 'bad_hostname', `Names under ${d} are assigned automatically from the site name.`);
     }

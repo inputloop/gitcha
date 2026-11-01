@@ -235,7 +235,7 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
 
   const loginCodeView = (ctx, { error, next, status = 200 }) => page(ctx, 'Two-factor', V.codePage({
     csrf: csrfToken(ctx), error, next, action: '/login/2fa', title: 'Two-factor authentication',
-    message: 'Open your authenticator app and enter the 6-digit code for Gitcha.',
+    message: `Open your authenticator app and enter the 6-digit code for ${config.issuer}.`,
   }), { status });
 
   router.get('/login/2fa', (ctx) => {

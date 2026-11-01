@@ -56,8 +56,8 @@ function principalFrom(principals, creds, ip) {
 }
 
 // Reply 401 with a Basic challenge, so the git client asks for a password.
-function challenge(res, message) {
-  res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Gitcha", charset="UTF-8"', 'Content-Type': 'text/plain; charset=utf-8' });
+function challenge(res, message, realm = 'Gitcha') {
+  res.writeHead(401, { 'WWW-Authenticate': `Basic realm="${realm.replace(/["\\]/g, '')}", charset="UTF-8"`, 'Content-Type': 'text/plain; charset=utf-8' });
   res.end(`${message}\n`);
 }
 
@@ -115,10 +115,10 @@ export function registerGit(router, { auth, projects, principals, config }) {
     const principal = principalFrom(principals, basicCreds(req), ctx.ip);
     // Unknown and private projects look the same to someone who cannot read them.
     // That way nobody can learn that a private project exists.
-    if (!p || !projects.canRead(principal, p)) return principal ? send(res, 404, 'Repository not found.\n', { 'Content-Type': 'text/plain' }) : challenge(res, 'Sign in: use a Gitcha console key or device token as the password.');
+    if (!p || !projects.canRead(principal, p)) return principal ? send(res, 404, 'Repository not found.\n', { 'Content-Type': 'text/plain' }) : challenge(res, 'Sign in: use a console key or device token as the password.', config.site?.name);
     // Pushes, and any signed-in read, need a passed 2FA check. Anonymous reads of public projects do not.
     if (write || !(p.visibility === 'public' && !principal)) {
-      if (!principal) return challenge(res, 'Sign in: use a Gitcha console key or device token as the password.');
+      if (!principal) return challenge(res, 'Sign in: use a console key or device token as the password.', config.site?.name);
       const m = mfaOk(auth, principal);
       if (!m.ok) return send(res, 403, `Your periodic two-factor check is due (${m.reason}). Run \`gitcha verify\`, then push again.\n`, { 'Content-Type': 'text/plain' });
     }
@@ -224,7 +224,7 @@ export function registerGit(router, { auth, projects, principals, config }) {
     const m = /^(git-upload-pack|git-receive-pack) '?\/?([^'/]+)\/([^'/]+?)(?:\.git)?\/?'?$/.exec(String(command ?? ''));
     if (!m) throw new HttpError(403, 'bad_command', 'Only git clone, fetch and push are allowed over SSH.');
     const principal = principals.fromSsh(fingerprint);
-    if (!principal) throw new HttpError(403, 'unknown_key', 'That SSH key is not registered on Gitcha.');
+    if (!principal) throw new HttpError(403, 'unknown_key', 'That SSH key is not registered here.');
     const p = projects.find(parseOwnerLabel(m[2]), m[3]);
     const write = m[1] === 'git-receive-pack';
     if (!p || !projects.canRead(principal, p)) throw new HttpError(404, 'not_found', 'Repository not found.');

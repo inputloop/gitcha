@@ -68,7 +68,7 @@ test('NXT-1: a public project\'s task goes with a link that works', async () => 
   assert.ok(sent, 'one create call');
   assert.match(sent.body.title, /^\[alice\/open\] Write the changelog/);
   assert.doesNotMatch(sent.body.description, /undefined/);
-  assert.ok(sent.body.description.includes(`Gitcha task ${id}: ${s.srv.url}/tasks/${id}`) || /Gitcha task t_[0-9a-f]+: https?:\/\/\S+\/tasks\/t_[0-9a-f]+/.test(sent.body.description), sent.body.description);
+  assert.ok(sent.body.description.includes(`Task ${id}: ${s.srv.url}/tasks/${id}`) || /Task t_[0-9a-f]+: https?:\/\/\S+\/tasks\/t_[0-9a-f]+/.test(sent.body.description), sent.body.description);
 });
 
 test('NXT-2: closing a task twice completes its request once, and a done task cannot be cancelled', async () => {

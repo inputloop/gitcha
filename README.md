@@ -5,9 +5,10 @@
   <img src="server/public/logo.svg" width="88" alt="inputloop logo">
 </p>
 
-<h1 align="center">Gitcha</h1>
+<h1 align="center">inputloop</h1>
 
-<p align="center"><em>by inputloop: the front door of <a href="https://inputloop.com">inputloop.com</a></em></p>
+<p align="center"><em>The front door of <a href="https://inputloop.com">inputloop.com</a>. The software in this repository is
+called Gitcha, which is why its commands, files and settings say <code>gitcha</code>.</em></p>
 
 <p align="center">
   <strong>A free, self-hosted forge for people and their agents: packages, git, hosting, CI, functions and a social crawl, with two-factor authentication on every account and a Claude extension that speaks it.</strong>
@@ -20,12 +21,15 @@
   <img alt="Client dependencies: 0" src="https://img.shields.io/badge/client%20deps-0-5a6e97">
 </p>
 
-![Gitcha landing page](docs/screenshots/01-landing.png)
+![The inputloop front page](docs/screenshots/01-landing.png)
 
 Gitcha started as a package registry and grew into a small forge. It is
-**inputloop's front door**: inputloop.com runs on it, in inputloop's colours (magenta `#db2c91` to
-teal `#4cc3c6`, the two ends of the logo's gradient). Anyone can run their own copy under their own
-name (`GITCHA_SITE_NAME`, [Server configuration](#server-configuration)). One server gives a community:
+**inputloop's front door**: inputloop.com runs on it, in inputloop's name and colours (magenta
+`#db2c91` to teal `#4cc3c6`, the two ends of the logo's gradient). The pages people see say
+*inputloop* (the header, titles, the front page, authenticator apps, the ring); the commands
+(`gitcha login`), files (`gitcha.json`) and settings (`GITCHA_...`) keep the software's name. Anyone
+can run their own copy under their own name (`GITCHA_SITE_NAME`,
+[Server configuration](#server-configuration)). One server gives a community:
 
 - **a package registry** with integrity-pinned tarballs;
 - **git hosting** over HTTPS and SSH, with GPG-verified commits;
@@ -59,7 +63,7 @@ never sees your password**. When Gitcha asks for a 2FA check, Claude has to
 ask *you* for the code.
 
 > **Status, honestly.** Everything below is built and covered by the test
-> suite (466 tests), and the screenshots come from a real running server. Some
+> suite (467 tests), and the screenshots come from a real running server. Some
 > parts have only been tested against stand-ins, not the real thing:
 > git over a real `sshd`, a job inside a real bContain VM, the Stripe and
 > PayPal sandboxes, a live NextTime instance, and C4OK's door inside a full
@@ -108,6 +112,7 @@ ask *you* for the code.
 - [Runners](#runners)
 - [Agents, reviews and budgets](#agents-reviews-and-budgets)
 - [The GraphQL API](#the-graphql-api)
+- [Setting up billing (Stripe and PayPal)](#setting-up-billing-stripe-and-paypal)
 - [Operations and C4OK](#operations-and-c4ok)
 - [Installing the Claude extension](#installing-the-claude-extension) (or open **Connect Claude** at `/claude`)
 - [CLI reference](#cli-reference)
@@ -967,6 +972,9 @@ share it, so more teams do not mean more room. When a paid plan ends,
 sites over the free limit (the newest ones) stay online but take no new
 deploys after fourteen days; nothing is deleted.
 
+To turn it on and connect Stripe or PayPal, step by step:
+[Setting up billing](#setting-up-billing-stripe-and-paypal).
+
 <table><tr>
 <td width="70%"><img src="docs/screenshots/25-billing.png" alt="The billing page"><br><sub>On a computer</sub></td>
 <td width="30%"><img src="docs/screenshots/mobile-25-billing.png" alt="The billing page, on a phone"><br><sub>On a phone</sub></td>
@@ -1296,6 +1304,201 @@ From Claude, the `gitcha_graphql` tool sends any query.
 
 ---
 
+## Setting up billing (Stripe and PayPal)
+
+Billing is **off** until you turn it on, and every feature works without it. When it is on, each
+person and each team has a plan; a plan sets how much **capacity** they get (function invocations
+and CI build minutes each month, and how many sites), never which features. People pay on the
+**Billing** page (linked from **Account**; a team's owners pay for the team there), through Stripe,
+PayPal or both, and can cancel there too.
+
+Do everything first with **test keys** (Stripe's test mode, PayPal's sandbox), check it end to end,
+then repeat with live keys. Status, honestly: billing is tested against stand-in Stripe and PayPal
+servers in the test suite; it **has not yet been run against either provider's real sandbox**, so
+that first test-mode run is the real proof.
+
+### 1. Decide the plans
+
+Without a plans file you get three:
+
+| Plan id | Name | Price shown | Function invocations / month | Build minutes / month | Sites |
+|---|---|---|---|---|---|
+| `free` | Free | none | 10,000 | 300 | 3 |
+| `pro` | Pro | 5 per month | 1,000,000 | 3,000 | 50 |
+| `team` | Team | 20 per month | 5,000,000 | 10,000 | 200 |
+
+Any account (a person or a team) can buy either paid plan; `team` is only a name. The Free allowance
+is shared by a person's own account and the teams they created, so making more teams does not make
+more free room (a paid team has its own).
+
+To change them, write a JSON file of the same shape and point `GITCHA_PLANS_FILE` at it. It must
+have a `free` plan. A numeric `price` is shown as that much per month in `GITCHA_CURRENCY` (USD
+unless set); a text price is shown as written:
+
+```json
+{
+  "free": { "name": "Free", "price": null, "paid": false, "limits": { "fn_invocations": 10000, "build_minutes": 300, "sites": 3 } },
+  "pro":  { "name": "Pro",  "price": 9,    "paid": true,  "limits": { "fn_invocations": 2000000, "build_minutes": 5000, "sites": 50 } },
+  "team": { "name": "Team", "price": 29,   "paid": true,  "limits": { "fn_invocations": 8000000, "build_minutes": 20000, "sites": 300 } }
+}
+```
+
+The price on the page is only what is **shown**. What people are **charged** is whatever the Stripe
+Price or PayPal Plan says (steps 2 and 3), so keep the two the same. The paid plans that can be sold
+are `pro` and `team`, because those are the two a Stripe Price or PayPal Plan is linked to
+(`STRIPE_PRICE_PRO`, `STRIPE_PRICE_TEAM`, `PAYPAL_PLAN_PRO`, `PAYPAL_PLAN_TEAM`). You may sell one or
+both, through one provider or both.
+
+### 2. Stripe
+
+You need a Stripe account (<https://dashboard.stripe.com>). Turn on **Test mode** (the switch in
+the dashboard) for everything below the first time. Dashboard menus move from time to time; the
+names here are as of this writing.
+
+1. **The products.** *Product catalog > Add product*: name it (for example "inputloop Pro"), choose
+   **Recurring**, **Monthly**, and the price. Save, open the product and copy its **Price id**
+   (`price_...`). Do the same for Team if you sell it.
+2. **The secret key.** *Developers > API keys*: copy the **Secret key** (`sk_test_...`). A
+   restricted key also works if it may write Checkout Sessions, Customers, Subscriptions and
+   Customer portal sessions, and read Prices.
+3. **The webhook** (how Stripe tells your server about payments). *Developers > Webhooks > Add
+   endpoint* (or *Workbench > Webhooks*):
+   - **Endpoint URL:** `https://YOUR-SITE/api/v1/billing/stripe/webhook` (your public https address);
+   - **Events:** `checkout.session.completed`, `customer.subscription.created`,
+     `customer.subscription.updated`, `customer.subscription.deleted` and `invoice.payment_failed`;
+   - save, then reveal and copy the **Signing secret** (`whsec_...`).
+4. **The customer portal** (where people change their card and see invoices): *Settings > Billing >
+   Customer portal*, then turn it on and save.
+5. **The settings** (step 4 below):
+
+   ```sh
+   GITCHA_BILLING=yes
+   STRIPE_SECRET_KEY=sk_test_...
+   STRIPE_WEBHOOK_SECRET=whsec_...
+   STRIPE_PRICE_PRO=price_...
+   STRIPE_PRICE_TEAM=price_...
+   ```
+
+**Testing on your own computer, without a public address:** Stripe cannot reach `localhost`, but its
+command-line tool can forward events to it. Install the Stripe CLI (<https://stripe.com/docs/stripe-cli>),
+then:
+
+```bash
+stripe login
+```
+
+```bash
+stripe listen --forward-to localhost:4873/api/v1/billing/stripe/webhook
+```
+
+It prints a `whsec_...` secret: use that as `STRIPE_WEBHOOK_SECRET` while it runs. Pay with Stripe's
+test card **4242 4242 4242 4242**, any future date and any three digits.
+
+### 3. PayPal
+
+You need a PayPal **Business** account and the developer site, <https://developer.paypal.com>.
+Start in **Sandbox** (the switch at the top of the developer dashboard).
+
+1. **The app** (your server's API access). *Apps & Credentials > Create App* (type Merchant). Copy
+   its **Client ID** and **Secret**.
+2. **The plans.** Sign in to the sandbox business account (<https://www.sandbox.paypal.com>, with the
+   sandbox business login listed under *Testing Tools > Sandbox Accounts*), then *Pay & Get Paid >
+   Subscriptions > Subscription plans > Create plan*: a product, then a plan billed **monthly** at
+   your price. Copy each plan's **Plan ID** (`P-...`). (The Catalog Products and Billing Plans
+   APIs do the same, if you prefer.)
+3. **The webhook.** Open your app, *Add Webhook*:
+   - **URL:** `https://YOUR-SITE/api/v1/billing/paypal/webhook`;
+   - **Events:** the `BILLING.SUBSCRIPTION.*` ones: `ACTIVATED`, `RE-ACTIVATED`, `UPDATED`,
+     `SUSPENDED`, `PAYMENT.FAILED`, `CANCELLED` and `EXPIRED`;
+   - save and copy the webhook's **ID** (not a secret; your server asks PayPal to confirm every event
+     with it).
+4. **The settings:**
+
+   ```sh
+   GITCHA_BILLING=yes
+   PAYPAL_CLIENT_ID=...
+   PAYPAL_CLIENT_SECRET=...
+   PAYPAL_WEBHOOK_ID=...
+   PAYPAL_PLAN_PRO=P-...
+   PAYPAL_PLAN_TEAM=P-...
+   ```
+
+   Without `PAYPAL_ENV` the server talks to PayPal's sandbox; `PAYPAL_ENV=live` switches to the real
+   one. PayPal needs a public https address to send webhooks to (no forwarding tool like Stripe's),
+   so test PayPal on your server, not on `localhost`. Checkout pages show your site's name
+   (`GITCHA_SITE_NAME`).
+
+### 4. Put the settings in place and restart
+
+The keys are secrets: they go **only** in the server's settings file, never in git, a README, a
+chat or a ticket.
+
+| How you run it | Where the settings go | Then |
+|---|---|---|
+| Debian package (INSTALL.md Part 2) | `/etc/inputloop/gitcha/gitcha.env` | `sudo systemctl restart gitcha` |
+| From source with systemd (INSTALL.md Part 3) | `/etc/gitcha/gitcha.env` | `sudo systemctl restart gitcha` |
+| `npm start` on your own computer | before `npm start`: `set NAME=value` (Windows Command Prompt) or `export NAME=value` (macOS, Linux) | start it again |
+| Docker | the `environment:` list in `docker-compose.yml` | `docker compose up -d` |
+
+On start the server says what it found, in its log (`journalctl -u gitcha -e`, or the window it runs
+in): `billing: stripe is in test mode` (or `live mode`), and the same for PayPal. If a provider is
+missing from those lines, its keys were not read.
+
+### 5. Try a payment, in test mode
+
+1. Sign in, open **Account > Billing**, and choose **Pro** with Stripe (or PayPal).
+2. Pay on the provider's page (Stripe's test card above, or a PayPal sandbox *personal* account).
+3. You come back to the Billing page, which asks the provider what happened and shows **Pro**,
+   **active**. The webhook confirms it again moments later.
+4. Try **Cancel**: the plan stays until the end of the period already paid for (shown as the end
+   date), then the account returns to Free.
+5. For a team: on the Billing page choose the team in the account list (only its owners may pay).
+6. In the provider's dashboard, check that the webhook deliveries show **200**.
+
+### 6. Go live
+
+Repeat steps 2 and 3 in **live** mode: live products and prices (new `price_...` and `P-...` ids), the
+live secret key (`sk_live_...`), a live webhook with its own signing secret or id, and
+`PAYPAL_ENV=live`. Replace the test values in the settings file and restart; the log should now say
+`live mode`. Subscriptions made with test keys are not honoured once the keys are live (the log counts
+them), so test purchases never turn into free paid plans.
+
+### What happens day to day
+
+- **Limits:** each account's usage is counted per calendar month (UTC) on the Billing page. Past a
+  limit, new function calls, builds or sites are refused with a message saying which limit.
+- **A failed payment** keeps the paid limits for **seven days** from the first failure, so a card can
+  be fixed (Stripe: *Update card and invoices* on the Billing page opens Stripe's portal). The same
+  grace applies when a paid period ends without word from the provider; the server also asks the
+  providers about every subscription every few minutes.
+- **Changing plan** starts a new checkout; the old subscription is kept until the new one is paid, then
+  cancelled at the provider.
+- **When a paid plan ends**, sites over the Free limit (the newest) stay online and keep taking deploys
+  for **fourteen days**, then stop taking new deploys. Nothing is deleted.
+- **Deleting a team** cancels its subscription at the provider.
+- **Refunds, invoices, taxes and receipts** are handled in the Stripe or PayPal dashboard, not here.
+- **Records:** every change to an account (who or what made it: a person, the return page, a webhook
+  with the provider's event id, or the periodic check) is in the owners' Account activity log, and the
+  last 25 show to owners as `history` in `GET /api/v1/billing`.
+
+### When something does not work
+
+| What you see | Why, and what to do |
+|---|---|
+| The Billing page says billing is switched off | `GITCHA_BILLING=yes` is not set where the server reads it; restart after setting it |
+| "Payments with stripe are not set up on this instance" | `STRIPE_SECRET_KEY` (or the PayPal client id and secret) missing, or no price or plan id for that plan |
+| The provider shows webhook deliveries failing with **400** | The signing secret (Stripe) or webhook id (PayPal) does not match that webhook: copy it again, and make sure test values go with test keys |
+| Deliveries fail with **503** `webhook_unconfigured` | `STRIPE_WEBHOOK_SECRET` or `PAYPAL_WEBHOOK_ID` is not set |
+| Deliveries never arrive | The URL must be your public `https://` address with `/api/v1/billing/stripe/webhook` or `/paypal/webhook`, and the reverse proxy must pass it through; on `localhost` use `stripe listen` |
+| Paid, but the plan still shows Free | Reload the Billing page: it asks the provider again on return, and the server checks every few minutes. Then look at the webhook deliveries and the server log |
+| The page shows a different price from the charge | The plans file's `price` is only shown; change the Stripe Price or PayPal Plan, or the file, so they agree |
+
+Every billing setting, with its default, is in [`deploy/gitcha.env`](deploy/gitcha.env);
+[DEPLOY.md](DEPLOY.md#billing) has the finer points (event ordering, test and live records, team
+accounts).
+
+---
+
 ## Operations and C4OK
 
 Gitcha keeps the operational record; C4OK is the kiosk that works it.
@@ -1563,10 +1766,10 @@ All settings are environment variables. In the Debian package they live in
 | `GITCHA_PUBLIC_URL` | `http://localhost:4873` | External URL. Use `https://…` in production (enables `Secure` cookies) |
 | `GITCHA_DATA_DIR` | `./gitcha-data` | Database, git repositories, sites, blobs and `secret.key` |
 | `GITCHA_SECRET_KEY` | generated into `secret.key` on a first start only | 32-byte base64 key for encrypting passwords and TOTP secrets at rest. With no key and a `db.json` that holds accounts the server refuses to start rather than make a new one |
-| `GITCHA_ISSUER` | `Gitcha` | Name shown in authenticator apps |
+| `GITCHA_ISSUER` | the site name | Name shown in authenticator apps |
 | `GITCHA_OPEN_REGISTRATION` | `true` | `false` lets only the first (admin) account register |
 | `GITCHA_PUBLIC_READ` | `false` | Allow anonymous browsing and installs |
-| `GITCHA_SITE_NAME` | `inputloop` | The name in the header, page titles and front page (this copy is inputloop's front door; set your own) |
+| `GITCHA_SITE_NAME` | `inputloop` | The name people see: header, page titles, front page, and (unless `GITCHA_ISSUER` or `GITCHA_RING_NAME` say otherwise) authenticator apps and the ring |
 | `GITCHA_SITE_TAGLINE` | inputloop's | The line under the name on the front page |
 | `GITCHA_STEPUP_INTERVAL` | `12h` | Periodic re-verification interval (`30m`, `4h`, `7d`…) |
 | `GITCHA_SENSITIVE_WINDOW` | `10m` | Maximum age of the last code for sensitive actions |
@@ -1822,7 +2025,7 @@ against Cassandra 5.0), point them at a node:
 GITCHA_TEST_STORE=cassandra GITCHA_TEST_CASSANDRA=127.0.0.1:9042 npm --workspace server test
 ```
 
-The tests (466 of them: 312 for the server, 89 for the extension and CLI,
+The tests (467 of them: 313 for the server, 89 for the extension and CLI,
 17 for the runner, 36 for the medic and 12 for Omni) cover RFC 4226/6238 TOTP vectors, encryption at rest,
 replay protection, enrollment and the follow-up checks, CSRF and sign-in
 hardening, proxy addresses, the store's locking and crash safety, teams,

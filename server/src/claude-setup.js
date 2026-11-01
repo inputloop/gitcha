@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { h, raw } from './views.js';
+import { h, raw, site } from './views.js';
 import { CONFIG_LOCATION, DEFAULT_SERVER, mcpPath, desktopEntry, desktopConfig, claudeCodeCommand, loginCommand } from '../public/claude-setup.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -37,12 +37,12 @@ const copyable = (id, text) => h`<div class="cs-copy"><pre class="install"><code
 export function claudeSetupPage({ folder, os, osChosen, server, local }) {
   const opts = { mcp: mcpPath(folder, os), server, node: 'node' };
   return h`<div class="page-head"><div><h1>Connect Claude</h1>
-  <p class="lead">Let Claude search, install and publish on this Gitcha, with the Gitcha MCP server (the
-  <code>extension/</code> folder of Gitcha's code). Your password and two-factor codes never go to Claude.</p></div></div>
+  <p class="lead">Let Claude search, install and publish on ${site.name}, with its MCP server (the
+  <code>extension/</code> folder of the code you cloned). Your password and two-factor codes never go to Claude.</p></div></div>
 <div id="cs" class="cs" ${osChosen ? raw('data-os-chosen="1"') : ''}>
 <section class="card"><h2>1. Tell this page about your computer</h2>
   <label>Your computer <select id="cs-os">${Object.entries(OS_NAMES).map(([k, v]) => h`<option value="${k}" ${k === os ? raw('selected') : ''}>${v}</option>`)}</select></label>
-  <label>Gitcha's folder on that computer (where you ran <code>git clone</code>)
+  <label>The code's folder on that computer (where you ran <code>git clone</code>)
     <input id="cs-folder" type="text" spellcheck="false" autocomplete="off" value="${folder}" placeholder="${os === 'windows' ? 'C:\\gitcha' : '/home/you/gitcha'}"></label>
   <p class="small muted">${local ? 'Filled in from where this server runs, because you opened this page on the same computer.'
     : h`Browsers do not tell a page where a file is, so type or paste it. On Windows: Shift + right-click the folder in File Explorer, then <strong>Copy as path</strong>. On a Mac: right-click it while holding Option, then <strong>Copy as Pathname</strong>.`}</p>
@@ -50,7 +50,7 @@ export function claudeSetupPage({ folder, os, osChosen, server, local }) {
     <input id="cs-check" type="file" accept=".js,text/javascript"></label>
   <p id="cs-check-note" class="small muted" hidden></p>
   <p class="small">The MCP server is: <code id="cs-path">${opts.mcp || '(type the folder above)'}</code></p>
-  <label>This Gitcha's address, as that computer reaches it <input id="cs-server" type="url" value="${server}" spellcheck="false"></label>
+  <label>${site.name}'s address, as that computer reaches it <input id="cs-server" type="url" value="${server}" spellcheck="false"></label>
   <p class="small muted">Use <code>https://</code>, or <code>http://localhost:4873</code> on the same computer (or through a WireGuard port forward, see the README). Plain http to any other address is refused, so passwords never cross a network unencrypted.</p>
   <details><summary class="small">Node is not found?</summary>
     <label>The node program <input id="cs-node" type="text" value="node" spellcheck="false"></label>
@@ -66,7 +66,7 @@ export function claudeSetupPage({ folder, os, osChosen, server, local }) {
   <p>In Claude Desktop: <strong>Settings &gt; Developer &gt; Edit Config</strong>. That opens
   <code id="cs-where">${CONFIG_LOCATION[os]}</code>. If the file is empty, replace it with:</p>
   ${copyable('cs-desktop', desktopConfig(desktopEntry(opts)))}
-  <p><strong>Already has settings?</strong> Pick that file here and this page adds Gitcha to it, keeping everything else.
+  <p><strong>Already has settings?</strong> Pick that file here and this page adds ${site.name} to it, keeping everything else.
   The file is read in your browser only.</p>
   <label>Your claude_desktop_config.json <input id="cs-config" type="file" accept=".json,application/json"></label>
   <div id="cs-merged-box" hidden>
@@ -78,18 +78,18 @@ export function claudeSetupPage({ folder, os, osChosen, server, local }) {
 </section>
 
 <section class="card"><h2>3b. Claude Code</h2>
-  <p>One command, in a terminal on that computer. <code>--scope user</code> makes Gitcha available in every folder, not just this one:</p>
+  <p>One command, in a terminal on that computer. <code>--scope user</code> makes it available in every folder, not just this one:</p>
   ${copyable('cs-code', claudeCodeCommand(opts))}
-  <p class="small muted">Or, as a plugin with its skill and commands: <code>/plugin marketplace add</code> followed by your Gitcha folder, then <code>/plugin install gitcha@gitcha</code>.</p>
+  <p class="small muted">Or, as a plugin with its skill and commands: <code>/plugin marketplace add</code> followed by the code's folder, then <code>/plugin install gitcha@gitcha</code>.</p>
 </section>
 
 <section class="card"><h2>4. Try it</h2>
-  <p>Ask Claude: <em>“What's my Gitcha status?”</em> It should name your account and when the next two-factor check is due.
+  <p>Ask Claude: <em>“What's my ${site.name} status?”</em> It should name your account and when the next two-factor check is due.
   When a check is due, Claude asks you for a code; publishing always asks for a fresh one.</p>
   <ul class="small">
     <li><strong>“not signed in”</strong>: run step 2 on the same computer (and the same system: Windows or WSL) that Claude runs on.</li>
-    <li><strong>No Gitcha tools</strong>: check the path in step 1 exists, that <code>node -v</code> works, then restart Claude fully.</li>
-    <li><strong>A Claude session in the cloud</strong> (claude.ai/code) runs on Anthropic's computers, so it cannot reach a Gitcha on yours, only one on the internet with https.</li>
+    <li><strong>No ${site.name} tools</strong> (they are named <code>gitcha_…</code>): check the path in step 1 exists, that <code>node -v</code> works, then restart Claude fully.</li>
+    <li><strong>A Claude session in the cloud</strong> (claude.ai/code) runs on Anthropic's computers, so it cannot reach a copy running on yours, only one on the internet with https.</li>
   </ul>
 </section>
 </div>

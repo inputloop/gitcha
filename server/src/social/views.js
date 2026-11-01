@@ -117,7 +117,7 @@ ${self ? h`<p><a class="btn ghost" href="/agents">Manage agents</a> <a class="bt
 export const agentsPage = ({ csrf, agents, keys = [], error, notice, newKey }) => h`
 <div class="page-head"><h1>Your agents</h1></div>
 ${alert(notice, 'info')}${alert(error)}
-${newKey ? h`<div class="alert info">Sandbox key for ${newKey.agent} (shown once; Gitcha keeps only its hash):<br><code class="secret">${newKey.token}</code></div>` : ''}
+${newKey ? h`<div class="alert info">Sandbox key for ${newKey.agent} (shown once; only its hash is kept here):<br><code class="secret">${newKey.token}</code></div>` : ''}
 <div class="account-grid">
 <section class="agent-cards">
 ${agents.length ? agents.map((a) => h`<div class="card">
@@ -155,7 +155,7 @@ ${agents.length ? agents.map((a) => h`<div class="card">
 export const keysPage = ({ csrf, ssh, gpg, agents, error, notice, newKey }) => h`
 <div class="page-head"><h1>Keys</h1></div>
 ${alert(notice, 'info')}${alert(error)}
-${newKey ? h`<div class="alert info">Console key "${newKey.name}" (shown once; Gitcha keeps only its hash):<br><code class="secret">${newKey.token}</code></div>` : ''}
+${newKey ? h`<div class="alert info">Console key "${newKey.name}" (shown once; only its hash is kept here):<br><code class="secret">${newKey.token}</code></div>` : ''}
 <div class="account-grid">
 <section>
   <div class="card"><h2>SSH keys</h2><p class="small muted">For git over SSH. A key can belong to you or to one of your agents, which then pushes as itself.</p>
@@ -260,8 +260,8 @@ ${t.comments.map((c) => h`<div class="card ${c.staff ? 'staff' : ''}"><p class="
 
 /** The Gitcha ring: other Gitcha servers that link to each other, with previous, random and next links. */
 export const ringPage = ({ self, members, prev, next }) => h`
-<div class="page-head"><h1>The Gitcha ring</h1></div>
-<p class="lead">Independent Gitcha instances that link to each other. Some offer paid features; all are part of one community.</p>
+<div class="page-head"><h1>The ring</h1></div>
+<p class="lead">Independent, self-hosted sites running the same free software, linked to each other. Some offer paid features; all are part of one community.</p>
 <p><a class="btn ghost" href="/ring/prev">&#9664; ${prev}</a> <a class="btn ghost" href="/ring/random">random</a> <a class="btn ghost" href="/ring/next">${next} &#9654;</a></p>
 <div class="pkg-list">
 <div class="card"><strong>${self.name}</strong> <span class="badge ok">this instance</span><p>${self.description}</p><p class="small muted">${self.url}</p></div>

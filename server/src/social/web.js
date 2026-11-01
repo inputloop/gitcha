@@ -276,7 +276,7 @@ export function registerSocialWeb(router, s) {
   router.get('/ring', (ctx) => {
     const a = current(ctx);
     const name = (u) => (ring.store.data.ring.peers[u]?.name ?? u).replace(/^https?:\/\//, '');
-    page(ctx, 'The Gitcha ring', SV.ringPage({ self: ring.manifest(), members: ring.members(), prev: name(ring.neighbour(-1)), next: name(ring.neighbour(1)) }), { user: a?.user, wide: true });
+    page(ctx, 'The ring', SV.ringPage({ self: ring.manifest(), members: ring.members(), prev: name(ring.neighbour(-1)), next: name(ring.neighbour(1)) }), { user: a?.user, wide: true });
   });
 
   return { html };

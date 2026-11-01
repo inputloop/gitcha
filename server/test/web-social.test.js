@@ -106,7 +106,7 @@ test('support tickets and the ring page', async () => {
   assert.match((await A.get('/support')).text, /T-0001/);
   const ring = await browser('x=1').get('/ring');
   assert.equal(ring.status, 200);
-  assert.match(ring.text, /The Gitcha ring/);
+  assert.match(ring.text, /<h1>The ring<\/h1>/);
 });
 
 test('the sign-up form checks the password and email confirmations', async () => {

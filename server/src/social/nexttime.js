@@ -52,7 +52,7 @@ export class NextTimeClient {
    */
   async createRequest(task, projectKey) {
     const title = `[${projectKey}] ${task.title}`.slice(0, 200).padEnd(5, '.');
-    const description = `${task.body || task.title}\n\nGitcha task ${task.id}: ${task.url}`.padEnd(20, '.');
+    const description = `${task.body || task.title}\n\nTask ${task.id}: ${task.url}`.padEnd(20, '.');
     const r = await this.call('POST', '/requests', { title, description, categoryId: this.categoryId, hoursBudget: this.hoursBudget, priority: 'normal' });
     return r.id ?? r.request?.id ?? null;
   }

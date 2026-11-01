@@ -126,7 +126,7 @@ if (typeof document !== 'undefined' && document.getElementById('cs')) {
     const f = e.target.files[0];
     if (!f) return;
     const ok = isGitchaMcp(await read(f.slice(0, 4096)));
-    note('cs-check-note', ok ? `Found it: ${f.name} is Gitcha's MCP server. Make sure the folder above is the one it is in.` : `${f.name} is not Gitcha's MCP server. Pick extension/bin/gitcha-mcp.js in your Gitcha folder.`, ok);
+    note('cs-check-note', ok ? `Found it: ${f.name} is the MCP server. Make sure the folder above is the one it is in.` : `${f.name} is not the MCP server. Pick extension/bin/gitcha-mcp.js in the folder you cloned.`, ok);
   });
   // Merge into the person's own claude_desktop_config.json.
   $('cs-config').addEventListener('change', async (e) => {

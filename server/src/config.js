@@ -165,6 +165,10 @@ export function loadConfig(env = process.env, overrides = {}) {
   const dataDir = path.resolve(overrides.dataDir ?? env.GITCHA_DATA_DIR ?? './gitcha-data');
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   const publicUrl = overrides.publicUrl ?? env.GITCHA_PUBLIC_URL ?? `http://localhost:${env.GITCHA_PORT ?? 4873}`;
+  // The name people see: in the header, page titles, the front page, authenticator apps and the ring.
+  // This copy is inputloop's front door (inputloop.com); someone running their own copy sets their own.
+  const siteName = String(env.GITCHA_SITE_NAME ?? '').trim().slice(0, 40) || 'inputloop';
+  const siteTagline = String(env.GITCHA_SITE_TAGLINE ?? '').trim().slice(0, 140) || 'Build, ship and host software with your people and your agents, in one loop.';
   const config = {
     host: env.GITCHA_HOST ?? '127.0.0.1',
     port: Number(env.GITCHA_PORT ?? 4873),
@@ -173,17 +177,12 @@ export function loadConfig(env = process.env, overrides = {}) {
     // Turn on only behind your own reverse proxy (a server that passes requests on to this one). Then the client
     // address comes from X-Forwarded-For. GITCHA_TRUSTED_PROXIES says which proxies to trust (a hop count, default 1, or addresses).
     trustProxy: bool(env.GITCHA_TRUST_PROXY, false),
-    // The name and line people see in the header, page titles and the front page. This instance is
-    // inputloop's front door (inputloop.com); someone running their own copy sets their own.
-    site: {
-      name: String(env.GITCHA_SITE_NAME ?? '').trim().slice(0, 40) || 'inputloop',
-      tagline: String(env.GITCHA_SITE_TAGLINE ?? '').trim().slice(0, 140) || 'Build, ship and host software with your people and your agents, in one loop.',
-    },
+    site: { name: siteName, tagline: siteTagline },
     trustedProxies: parseTrustedProxies(env.GITCHA_TRUSTED_PROXIES),
     dataDir,
     store: parseStore(env),
     secretKey: loadSecretKey(dataDir, env.GITCHA_SECRET_KEY),
-    issuer: env.GITCHA_ISSUER ?? 'Gitcha',
+    issuer: env.GITCHA_ISSUER ?? siteName,
     openRegistration: bool(env.GITCHA_OPEN_REGISTRATION, true),
     // Anonymous users may not browse or install unless explicitly allowed.
     publicRead: bool(env.GITCHA_PUBLIC_READ, false),
@@ -268,7 +267,7 @@ export function loadConfig(env = process.env, overrides = {}) {
     },
     // How this server describes itself to other Gitcha servers in its ring (a group of linked servers).
     ring: {
-      name: env.GITCHA_RING_NAME ?? env.GITCHA_ISSUER ?? 'Gitcha',
+      name: env.GITCHA_RING_NAME ?? env.GITCHA_ISSUER ?? siteName,
       description: env.GITCHA_RING_DESCRIPTION ?? '',
       operator: env.GITCHA_RING_OPERATOR ?? '',
       peers: String(env.GITCHA_RING_PEERS ?? '').split(',').map((s) => s.trim()).filter(Boolean),

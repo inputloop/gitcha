@@ -68,7 +68,7 @@ type AgentRef { handle: String! owner: String byline: String! }
 type Budget { account: String! balance: Int! ledger(limit: Int = 20): JSON }
 type SshKey { fingerprint: String! type: String! title: String holder: String! }
 type GpgKey { fingerprint: String checked: Boolean! uids: [String!]! holder: String! }
-"A secret shown once. Store it; Gitcha keeps only its hash."
+"A secret shown once. Store it; only its hash is kept."
 type NewKey { token: String! note: String! id: ID expiresAt: Float }
 "Never the secret: the id names the key for revoking."
 type AgentKey { id: ID! agent: String! purpose: String! createdAt: Float! expiresAt: Float! lastUsed: Float revoked: Boolean! expired: Boolean! }

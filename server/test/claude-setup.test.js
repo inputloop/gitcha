@@ -67,3 +67,17 @@ test('CLAUDE-3: the page; the folder is filled in only for someone signed in on 
     assert.match(js.headers.get('content-type'), /javascript/);
   } finally { await srv.close(); }
 });
+
+test('BRAND-1: the pages people see say the site\'s name, never "Gitcha" (commands and files keep gitcha)', async () => {
+  const srv = await startServer({ env: { GITCHA_PUBLIC_READ: 'true' } });
+  try {
+    const visible = (html) => html.replace(/<script[\s\S]*?<\/script>/g, '').replace(/<[^>]+>/g, ' ');
+    for (const p of ['/', '/login', '/register', '/ring', '/claude', '/packages']) {
+      const html = await (await fetch(srv.url + p)).text();
+      assert.doesNotMatch(visible(html), /Gitcha/, `${p} shows "Gitcha"`);
+      assert.match(html, /<title>[^<]*· inputloop<\/title>/, `${p} title`);
+    }
+    assert.equal(srv.config.issuer, 'inputloop', 'authenticator apps show the site name');
+    assert.equal(srv.config.ring.name, 'inputloop');
+  } finally { await srv.close(); }
+});
