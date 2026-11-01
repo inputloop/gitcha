@@ -74,6 +74,7 @@ ask *you* for the code.
 - [Securing your deployment](#securing-your-deployment)
 - [Features](#features)
 - [Quick start](#quick-start)
+- [Step-by-step install](INSTALL.md): on your own computer, on a VPS, and on HostGator
 - [The reverse proxy, and running without one](#the-reverse-proxy-and-running-without-one)
 - [Walkthrough with screenshots](#walkthrough-with-screenshots)
   - [1. Create an account (2FA required)](#1-create-an-account-2fa-required)
@@ -314,7 +315,9 @@ only to `/var/lib/gitcha`.
 
 ## Quick start
 
-Requires **Node.js 20+** and `git`.
+Requires **Node.js 20+** and `git`. [INSTALL.md](INSTALL.md) walks through every step, for
+your own computer (Linux, macOS or Windows with WSL2), an Ubuntu VPS, and HostGator's VPS plans
+(Ubuntu, or AlmaLinux with or without cPanel).
 
 ```bash
 git clone https://github.com/inputloop/gitcha.git
@@ -1503,6 +1506,7 @@ gitcha/
 ├── omni/                      Omni: one MCP door from a cloud session to your own servers
 ├── debian/                    the full Debian packaging (debhelper, debconf)
 ├── deploy/                    .deb builders, apt repository, mass install, units, proxy examples
+├── INSTALL.md                 step by step: your own computer, a VPS, HostGator
 ├── DEPLOY.md                  the deployment guide
 ├── HOW-IT-WORKS.md            how the code works, with references into it
 ├── SECURITY.md                the security model

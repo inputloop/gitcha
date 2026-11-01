@@ -76,6 +76,12 @@ const RESTORE_WHY = {
 };
 
 async function start() {
+  // Browsers give a page the encryption tools (Web Crypto) only over https or on localhost. On a plain-http
+  // address such as http://192.168.1.20:4873 they are missing, so say that instead of failing on the first key.
+  if (!window.isSecureContext || !globalThis.crypto?.subtle) {
+    $('dm-loading').hidden = true;
+    return showError(new Error('Encrypted messages need https, or http://localhost on this computer. Your browser does not allow the encryption they use on a plain-http address like this one.'));
+  }
   try {
     showError(null);
     const st = await device.status();

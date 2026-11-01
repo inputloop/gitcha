@@ -5,6 +5,8 @@
 
 This guide is for whoever runs a Gitcha instance: first for Corwin, putting the hosting
 builds on alphaOS VMs on the ghostwheel, and then for anyone who self-hosts and joins the ring.
+For a first install, step by step (your own computer, an Ubuntu VPS, HostGator), start with
+[INSTALL.md](INSTALL.md); this is the reference behind it.
 
 ## The shape of it
 
