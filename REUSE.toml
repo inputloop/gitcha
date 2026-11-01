@@ -73,6 +73,7 @@ path = [
   ".claude-plugin/marketplace.json",
   ".colophon-decisions.tsv",
   ".gitignore",
+  "deploy/ci/gitcha-ci.json",
   "examples/color-utils/gitcha.json",
   "examples/design-tokens/gitcha.json",
   "examples/design-tokens/tokens.json",

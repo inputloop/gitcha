@@ -1,0 +1,13 @@
+{
+  "on": ["publish"],
+  "image": "docker.io/library/node:22-bookworm",
+  "timeout": "30m",
+  "env": { "APT_URL": "" },
+  "steps": [
+    { "name": "tools", "run": "command -v apt-ftparchive >/dev/null || { apt-get update -qq && apt-get install -y -qq --no-install-recommends apt-utils >/dev/null; }" },
+    { "name": "packages", "run": "sh deploy/build-debs.sh out/debs --without-cassandra" },
+    { "name": "repository", "run": "sh deploy/ci/apt-site.sh out/debs site" }
+  ],
+  "artifacts": "site",
+  "deploy": { "site": "apt" }
+}

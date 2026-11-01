@@ -541,7 +541,7 @@ Gitcha also writes TopoForge drawings, with [`extension/lib/topoforge.js`](exten
 The routes are in [`topoforge.js:52`](server/src/topoforge.js#L52). Each uses
 the same "who may see this" rule as the thing it draws, sends the drawing as a
 download, and the instance map is for administrators and staff only. The CLI's
-`gitcha topoforge` ([`gitcha.js:487`](extension/bin/gitcha.js#L487)) and the
+`gitcha topoforge` ([`gitcha.js:567`](extension/bin/gitcha.js#L567)) and the
 Claude tool `gitcha_topoforge` use them.
 
 [`ci.js:83`](server/src/compute/ci.js#L83) starts a build. It checks deploy rights, room
@@ -683,7 +683,7 @@ files the browser page and the `gitcha` CLI share:
   [`dm-client.js:251`](extension/lib/dm-client.js#L251) seals one envelope for the recipient and
   one for the sender's own inbox.
 - [`server/public/dm.js`](server/public/dm.js) draws the Messages page on top of `DmDevice`, and
-  `gitcha messages` ([`gitcha.js:392`](extension/bin/gitcha.js#L392)) does the
+  `gitcha messages` ([`gitcha.js:472`](extension/bin/gitcha.js#L472)) does the
   same in a terminal, keeping the keys in a mode-600 file
   ([`dm-store.js:18`](extension/lib/dm-store.js#L18)).
 
@@ -760,7 +760,7 @@ Both live in [`extension`](extension) and share the same library.
   and only then moves it into place.
 - [`extension/bin/gitcha.js`](extension/bin/gitcha.js) is the `gitcha` command. When the server asks
   for a code, `withStepUp` asks you for one and tries again
-  ([`gitcha.js:151`](extension/bin/gitcha.js#L151)).
+  ([`gitcha.js:161`](extension/bin/gitcha.js#L161)).
 - [`extension/bin/gitcha-mcp.js`](extension/bin/gitcha-mcp.js) is the Claude extension: an MCP server (the
   Model Context Protocol, the way Claude calls outside tools) built on
   [`mcp.js:65`](extension/lib/mcp.js#L65). Every tool's input is checked

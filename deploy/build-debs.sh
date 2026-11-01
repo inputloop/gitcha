@@ -30,7 +30,11 @@ esac
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 MAINT="inputloop <nathanielfrankford@gmail.com>"
 # X.Y.Z+gitYYYYMMDDHHMMSS.<sha7>: the commit's time first, so apt sees every newer commit as newer (deploy/version.sh).
-if git -C "$here" rev-parse HEAD >/dev/null 2>&1; then
+# A source staged for CI (deploy/ci/stage.sh) has no git: the version it was staged at is in deploy/VERSION.
+if [ -s "$here/deploy/VERSION" ]; then
+  VER=$(head -n 1 "$here/deploy/VERSION")
+  case $VER in *[!0-9A-Za-z.+~-]*|'') echo "build-debs.sh: deploy/VERSION does not hold a Debian version" >&2; exit 2 ;; esac
+elif git -C "$here" rev-parse HEAD >/dev/null 2>&1; then
   VER=$(sh "$here/deploy/version.sh")
   # This script packs the working tree as it is, so uncommitted changes would ship under the commit's version.
   [ -z "$(git -C "$here" status --porcelain --untracked-files=no)" ] || echo "build-debs.sh: warning: uncommitted changes are in this build, but not in its version ($VER)" >&2

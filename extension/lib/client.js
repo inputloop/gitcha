@@ -109,6 +109,16 @@ export class GitchaClient {
   }
 
   transfer(name, team) { return this.request('POST', `/api/v1/packages/${encodeURIComponent(name)}/transfer`, { body: { team } }); }
+
+  // ---- sites (server/src/hosting) ----
+  sites() { return this.request('GET', '/api/v1/sites'); }
+  createSite(name, { team, description } = {}) { return this.request('POST', '/api/v1/sites', { body: { name, team, description } }); }
+
+  // ---- CI (server/src/compute) ----
+  ciRun(tarball, { team } = {}) { return this.request('POST', '/api/v1/ci/runs', { body: { tarball: tarball.toString('base64'), team } }); }
+  ciRuns() { return this.request('GET', '/api/v1/ci/runs'); }
+  ciGet(id) { return this.request('GET', `/api/v1/ci/runs/${encodeURIComponent(id)}`); }
+  ciArtifacts(id) { return this.request('GET', `/api/v1/ci/runs/${encodeURIComponent(id)}/artifacts`, { raw: true }); }
   setVisibility(name, priv) { return this.request('POST', `/api/v1/packages/${encodeURIComponent(name)}/visibility`, { body: { private: priv } }); }
 
   // ---- teams ----

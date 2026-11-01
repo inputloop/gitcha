@@ -63,7 +63,7 @@ never sees your password**. When Gitcha asks for a 2FA check, Claude has to
 ask *you* for the code.
 
 > **Status, honestly.** Everything below is built and covered by the test
-> suite (467 tests), and the screenshots come from a real running server. Some
+> suite (471 tests), and the screenshots come from a real running server. Some
 > parts have only been tested against stand-ins, not the real thing:
 > git over a real `sshd`, a job inside a real bContain VM, the Stripe and
 > PayPal sandboxes, a live NextTime instance, and C4OK's door inside a full
@@ -106,7 +106,7 @@ ask *you* for the code.
   - [17. Support](#17-support)
   - [18. Encrypted direct messages](#18-encrypted-direct-messages)
 - [Hosting sites](#hosting-sites)
-- [CI pipelines](#ci-pipelines)
+- [CI pipelines](#ci-pipelines) (and [Debian packages from CI](#debian-packages-from-ci))
 - [TopoForge, both ways](#topoforge-both-ways)
 - [Lambda functions](#lambda-functions)
 - [Runners](#runners)
@@ -1141,9 +1141,105 @@ are custom fields on any shape: `gitcha_image`, `gitcha_timeout`,
 of its text. See [TopoForge, both ways](#topoforge-both-ways) to draw an
 existing pipeline instead of starting from nothing.
 
-Runs start on publish (`"on": ["publish"]`) or through `POST /api/v1/ci/runs`,
+Runs start on publish (`"on": ["publish"]`) or through `gitcha ci run DIR` (or `POST /api/v1/ci/runs`),
 and their logs stream back from the runner. With `deploy`, the artifacts go
 straight to a site.
+
+From a terminal: `gitcha ci list` lists your builds, `gitcha ci show ID --follow` prints one's log as it
+runs, and `gitcha ci artifacts ID` downloads what it left in its `artifacts` folder.
+
+### Debian packages from CI
+
+The repository carries a ready pipeline that builds inputloop's own Debian packages and publishes them as
+an **apt repository with an install page**, served as one of your sites (for example
+`https://apt.pages.example.net/`). Every time you publish a new commit, servers that use the repository
+get it with `apt-get upgrade`.
+
+How it fits together:
+
+| Piece | What it does |
+|---|---|
+| [`deploy/ci/stage.sh`](deploy/ci/stage.sh) | Copies the **committed** source into a folder (without the screenshots), with `deploy/VERSION` (the commit's exact Debian version, since a runner has no git), a `gitcha.json` package named `gitcha-debian` whose version is the commit time (`0.2.20261101031500`), and the pipeline |
+| [`deploy/ci/gitcha-ci.json`](deploy/ci/gitcha-ci.json) | The pipeline: runs on publish in `node:22-bookworm`, three steps (tools, packages, repository), 30 minutes at most, artifacts `site`, deployed to the site `apt` |
+| [`deploy/build-debs.sh`](deploy/build-debs.sh) | Builds the four `.deb` files (server, runner, medic, Omni gateway), without Cassandra |
+| [`deploy/ci/apt-site.sh`](deploy/ci/apt-site.sh) | Makes the repository: the `.deb` files, `Packages`, `Release`, `SHA256SUMS`, and `index.html` with the install commands |
+
+**What you need first:**
+
+1. **Site hosting** on your server (`GITCHA_HOSTING_DOMAINS`, its DNS and certificates: [Hosting sites](#hosting-sites)).
+   Without it the pipeline still builds, and you download the result instead (step 5).
+2. **A runner** that takes CI jobs ([Runners](#runners)): a machine with hardware virtualization
+   (`/dev/kvm`) for the bContain backend, which can pull the image `docker.io/library/node:22-bookworm`
+   and reach the npm registry and Debian's mirrors. A HostGator VPS usually has no `/dev/kvm`: use another
+   machine. (bContain has not yet run a real job; see the status note at the top.)
+3. **The CLI**, signed in (`gitcha login`), in a git checkout of this repository.
+
+**Each time you want packages of a new commit:**
+
+1. Make the site once (it can have any name; `apt` is what the pipeline deploys to unless told otherwise):
+
+   ```bash
+   gitcha site create apt
+   ```
+
+2. Stage the commit you have checked out, giving the site's address for the install page:
+
+   ```bash
+   sh deploy/ci/stage.sh ../gitcha-stage --url https://apt.pages.example.net
+   ```
+
+   Options: `--site NAME` deploys to another site, `--site none` deploys nowhere (download instead), and
+   `--name PACKAGE` names the package. Only committed work is staged.
+
+3. Publish it. Its pipeline runs on publish, so this starts the build (it asks for a fresh code):
+
+   ```bash
+   gitcha publish ../gitcha-stage
+   ```
+
+   It answers with the build's id. (`gitcha ci run ../gitcha-stage` builds the same thing without
+   publishing a package.)
+
+4. Watch it, until it says `succeeded` and `deployed to apt`:
+
+   ```bash
+   gitcha ci show BUILD_ID --follow
+   ```
+
+5. Without site hosting, or to keep a copy, download what it built:
+
+   ```bash
+   gitcha ci artifacts BUILD_ID
+   ```
+
+   That saves `BUILD_ID-artifacts.tar.gz`: the whole repository folder, ready to serve from any web server.
+
+**On each server that installs from it** (Ubuntu 22.04 or Debian 12; Node.js 20 or newer must be installed
+first, as in [INSTALL.md](INSTALL.md#step-3-install-nodejs-22)):
+
+```bash
+echo 'deb [trusted=yes] https://apt.pages.example.net/ ./' | sudo tee /etc/apt/sources.list.d/inputloop.list
+```
+
+```bash
+sudo apt-get update && sudo apt-get install inputloop-gitcha
+```
+
+The site's own page shows the same commands with its real address. Later commits arrive with
+`sudo apt-get update && sudo apt-get upgrade`, because each version starts with the commit's time
+(`0.2.0+git20261101031500.46237e4`), so apt always sees a newer commit as newer.
+
+**The repository is not signed, yet.** A pipeline has nowhere safe to keep a signing key: everything in
+the source tarball can be read. `[trusted=yes]` tells apt to accept the packages without a signature, so
+serve the site only over https from a domain you control. To sign, download the build (step 5), sign it on
+your own computer with `sh deploy/apt-repo.sh signed/ --sign YOUR_KEY_ID *.deb`, and serve that folder;
+hosts then use `signed-by=` instead of `trusted=yes` (the script prints the line). Secret settings for
+pipelines would let CI sign by itself; they are not built yet.
+
+What was tested: the staging, the three steps on the staged copy (four packages at the commit's version),
+`apt` on Ubuntu 22.04 reading the repository and offering that version, and, in the test suite, publish
+starting the build, a runner's result deployed to the site and downloadable from the build. Not yet tested:
+the whole run on a real runner in a bContain VM.
 
 ---
 
@@ -1670,6 +1766,9 @@ gitcha logout [--local-only]                  revoke this device's token (--loca
 gitcha files <owner/name> [PATH] [--ref R]    list a project's folder at a branch, tag or commit
 gitcha download <owner/name> [--ref R] [--format zip|tar.gz] [--out FILE]   the whole project
 gitcha download <owner/name> --path P [--ref R] [--out FILE|-]              one file
+gitcha site list | create <name> [--team T]   your sites, or make one
+gitcha ci run [DIR] [--team T]                start a build of DIR (its gitcha-ci.json, .org or .topoforge.json)
+gitcha ci list | show <id> [--follow] | artifacts <id> [--out FILE]   builds, one build's log, its output
 gitcha topoforge export <gitcha-ci.json|.org> [--out FILE]      draw a pipeline (offline)
 gitcha topoforge import <drawing.json> [--out FILE] [--as chain] [--check]
 gitcha topoforge build <id> | function <owner>/<name> | system [--out FILE]
@@ -1692,9 +1791,9 @@ When a periodic or sensitive-action check is due in an interactive terminal,
 the CLI asks for a code and retries automatically. In scripts it exits with a
 message telling you to run `gitcha verify`.
 
-Sites, CI, functions and runners are driven through the HTTP and GraphQL APIs
-(and the runner's own `gitcha-runner` command); they have no `gitcha`
-subcommands yet.
+Deploys, functions and runners are driven through the HTTP and GraphQL APIs (and
+the runner's own `gitcha-runner` command); `gitcha site` and `gitcha ci` cover
+making sites and running builds.
 
 ---
 
@@ -1893,6 +1992,7 @@ GraphQL (above) covers the social, task, key, ticket and change parts.
 | `POST` | `/sites/:site/domains/:host/verify` | Check the TXT record |
 | `GET` | `/hosting/tls-allowed?domain=` | For the TLS proxy's on-demand certificates |
 | `POST` / `GET` | `/ci/runs` | Start a run / list runs |
+| `GET` | `/ci/runs/:id/artifacts` | What a run left in its artifacts folder (`.tar.gz`) |
 | `GET` | `/ci/runs/:id/topoforge`, `/functions/:owner/:name/topoforge`, `/topoforge/system` | TopoForge drawings (system: administrators and staff) |
 | `GET` | `/dm/me`, `/dm/keys/:username`, `/dm/box?after=N` | Encrypted messages: your keys, a person's public keys and signed prekey, your inbox's sealed envelopes (from a browser: session plus `X-Gitcha-CSRF`) |
 | `PUT` | `/dm/identity`, `/dm/prekey` | Set your identity key (fresh code); publish a new signed prekey |
@@ -2025,7 +2125,7 @@ against Cassandra 5.0), point them at a node:
 GITCHA_TEST_STORE=cassandra GITCHA_TEST_CASSANDRA=127.0.0.1:9042 npm --workspace server test
 ```
 
-The tests (467 of them: 313 for the server, 89 for the extension and CLI,
+The tests (471 of them: 316 for the server, 90 for the extension and CLI,
 17 for the runner, 36 for the medic and 12 for Omni) cover RFC 4226/6238 TOTP vectors, encryption at rest,
 replay protection, enrollment and the follow-up checks, CSRF and sign-in
 hardening, proxy addresses, the store's locking and crash safety, teams,

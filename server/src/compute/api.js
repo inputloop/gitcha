@@ -42,7 +42,7 @@ async function readCapped(req, limit) {
 const tarballFrom = (body) => Buffer.from(String(body.tarball ?? ''), 'base64');
 
 /** Add the runner, CI and functions routes to the router. */
-export function registerComputeApi(router, { auth, jobs, ci, functions, config, principals, billing, budgets }) {
+export function registerComputeApi(router, { auth, jobs, ci, functions, config, principals, billing, budgets, store }) {
   const { verified, bearer } = makeGuards(auth, config);
 
   // ---- the runner protocol -------------------------------------------------------
@@ -175,6 +175,17 @@ export function registerComputeApi(router, { auth, jobs, ci, functions, config, 
     const a = verified(ctx);
     const j = ci.get(a.user, ctx.params.id);
     json(ctx.res, 200, { ...jobs.view(j), spec: jobs.specOf(j), log: jobs.readLog(j) });
+  });
+
+  // What a run's pipeline left in its "artifacts" folder, as the runner packed it (a .tar.gz).
+  router.get('/api/v1/ci/runs/:id/artifacts', (ctx) => {
+    const a = verified(ctx);
+    const j = ci.get(a.user, ctx.params.id);
+    if (!j.artifactSha) throw new HttpError(404, 'no_artifacts', j.status === 'succeeded' ? 'This run produced no artifacts.' : `This run has no artifacts (it is ${j.status}).`);
+    send(ctx.res, 200, store.readBlob(j.artifactSha), {
+      'Content-Type': 'application/gzip', 'Content-Disposition': `attachment; filename="${j.id.replace(/[^\w.-]/g, '')}-artifacts.tar.gz"`,
+      'X-Gitcha-Artifacts-Sha256': j.artifactSha,
+    });
   });
 
   // Only someone who may manage the run may cancel it.

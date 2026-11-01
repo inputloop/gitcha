@@ -83,6 +83,9 @@ docker build --build-arg GITCHA_WITH_CASSANDRA=no .
 npm ci --omit=optional                                   # from a checkout
 ```
 
+**From CI.** `deploy/ci/` builds the same packages on a Gitcha runner and publishes them as an apt
+repository site, every time a staged commit is published: README.md, "Debian packages from CI".
+
 Both packages depend on `nodejs (>= 20)`. Debian 12 and Ubuntu 24.04 ship Node 18, so those hosts
 need Node from NodeSource (or Debian 13, which has 20).
 

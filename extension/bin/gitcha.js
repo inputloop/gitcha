@@ -52,6 +52,16 @@ ${bold('Projects')} (git repositories; owner/name, or @team/name)
   gitcha download <owner/name> --path P [--ref R] [--out FILE]
                                                 one file (--out - writes to the terminal; --force replaces a file)
 
+${bold('Sites')} (static web sites on this server's hosting domains)
+  gitcha site list                              your sites and their addresses
+  gitcha site create <name> [--team T]          make a site (a CI pipeline's "deploy" can then publish to it)
+
+${bold('CI')} (a pipeline file in the folder: gitcha-ci.json, gitcha-ci.org or gitcha-ci.topoforge.json)
+  gitcha ci run [DIR] [--team T]                start a build of DIR (packed as for publish; default: .)
+  gitcha ci list                                your recent builds
+  gitcha ci show <id> [--follow]                a build's state and log (--follow: until it ends)
+  gitcha ci artifacts <id> [--out FILE]         download what the build left in its artifacts folder
+
 ${bold('Teams')}
   gitcha team list                              teams you belong to
   gitcha team create <name> [--description D]   start a team (you become its owner)
@@ -103,7 +113,7 @@ function parseArgs(argv) {
     if (a.startsWith('--')) {
       const [k, v] = a.slice(2).split('=');
       if (v !== undefined) args.flags[k] = v;
-      else if (argv[i + 1] && !argv[i + 1].startsWith('--') && !['json', 'undo', 'help', 'version', 'hook', 'private', 'dry-run', 'allow-yanked', 'local-only', 'check', 'force'].includes(k)) args.flags[k] = argv[++i];
+      else if (argv[i + 1] && !argv[i + 1].startsWith('--') && !['json', 'undo', 'help', 'version', 'hook', 'private', 'dry-run', 'allow-yanked', 'local-only', 'check', 'force', 'follow'].includes(k)) args.flags[k] = argv[++i];
       else args.flags[k] = true;
     } else args._.push(a);
   }
@@ -370,6 +380,76 @@ const commands = {
     const res = await withStepUp(client, () => client.publish(tarball, opts));
     if (flags.json) return out(JSON.stringify(res, null, 2));
     out(green(`✓ Published ${bold(`${res.name}@${res.version}`)}`) + (res.team ? ` to team ${bold(res.team)}${res.visibility === 'team' ? ' (team only)' : ''}` : '') + dim(`  ${res.integrity}`));
+    if (res.build) out(`${magenta('◆')} Its pipeline runs on publish: build ${bold(res.build.id)} is ${res.build.status}. ${dim(`gitcha ci show ${res.build.id} --follow`)}`);
+  },
+
+  // Sites: list them, or make one (deploys come from CI pipelines or the HTTP API).
+  async site({ _, flags }) {
+    const client = authedClient(flags);
+    if (_[1] === 'list') {
+      const r = await withStepUp(client, () => client.sites());
+      if (flags.json) return out(JSON.stringify(r, null, 2));
+      if (!r.sites.length) out(dim('No sites yet.'));
+      for (const s of r.sites) out(`${bold(s.name)}  ${s.urls?.join(' ') ?? ''}  ${dim(s.activeDeploy ? `deploy ${s.activeDeploy}` : 'nothing deployed yet')}`);
+      if (!r.hosting_domains?.length) out(yellow('This server has no hosting domains (GITCHA_HOSTING_DOMAINS), so sites are not served yet.'));
+      return;
+    }
+    if (_[1] === 'create') {
+      if (!_[2]) throw new Error('Usage: gitcha site create <name> [--team T]');
+      const s = await withStepUp(client, () => client.createSite(_[2], { team: typeof flags.team === 'string' ? flags.team : undefined }));
+      if (flags.json) return out(JSON.stringify(s, null, 2));
+      return out(green(`✓ Site ${bold(s.name)} made.`) + (s.urls?.length ? ` ${s.urls.join(' ')}` : ''));
+    }
+    throw new Error('Usage: gitcha site list | create <name> [--team T]');
+  },
+
+  // CI: start a build from a folder, list builds, follow one, and download what it made.
+  async ci({ _, flags }) {
+    const sub = _[1];
+    const client = authedClient(flags);
+    const line = (r) => `${bold(r.id)}  ${r.status.padEnd(9)} ${dim(`${r.trigger ?? 'manual'} · ${when(r.createdAt)}${r.deployed ? ` · deployed to ${r.deployed.site}` : ''}`)}`;
+    if (sub === 'run') {
+      const dir = path.resolve(_[2] || '.');
+      const { manifest, files, tarball } = pack(dir);
+      out(`${magenta('◆')} Packing ${bold(manifest.name)} ${dim(`(${files.length} files, ${(tarball.length / 1024).toFixed(1)} KB)`)}`);
+      const r = await withStepUp(client, () => client.ciRun(tarball, { team: typeof flags.team === 'string' ? flags.team : undefined }));
+      if (flags.json) return out(JSON.stringify(r, null, 2));
+      return out(`${green('✓ Queued')} ${line(r)}\n  ${dim(`gitcha ci show ${r.id} --follow`)}`);
+    }
+    if (sub === 'list') {
+      const { runs } = await withStepUp(client, () => client.ciRuns());
+      if (flags.json) return out(JSON.stringify(runs, null, 2));
+      if (!runs.length) return out(dim('No builds yet.'));
+      for (const r of runs.slice(0, 30)) out(line(r));
+      return;
+    }
+    if (sub === 'show') {
+      if (!_[2]) throw new Error('Usage: gitcha ci show <id> [--follow]');
+      let shown = 0;
+      for (;;) {
+        const r = await withStepUp(client, () => client.ciGet(_[2]));
+        if (flags.json) return out(JSON.stringify(r, null, 2));
+        const log = r.log ?? '';
+        if (log.length > shown) { process.stdout.write(log.slice(shown)); shown = log.length; }
+        if (!flags.follow || !['queued', 'running'].includes(r.status)) {
+          out(`\n${line(r)}${r.artifactSha ? `\n  ${dim(`gitcha ci artifacts ${r.id}`)}` : ''}`);
+          if (r.status === 'queued' && !flags.follow) out(dim('  Waiting for a runner. Is one registered and running? (README.md, "Runners")'));
+          return;
+        }
+        await new Promise((res) => setTimeout(res, 2000));
+      }
+    }
+    if (sub === 'artifacts') {
+      if (!_[2]) throw new Error('Usage: gitcha ci artifacts <id> [--out FILE]');
+      client.timeoutMs = 10 * 60_000;
+      const res = await withStepUp(client, () => client.ciArtifacts(_[2]));
+      const given = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? `${_[2]}-artifacts.tar.gz`;
+      const file = path.resolve(String(flags.out ?? path.basename(given)));
+      if (fs.existsSync(file) && !flags.force) throw new Error(`${file} already exists. Choose another --out, or add --force to replace it.`);
+      fs.writeFileSync(file, Buffer.from(await res.arrayBuffer()));
+      return out(green(`✓ Saved ${bold(path.relative(process.cwd(), file) || file)}`) + dim(` (${fs.statSync(file).size} bytes). Unpack it with: tar xzf ${path.basename(file)}`));
+    }
+    throw new Error('Usage: gitcha ci run [DIR] | list | show <id> [--follow] | artifacts <id> [--out FILE]');
   },
 
   async transfer({ _, flags }) {
