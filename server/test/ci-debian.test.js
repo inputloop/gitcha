@@ -98,3 +98,38 @@ test('CIDEB-3: apt-site.sh makes a repository with checksums and an install page
   assert.doesNotMatch(html, /<script/);
   assert.match(fs.readFileSync(path.join(dir, 'site/SHA256SUMS'), 'utf8'), /^[0-9a-f]{64}  \.\/inputloop-gitcha_0\.2\.0_all\.deb$/m);
 });
+
+test('CIDEB-4: with APT_SIGNING_KEY the repository is signed, only the public key is published, and gpgv accepts it', { skip: !(has('apt-ftparchive') && has('dpkg-deb') && has('gpg') && has('gpgv')) && 'needs apt-ftparchive, dpkg-deb, gpg and gpgv' }, () => {
+  const dir = tmp();
+  const home = path.join(dir, 'gnupg');
+  fs.mkdirSync(home, { mode: 0o700 });
+  const genv = { ...process.env, GNUPGHOME: home };
+  execFileSync('gpg', ['--batch', '--quiet', '--passphrase', '', '--quick-gen-key', 'test apt <apt@example.org>', 'rsa2048', 'sign', 'never'], { env: genv, stdio: 'ignore' });
+  const key = execFileSync('gpg', ['--batch', '--armor', '--export-secret-keys'], { env: genv }).toString();
+  try { execFileSync('gpgconf', ['--kill', 'gpg-agent'], { env: genv, stdio: 'ignore' }); } catch { /* no agent */ }
+  const pkg = path.join(dir, 'pkg');
+  fs.mkdirSync(path.join(pkg, 'DEBIAN'), { recursive: true });
+  fs.writeFileSync(path.join(pkg, 'DEBIAN/control'), 'Package: inputloop-gitcha\nVersion: 0.2.0\nArchitecture: all\nMaintainer: t <t@example.org>\nDescription: test\n');
+  fs.mkdirSync(path.join(dir, 'debs'));
+  execFileSync('dpkg-deb', ['--build', '--root-owner-group', pkg, path.join(dir, 'debs/p_0.2.0_all.deb')], { stdio: 'ignore' });
+  const env = { ...process.env, APT_URL: 'https://apt.example.net', APT_SIGNING_KEY: key };
+  delete env.GNUPGHOME;
+  execFileSync('sh', [path.join(root, 'deploy/ci/apt-site.sh'), path.join(dir, 'debs'), path.join(dir, 'site')], { env, stdio: 'ignore' });
+  const site = path.join(dir, 'site');
+  for (const f of ['InRelease', 'Release.gpg', 'inputloop-archive-keyring.gpg']) assert.ok(fs.existsSync(path.join(site, f)), f);
+  for (const f of fs.readdirSync(site)) assert.ok(!fs.readFileSync(path.join(site, f)).includes('PRIVATE KEY'), `${f} holds no private key`);
+  execFileSync('gpgv', ['--keyring', path.join(site, 'inputloop-archive-keyring.gpg'), path.join(site, 'InRelease')], { stdio: 'ignore' });
+  const html = fs.readFileSync(path.join(site, 'index.html'), 'utf8');
+  assert.match(html, /signed-by=\/usr\/share\/keyrings\/inputloop-archive-keyring\.gpg\] https:\/\/apt\.example\.net\/ \.\//);
+  assert.doesNotMatch(html, /trusted=yes/);
+  assert.throws(() => execFileSync('sh', [path.join(root, 'deploy/ci/apt-site.sh'), path.join(dir, 'debs'), path.join(dir, 'bad')], { env: { ...env, APT_SIGNING_KEY: 'not a key' }, stdio: 'ignore' }), 'a broken key stops the step');
+});
+
+test('CIDEB-5: stage.sh --sign makes the pipeline ask for the signing key (and --passphrase for its passphrase)', { skip: !inGit && 'not a git checkout' }, () => {
+  const out = path.join(tmp(), 's');
+  execFileSync('sh', [path.join(root, 'deploy/ci/stage.sh'), out, '--sign', '--passphrase', '--site', 'none'], { stdio: 'ignore' });
+  const ci = JSON.parse(fs.readFileSync(path.join(out, 'gitcha-ci.json'), 'utf8'));
+  assert.deepEqual(ci.secrets, ['APT_SIGNING_KEY', 'APT_SIGNING_PASSPHRASE']);
+  assert.equal(ci.deploy, undefined);
+  assert.match(ci.steps.find((s) => s.name === 'packages').run, /^unset APT_SIGNING_KEY APT_SIGNING_PASSPHRASE;/, 'the build step never sees the key');
+});

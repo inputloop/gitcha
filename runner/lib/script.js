@@ -32,6 +32,12 @@ export function prepare(workdir, job, source) {
   // The server says how large a source may unpack to (four times its package limit). If it does not say, 100 MiB.
   if (source) extractTo(unpackFiles(source, { maxBytes: job.limits?.maxUnpackedBytes ?? 100 * 1024 * 1024 }), path.join(workdir, 'src'));
   fs.cpSync(HARNESS, path.join(workdir, 'harness'), { recursive: true });
+  // A build's secrets (the server sends them with the job) go in a file only this user can read. run.sh
+  // reads it and deletes it before the first step, so the steps see them as environment variables only.
+  if (job.kind === 'ci' && job.secrets && Object.keys(job.secrets).length) {
+    const lines = Object.entries(job.secrets).filter(([k]) => /^[A-Z_][A-Z0-9_]{0,63}$/.test(k)).map(([k, v]) => `export ${k}=${q(v)}`);
+    fs.writeFileSync(path.join(workdir, 'secrets.sh'), `${lines.join('\n')}\n`, { mode: 0o600 });
+  }
   const script = job.kind === 'ci' ? ciScript(job.spec.pipeline) : fnScript(workdir, job.spec);
   fs.writeFileSync(path.join(workdir, 'run.sh'), script, { mode: 0o755 });
 }
@@ -47,6 +53,7 @@ export function ciScript(p) {
     'J=${GITCHA_JOB:-$(cd "$(dirname "$0")" && pwd)}',
     'export HOME="$J/home" CI=true GITCHA=1',
     ...Object.entries(p.env ?? {}).map(([k, v]) => `export ${k}=${q(v)}`),
+    'if [ -f "$J/secrets.sh" ]; then . "$J/secrets.sh"; rm -f "$J/secrets.sh"; fi',
     'cd "$J/src"',
   ];
   for (const s of p.steps) {

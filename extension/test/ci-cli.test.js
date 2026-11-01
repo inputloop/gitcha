@@ -45,6 +45,18 @@ test('gitcha ci run, list, show and artifacts', async () => {
   assert.deepEqual(fs.readFileSync(file), artifact);
   assert.notEqual((await cli(env, ['ci', 'artifacts', id, '--out', file])).code, 0, 'an existing file is not replaced without --force');
   assert.match((await cli(env, ['ci', 'nope'])).stderr, /Usage: gitcha ci/);
+  const keyFile = path.join(tmp(), 'k.asc');
+  fs.writeFileSync(keyFile, 'super-secret-signing-key-material\n');
+  const set = await cli(env, ['secret', 'set', 'APT_SIGNING_KEY', '--file', keyFile]);
+  assert.equal(set.code, 0, set.stderr);
+  assert.doesNotMatch(set.stdout, /super-secret/);
+  const piped = await cli(env, ['secret', 'set', 'OTHER'], { input: 'piped-value' });
+  assert.equal(piped.code, 0, piped.stderr);
+  const listed = await cli(env, ['secret', 'list']);
+  assert.match(listed.stdout, /APT_SIGNING_KEY[\s\S]*OTHER/);
+  assert.doesNotMatch(listed.stdout, /super-secret|piped-value/);
+  assert.equal((await cli(env, ['secret', 'delete', 'OTHER'])).code, 0);
+  assert.doesNotMatch((await cli(env, ['secret', 'list'])).stdout, /OTHER/);
   const made = await cli(env, ['site', 'create', 'apt']);
   assert.equal(made.code, 0, made.stderr);
   assert.match(made.stdout, /Site apt made/);

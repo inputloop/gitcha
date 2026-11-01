@@ -63,7 +63,7 @@ never sees your password**. When Gitcha asks for a 2FA check, Claude has to
 ask *you* for the code.
 
 > **Status, honestly.** Everything below is built and covered by the test
-> suite (471 tests), and the screenshots come from a real running server. Some
+> suite (477 tests), and the screenshots come from a real running server. Some
 > parts have only been tested against stand-ins, not the real thing:
 > git over a real `sshd`, a job inside a real bContain VM, the Stripe and
 > PayPal sandboxes, a live NextTime instance, and C4OK's door inside a full
@@ -1148,6 +1148,54 @@ straight to a site.
 From a terminal: `gitcha ci list` lists your builds, `gitcha ci show ID --follow` prints one's log as it
 runs, and `gitcha ci artifacts ID` downloads what it left in its `artifacts` folder.
 
+### Secrets for pipelines
+
+Some steps need something that must not be in the source: a signing key, a deploy token. Store it on the
+server as a **secret**, and name it in the pipeline:
+
+```json
+{ "steps": [{ "name": "sign", "run": "sh sign.sh" }], "secrets": ["APT_SIGNING_KEY"] }
+```
+
+The steps then see `$APT_SIGNING_KEY` as an environment variable. Set one from a file (a key), from
+what you pipe in, or typed at a hidden prompt; never on the command line, where shell history keeps it:
+
+```bash
+gitcha secret set APT_SIGNING_KEY --file signing-key.asc
+```
+
+```bash
+gitcha secret list
+```
+
+```bash
+gitcha secret delete APT_SIGNING_KEY
+```
+
+Add `--team NAME` for a team's secrets. Setting or deleting one asks for a fresh authenticator code (when
+you pipe a value in, run `gitcha verify` first, since the code is asked for on the same input).
+
+The rules:
+
+- **Never shown again.** Once set, a value is not on any page, in the API or in the CLI: only names and
+  dates are listed. On disk it is sealed with AES-256-GCM under a key derived from the server's
+  `secret.key`.
+- **Only named secrets, only for people allowed to use them.** A build gets the secrets its pipeline names
+  in `"secrets"`, and only when the person who started it (or published the package that started it) may
+  use them: their own, or a team's when they are a maintainer or owner. A plain team member cannot set or
+  use a team's secrets. A build whose pipeline names a secret that is not set is refused when it is
+  queued, with the command to set it.
+- **Never in a sandbox.** An agent's sandbox run (agent key) cannot use secrets at all.
+- **Only to the runner that takes the job.** The values are opened when a runner claims the build and sent
+  to that runner alone; the build's record keeps only their names. The runner writes them to a file only
+  its user can read, which the build script reads and deletes before the first step.
+- **Masked in logs.** A value a step prints shows as `***` (the whole value, and each of its lines),
+  masked on the runner before the line leaves it and again on the server.
+- **Still yours to guard.** A step can copy a secret into its artifacts or send it somewhere; nothing can
+  stop a pipeline you run from doing that. Name a secret only in pipelines you trust, and give each one
+  the least it needs (a signing subkey, a token that can do one thing). A runner, and its operator, can
+  read the secrets of the jobs it takes: use runners you or your team run.
+
 ### Debian packages from CI
 
 The repository carries a ready pipeline that builds inputloop's own Debian packages and publishes them as
@@ -1229,17 +1277,67 @@ The site's own page shows the same commands with its real address. Later commits
 `sudo apt-get update && sudo apt-get upgrade`, because each version starts with the commit's time
 (`0.2.0+git20261101031500.46237e4`), so apt always sees a newer commit as newer.
 
-**The repository is not signed, yet.** A pipeline has nowhere safe to keep a signing key: everything in
-the source tarball can be read. `[trusted=yes]` tells apt to accept the packages without a signature, so
-serve the site only over https from a domain you control. To sign, download the build (step 5), sign it on
-your own computer with `sh deploy/apt-repo.sh signed/ --sign YOUR_KEY_ID *.deb`, and serve that folder;
-hosts then use `signed-by=` instead of `trusted=yes` (the script prints the line). Secret settings for
-pipelines would let CI sign by itself; they are not built yet.
+**Signing the repository (recommended).** Signed, apt refuses any package list your key did not sign, so
+a changed package or a hijacked site cannot slip anything in. Once:
+
+1. Make a signing key on your own computer, used only for this repository (no passphrase, since CI unlocks
+   it unattended; or add `--passphrase` below and store that as a secret too):
+
+   ```bash
+   gpg --batch --passphrase '' --quick-gen-key "inputloop apt <apt@inputloop.com>" rsa4096 sign never
+   ```
+
+2. Store it as a pipeline secret, and keep the file nowhere else:
+
+   ```bash
+   gpg --armor --export-secret-keys apt@inputloop.com > apt-key.asc
+   ```
+
+   ```bash
+   gitcha secret set APT_SIGNING_KEY --file apt-key.asc
+   ```
+
+   Then delete `apt-key.asc` (keep a backup of the key somewhere safe and offline: losing it means hosts
+   must be told about a new one).
+
+3. Stage with `--sign` from then on:
+
+   ```bash
+   sh deploy/ci/stage.sh ../gitcha-stage --url https://apt.pages.example.net --sign
+   ```
+
+The build then imports the key into a keyring that exists only while the last step runs, signs
+`Release` (`InRelease` and `Release.gpg`), publishes the public half as `inputloop-archive-keyring.gpg`,
+and its install page shows the key's fingerprint and the signed instructions. The step that runs npm never
+sees the key. On each host:
+
+```bash
+curl -fsSL https://apt.pages.example.net/inputloop-archive-keyring.gpg | sudo tee /usr/share/keyrings/inputloop-archive-keyring.gpg >/dev/null
+```
+
+```bash
+gpg --show-keys /usr/share/keyrings/inputloop-archive-keyring.gpg
+```
+
+Check that the fingerprint it prints is yours, once, then:
+
+```bash
+echo 'deb [signed-by=/usr/share/keyrings/inputloop-archive-keyring.gpg] https://apt.pages.example.net/ ./' | sudo tee /etc/apt/sources.list.d/inputloop.list
+```
+
+```bash
+sudo apt-get update && sudo apt-get install inputloop-gitcha
+```
+
+**Unsigned** (without `--sign`), hosts use `[trusted=yes]` as shown earlier, which accepts the packages
+without a signature: serve such a repository only over https from a domain you control.
 
 What was tested: the staging, the three steps on the staged copy (four packages at the commit's version),
-`apt` on Ubuntu 22.04 reading the repository and offering that version, and, in the test suite, publish
-starting the build, a runner's result deployed to the site and downloadable from the build. Not yet tested:
-the whole run on a real runner in a bContain VM.
+signing with a key with and without a passphrase (a wrong passphrase fails the step), `apt` on Ubuntu 22.04
+reading both repositories and, signed, refusing a changed package list ("Hash Sum mismatch"), and, in the
+test suite, publish starting the build, secrets reaching the runner and masked in the log, and a runner's
+result deployed to the site and downloadable. Not yet tested: the whole run on a real runner in a bContain
+VM.
 
 ---
 
@@ -1769,6 +1867,7 @@ gitcha download <owner/name> --path P [--ref R] [--out FILE|-]              one 
 gitcha site list | create <name> [--team T]   your sites, or make one
 gitcha ci run [DIR] [--team T]                start a build of DIR (its gitcha-ci.json, .org or .topoforge.json)
 gitcha ci list | show <id> [--follow] | artifacts <id> [--out FILE]   builds, one build's log, its output
+gitcha secret list | set <NAME> [--file F] | delete <NAME> [--team T]  secrets for pipelines (never shown)
 gitcha topoforge export <gitcha-ci.json|.org> [--out FILE]      draw a pipeline (offline)
 gitcha topoforge import <drawing.json> [--out FILE] [--as chain] [--check]
 gitcha topoforge build <id> | function <owner>/<name> | system [--out FILE]
@@ -1993,6 +2092,7 @@ GraphQL (above) covers the social, task, key, ticket and change parts.
 | `GET` | `/hosting/tls-allowed?domain=` | For the TLS proxy's on-demand certificates |
 | `POST` / `GET` | `/ci/runs` | Start a run / list runs |
 | `GET` | `/ci/runs/:id/artifacts` | What a run left in its artifacts folder (`.tar.gz`) |
+| `GET` / `PUT` / `DELETE` | `/ci/secrets[/:name]?owner=` | Pipeline secrets: names and dates / set `{value, owner}` / remove; changing one is sensitive; a value is never returned |
 | `GET` | `/ci/runs/:id/topoforge`, `/functions/:owner/:name/topoforge`, `/topoforge/system` | TopoForge drawings (system: administrators and staff) |
 | `GET` | `/dm/me`, `/dm/keys/:username`, `/dm/box?after=N` | Encrypted messages: your keys, a person's public keys and signed prekey, your inbox's sealed envelopes (from a browser: session plus `X-Gitcha-CSRF`) |
 | `PUT` | `/dm/identity`, `/dm/prekey` | Set your identity key (fresh code); publish a new signed prekey |
@@ -2125,7 +2225,7 @@ against Cassandra 5.0), point them at a node:
 GITCHA_TEST_STORE=cassandra GITCHA_TEST_CASSANDRA=127.0.0.1:9042 npm --workspace server test
 ```
 
-The tests (471 of them: 316 for the server, 90 for the extension and CLI,
+The tests (477 of them: 322 for the server, 90 for the extension and CLI,
 17 for the runner, 36 for the medic and 12 for Omni) cover RFC 4226/6238 TOTP vectors, encryption at rest,
 replay protection, enrollment and the follow-up checks, CSRF and sign-in
 hardening, proxy addresses, the store's locking and crash safety, teams,

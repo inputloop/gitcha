@@ -82,17 +82,17 @@ with [`extension/lib/manifest.js`](extension/lib/manifest.js).
    key yet, it makes one, but [`config.js:73`](server/src/config.js#L73) refuses
    to do that when the database already has accounts: a new key could never
    open the old secrets, so it is safer to stop.
-3. [`app.js:60`](server/src/app.js#L60) builds every part of the server (the
+3. [`app.js:61`](server/src/app.js#L61) builds every part of the server (the
    "services") and connects them. The order matters, because some services need
    others. For example, the task service needs the projects service, and the
    social feed listens for pushes from projects.
 4. `createApp` then registers the routes (the URL patterns each part answers),
-   starting at [`app.js:103`](server/src/app.js#L103).
+   starting at [`app.js:105`](server/src/app.js#L105).
 5. The server listens on `127.0.0.1:4873` by default, in plain HTTP. Only a TLS
    proxy (such as Caddy) should face the internet: see "The reverse proxy"
    below.
 6. A timer runs every 30 seconds to clean up: it ends old jobs and expired
-   sign-ups ([`app.js:180`](server/src/app.js#L180)).
+   sign-ups ([`app.js:182`](server/src/app.js#L182)).
 
 If something goes badly wrong later, [`http.js:112`](server/src/http.js#L112)
 logs the error and keeps serving, instead of letting one bad request stop the
@@ -101,7 +101,7 @@ whole server.
 ### The reverse proxy
 
 The server never does TLS. It uses Node's plain `http` module
-([`app.js:170`](server/src/app.js#L170)), and the reverse proxy in front of
+([`app.js:172`](server/src/app.js#L172)), and the reverse proxy in front of
 it (Caddy, nginx, Apache or HAProxy) does the https, holds the certificates
 and owns ports 80 and 443. The server reads three things the proxy tells it:
 
@@ -125,7 +125,7 @@ the settings for running without one.
 ## 3. How a request is handled
 
 Every HTTP request goes through one function, set up in
-[`app.js:60`](server/src/app.js#L60):
+[`app.js:61`](server/src/app.js#L61):
 
 1. It works out the address of the person calling with
    [`http.js:275`](server/src/http.js#L275). Behind a proxy, the real address is in the
@@ -192,7 +192,7 @@ memory, and every change goes through [`store.js:203`](server/src/store.js#L203)
    [`store.js:232`](server/src/store.js#L232) reloads the last good copy, so memory and
    disk agree again. A half-made change can never be saved by a later write.
    This is why `createApp` saves once at start-up
-   ([`app.js:179`](server/src/app.js#L179)): from then on every collection
+   ([`app.js:181`](server/src/app.js#L181)): from then on every collection
    is on disk, so going back to the file never loses one.
 
 Two rules follow for code that uses the store:
@@ -200,7 +200,7 @@ Two rules follow for code that uses the store:
 - **Change data only inside `store.tx`.** A change made outside it stays in
   memory only until some later save, and a crash loses it. Things that change
   very often, like the time a session, key or runner was last seen, are saved
-  at most once a minute ([`jobs.js:149`](server/src/compute/jobs.js#L149),
+  at most once a minute ([`jobs.js:151`](server/src/compute/jobs.js#L151),
   [`keys.js:162`](server/src/social/keys.js#L162)). Billing's usage counts wait in a
   list beside the database and are saved together every few seconds
   ([`billing.js:306`](server/src/billing/billing.js#L306)).
@@ -487,18 +487,18 @@ them.
 
 ### The job queue
 
-[`jobs.js:45`](server/src/compute/jobs.js#L45) is the queue:
+[`jobs.js:46`](server/src/compute/jobs.js#L46) is the queue:
 
 1. A runner signs up once with a registration token
-   ([`jobs.js:131`](server/src/compute/jobs.js#L131)). The token works once. The runner
+   ([`jobs.js:133`](server/src/compute/jobs.js#L133)). The token works once. The runner
    gets its own runner token.
 2. The runner asks for work and waits up to 30 seconds for an answer
-   ([`jobs.js:319`](server/src/compute/jobs.js#L319)). This is called long-polling.
-3. [`jobs.js:291`](server/src/compute/jobs.js#L291) gives the runner the job and a job
+   ([`jobs.js:329`](server/src/compute/jobs.js#L329)). This is called long-polling.
+3. [`jobs.js:293`](server/src/compute/jobs.js#L293) gives the runner the job and a job
    token that works only for that job and that runner.
-4. The runner streams the log ([`jobs.js:352`](server/src/compute/jobs.js#L352), capped
+4. The runner streams the log ([`jobs.js:362`](server/src/compute/jobs.js#L362), capped
    at 5 MB) and reports the result
-   ([`jobs.js:383`](server/src/compute/jobs.js#L383)).
+   ([`jobs.js:394`](server/src/compute/jobs.js#L394)).
 
 After a restart, jobs that were waiting go back in the queue, and jobs that
 were running are marked failed.
@@ -533,7 +533,7 @@ Gitcha also writes TopoForge drawings, with [`extension/lib/topoforge.js`](exten
   back is the same pipeline.
 - [`topoforge.js:118`](extension/lib/topoforge.js#L118) reads which steps of a finished
   build passed, failed or never ran from the markers the runner prints
-  ([`script.js:42`](runner/lib/script.js#L42)), and the drawing colours them.
+  ([`script.js:48`](runner/lib/script.js#L48)), and the drawing colours them.
 - [`topoforge.js:141`](extension/lib/topoforge.js#L141) draws a chain function, and
   [`topoforge.js:159`](extension/lib/topoforge.js#L159) a map of the instance from
   [`topoforge.js:39`](server/src/topoforge.js#L39).
@@ -541,14 +541,23 @@ Gitcha also writes TopoForge drawings, with [`extension/lib/topoforge.js`](exten
 The routes are in [`topoforge.js:52`](server/src/topoforge.js#L52). Each uses
 the same "who may see this" rule as the thing it draws, sends the drawing as a
 download, and the instance map is for administrators and staff only. The CLI's
-`gitcha topoforge` ([`gitcha.js:567`](extension/bin/gitcha.js#L567)) and the
+`gitcha topoforge` ([`gitcha.js:603`](extension/bin/gitcha.js#L603)) and the
 Claude tool `gitcha_topoforge` use them.
 
-[`ci.js:83`](server/src/compute/ci.js#L83) starts a build. It checks deploy rights, room
+[`ci.js:85`](server/src/compute/ci.js#L85) starts a build. It checks deploy rights, room
 in the queue and the billing quota, then queues the job. When it ends,
-[`ci.js:190`](server/src/compute/ci.js#L190) counts the minutes once and, if the build
+[`ci.js:216`](server/src/compute/ci.js#L216) counts the minutes once and, if the build
 passed and asked for it, deploys the artifacts to a site. A package publish can
-start a build too ([`ci.js:146`](server/src/compute/ci.js#L146)).
+start a build too ([`ci.js:172`](server/src/compute/ci.js#L172)).
+
+Secrets a pipeline names (`"secrets"`) live in [`secrets.js:19`](server/src/compute/secrets.js#L19),
+sealed with their own key and never read back through the API. `run` refuses a build
+whose secrets are missing, or whose starter may not use them, or that is an agent's
+sandbox run. When a runner takes the job, [`ci.js:162`](server/src/compute/ci.js#L162) opens
+them for that answer only, and [`secrets-mask.js:7`](extension/lib/secrets-mask.js#L7) hides
+them in the log, on the runner and again on the server. The runner hands them to the
+steps through a file that the build script reads and deletes
+([`script.js:29`](runner/lib/script.js#L29)).
 
 ### Functions
 
@@ -561,12 +570,12 @@ at most 10 steps). A site can send some of its paths to a function
 
 ### The runner itself
 
-The runner's loop is [`runner.js:143`](runner/lib/runner.js#L143). For each job,
-[`runner.js:60`](runner/lib/runner.js#L60):
+The runner's loop is [`runner.js:148`](runner/lib/runner.js#L148). For each job,
+[`runner.js:61`](runner/lib/runner.js#L61):
 
 1. downloads the job's source;
-2. writes a shell script for it with [`script.js:42`](runner/lib/script.js#L42) or
-   [`script.js:69`](runner/lib/script.js#L69) (every value is quoted by
+2. writes a shell script for it with [`script.js:48`](runner/lib/script.js#L48) or
+   [`script.js:76`](runner/lib/script.js#L76) (every value is quoted by
    [`script.js:26`](runner/lib/script.js#L26), so it cannot break out of the script);
 3. runs it with a **backend**:
    - [`runner/lib/backends/bcontain.js`](runner/lib/backends/bcontain.js) starts a fresh bContain virtual machine
@@ -575,7 +584,7 @@ The runner's loop is [`runner.js:143`](runner/lib/runner.js#L143). For each job,
    - [`runner/lib/backends/process.js`](runner/lib/backends/process.js) runs the job as a plain process with no
      isolation. It refuses to run unless `GITCHA_RUNNER_UNSAFE_PROCESS=1` is
      set, because it is only for development.
-4. reads the result with [`script.js:132`](runner/lib/script.js#L132) and sends it back.
+4. reads the result with [`script.js:139`](runner/lib/script.js#L139) and sends it back.
 
 Functions run inside a small **harness** for their language
 ([`runner/harness/node.mjs`](runner/harness/node.mjs), [`runner/harness/python.py`](runner/harness/python.py),
@@ -683,7 +692,7 @@ files the browser page and the `gitcha` CLI share:
   [`dm-client.js:251`](extension/lib/dm-client.js#L251) seals one envelope for the recipient and
   one for the sender's own inbox.
 - [`server/public/dm.js`](server/public/dm.js) draws the Messages page on top of `DmDevice`, and
-  `gitcha messages` ([`gitcha.js:472`](extension/bin/gitcha.js#L472)) does the
+  `gitcha messages` ([`gitcha.js:508`](extension/bin/gitcha.js#L508)) does the
   same in a terminal, keeping the keys in a mode-600 file
   ([`dm-store.js:18`](extension/lib/dm-store.js#L18)).
 
@@ -760,7 +769,7 @@ Both live in [`extension`](extension) and share the same library.
   and only then moves it into place.
 - [`extension/bin/gitcha.js`](extension/bin/gitcha.js) is the `gitcha` command. When the server asks
   for a code, `withStepUp` asks you for one and tries again
-  ([`gitcha.js:161`](extension/bin/gitcha.js#L161)).
+  ([`gitcha.js:166`](extension/bin/gitcha.js#L166)).
 - [`extension/bin/gitcha-mcp.js`](extension/bin/gitcha-mcp.js) is the Claude extension: an MCP server (the
   Model Context Protocol, the way Claude calls outside tools) built on
   [`mcp.js:65`](extension/lib/mcp.js#L65). Every tool's input is checked

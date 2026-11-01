@@ -40,9 +40,11 @@ export function pipelineFromTarball(tarball, { maxUnpackedBytes = 100 * 1024 * 1
  * and deploys the built site when a build succeeds.
  */
 export class CiService {
-  constructor({ store, config, teams, sites, jobs, billing, budgets, clock = Date.now }) {
-    Object.assign(this, { store, config, teams, sites, jobs, billing, budgets, clock });
+  constructor({ store, config, teams, sites, jobs, billing, budgets, secrets, clock = Date.now }) {
+    Object.assign(this, { store, config, teams, sites, jobs, billing, budgets, secrets, clock });
     jobs.onComplete = (job) => this.afterJob(job);
+    // When a runner takes a build that uses secrets, they are opened then, for that runner only.
+    jobs.secretsFor = (job) => this.secretsFor(job);
     // A build that was running when the server stopped is still owed its
     // metering and its refund (the job service just marked it failed). The time
     // the server was down is not build time: at most the build's own time limit counts.
@@ -95,6 +97,16 @@ export class CiService {
     // Permission to deploy is decided now, by whoever started the build.
     // Sandbox (agent) runs may never deploy.
     if (found.pipeline.deploy && sandboxAgent) throw new HttpError(403, 'sandbox_no_deploy', 'Sandbox runs cannot deploy sites; a person deploys.');
+    // Secrets: never in an agent's sandbox run; otherwise only for someone who may use the account's
+    // secrets, and only when every one the pipeline names is set (a build half-configured fails late).
+    const secretNames = found.pipeline.secrets ?? [];
+    if (secretNames.length) {
+      if (sandboxAgent) throw new HttpError(403, 'sandbox_no_secrets', 'Sandbox runs cannot use secrets; a person starts builds that do.');
+      const acct = owner ?? this.ownerFor(user, team);
+      if (!this.secrets?.mayUse(user, acct)) throw new HttpError(403, 'secrets_forbidden', `This pipeline uses secrets of ${acct.type} ${acct.name}, which only ${acct.type === 'team' ? 'the team\'s maintainers' : 'its owner'} may use.`);
+      const missing = this.secrets.missing(acct, secretNames);
+      if (missing.length) throw new HttpError(400, 'missing_secret', `This pipeline needs the secret${missing.length > 1 ? 's' : ''} ${missing.join(', ')}, not set for ${acct.type} ${acct.name}. Set ${missing.length > 1 ? 'them' : 'it'} with: gitcha secret set ${missing[0]}${acct.type === 'team' ? ` --team ${acct.name}` : ''}`);
+    }
     let deployTarget;
     if (found.pipeline.deploy) {
       const site = this.sites.get(found.pipeline.deploy.site);
@@ -133,6 +145,7 @@ export class CiService {
       kind: 'ci', owner: o, createdBy: user.username, trigger, sourceSha: sourceKey, ownSource: true, pipelineFile: found.file,
       pipelineSha, timeoutMs, deploy: found.pipeline.deploy, deployAllowedBy: found.pipeline.deploy ? user.username : null, deployTarget,
       sandboxAgent, paidByBudget: Boolean(budgetKey), reservedMinutes,
+      ...(secretNames.length ? { secretNames, secretsAllowedBy: user.username } : {}),
     });
     // The hold is its own ledger entry for each build. The ledger skips an entry
     // whose ref it has seen, so the ref includes the job id.
@@ -140,6 +153,19 @@ export class CiService {
     if (cutTo) this.jobs.appendLog(job, `[gitcha] time limit cut to ${cutTo} minute${cutTo === 1 ? '' : 's'}: that is the sandbox credit ${sandboxAgent} had to hold\n`);
     this.store.tx(() => this.store.audit({ userId: user.id, event: 'ci.queued', ip, job: job.id, owner: ownerKey(o), trigger }));
     return this.jobs.view(job);
+  }
+
+  /**
+   * The secrets for a build a runner is taking: opened now, if the person who started it may still use
+   * them. Returns { values, notes }: notes are log lines about secrets that are gone or no longer allowed.
+   */
+  secretsFor(job) {
+    if (job.kind !== 'ci' || !job.secretNames?.length || !this.secrets) return { values: {}, notes: [] };
+    const starter = this.store.userByName(job.secretsAllowedBy);
+    if (!this.secrets.mayUse(starter, job.owner)) return { values: {}, notes: [`[gitcha] no secrets for this build: ${job.secretsAllowedBy} may no longer use them`] };
+    const values = this.secrets.open(job.owner, job.secretNames);
+    const gone = job.secretNames.filter((n) => !Object.hasOwn(values, n));
+    return { values, notes: gone.length ? [`[gitcha] secret${gone.length > 1 ? 's' : ''} no longer set: ${gone.join(', ')}`] : [] };
   }
 
   /** Called after a package is published: build it if its pipeline asks to run on publish. Never throws. */

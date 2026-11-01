@@ -62,6 +62,11 @@ ${bold('CI')} (a pipeline file in the folder: gitcha-ci.json, gitcha-ci.org or g
   gitcha ci show <id> [--follow]                a build's state and log (--follow: until it ends)
   gitcha ci artifacts <id> [--out FILE]         download what the build left in its artifacts folder
 
+${bold('Secrets for CI')} (values a pipeline names in "secrets"; never shown again once set)
+  gitcha secret list [--team T]                 the names (and when each was set)
+  gitcha secret set <NAME> [--team T] [--file F]  set one: from F, from what you pipe in, or typed (hidden)
+  gitcha secret delete <NAME> [--team T]
+
 ${bold('Teams')}
   gitcha team list                              teams you belong to
   gitcha team create <name> [--description D]   start a team (you become its owner)
@@ -401,6 +406,37 @@ const commands = {
       return out(green(`✓ Site ${bold(s.name)} made.`) + (s.urls?.length ? ` ${s.urls.join(' ')}` : ''));
     }
     throw new Error('Usage: gitcha site list | create <name> [--team T]');
+  },
+
+  // Secrets for CI pipelines. A value is read from --file, a pipe, or a hidden prompt, never from the
+  // command line (where shell history would keep it), and never printed.
+  async secret({ _, flags }) {
+    const client = authedClient(flags);
+    const owner = typeof flags.team === 'string' ? `team:${flags.team}` : undefined;
+    if (_[1] === 'list') {
+      const r = await withStepUp(client, () => client.ciSecrets(owner));
+      if (flags.json) return out(JSON.stringify(r, null, 2));
+      if (!r.secrets.length) return out(dim(`No secrets for ${r.owner}.`));
+      for (const s of r.secrets) out(`${bold(s.name)}  ${dim(`set ${when(s.updatedAt)} by ${s.updatedBy}`)}`);
+      return;
+    }
+    if (_[1] === 'set') {
+      const name = _[2];
+      if (!name) throw new Error('Usage: gitcha secret set <NAME> [--team T] [--file F]');
+      let value;
+      if (typeof flags.file === 'string') value = fs.readFileSync(flags.file, 'utf8');
+      else if (!process.stdin.isTTY) value = fs.readFileSync(0, 'utf8');
+      else value = await ask(`${bold(name)} (hidden; for a file such as a key, use --file): `, { hidden: true });
+      if (!value) throw new Error('The value is empty: nothing was set.');
+      const r = await withStepUp(client, () => client.setCiSecret(name, value, owner));
+      return out(green(`✓ ${bold(r.name)} is set for ${r.owner}.`) + dim(' It is not shown again; pipelines that name it in "secrets" get it.'));
+    }
+    if (_[1] === 'delete') {
+      if (!_[2]) throw new Error('Usage: gitcha secret delete <NAME> [--team T]');
+      const r = await withStepUp(client, () => client.removeCiSecret(_[2], owner));
+      return out(green(`✓ ${bold(r.name)} removed from ${r.owner}.`));
+    }
+    throw new Error('Usage: gitcha secret list | set <NAME> [--file F] | delete <NAME>   (each with --team T for a team)');
   },
 
   // CI: start a build from a folder, list builds, follow one, and download what it made.

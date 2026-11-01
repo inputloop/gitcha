@@ -20,6 +20,7 @@ import { RingService } from './hosting/ring.js';
 import { registerHostingApi, serveHosted } from './hosting/api.js';
 import { JobService } from './compute/jobs.js';
 import { CiService } from './compute/ci.js';
+import { SecretService } from './compute/secrets.js';
 import { FunctionService } from './compute/functions.js';
 import { registerComputeApi } from './compute/api.js';
 import { registerTopoForgeApi } from './topoforge.js';
@@ -92,6 +93,7 @@ export function createApp(config, { clock = Date.now, resolver, fetchImpl } = {}
     services.social.activity(t.claimant.handle, { title: `Second Reader review of ${t.project}: ${t.review.verdict.replace('_', ' ')}`, body: `${t.review.summary}\n\n${t.review.findings.length} finding(s). Task: ${services.tasks.url(t)}`, tags: ['second-reader', 'review'], refs: { task: t.id, project: t.project } });
   };
   services.jobs = new JobService({ store, config, teams, clock });
+  services.secrets = new SecretService({ store, teams, config, clock }); // CI pipelines' secret settings
   services.ci = new CiService({ ...services, clock });
   services.functions = new FunctionService({ ...services, clock });
   const ring = new RingService({

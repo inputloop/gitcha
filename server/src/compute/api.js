@@ -42,7 +42,7 @@ async function readCapped(req, limit) {
 const tarballFrom = (body) => Buffer.from(String(body.tarball ?? ''), 'base64');
 
 /** Add the runner, CI and functions routes to the router. */
-export function registerComputeApi(router, { auth, jobs, ci, functions, config, principals, billing, budgets, store }) {
+export function registerComputeApi(router, { auth, jobs, ci, functions, config, principals, billing, budgets, store, secrets }) {
   const { verified, bearer } = makeGuards(auth, config);
 
   // ---- the runner protocol -------------------------------------------------------
@@ -186,6 +186,22 @@ export function registerComputeApi(router, { auth, jobs, ci, functions, config, 
       'Content-Type': 'application/gzip', 'Content-Disposition': `attachment; filename="${j.id.replace(/[^\w.-]/g, '')}-artifacts.tar.gz"`,
       'X-Gitcha-Artifacts-Sha256': j.artifactSha,
     });
+  });
+
+  // ---- secrets for pipelines ----------------------------------------------------------
+  // Names and dates only: a value is never sent back. Setting or removing one needs a fresh code.
+  router.get('/api/v1/ci/secrets', (ctx) => {
+    const a = verified(ctx);
+    json(ctx.res, 200, secrets.list(a.user, ctx.url.searchParams.get('owner') || undefined));
+  });
+  router.put('/api/v1/ci/secrets/:name', async (ctx) => {
+    const a = verified(ctx, { sensitive: true });
+    const body = await readJson(ctx.req, 96 * 1024);
+    json(ctx.res, 200, secrets.set(a.user, body.owner || undefined, ctx.params.name, body.value, ctx.ip));
+  });
+  router.delete('/api/v1/ci/secrets/:name', (ctx) => {
+    const a = verified(ctx, { sensitive: true });
+    json(ctx.res, 200, secrets.remove(a.user, ctx.url.searchParams.get('owner') || undefined, ctx.params.name, ctx.ip));
   });
 
   // Only someone who may manage the run may cancel it.

@@ -118,6 +118,9 @@ export class GitchaClient {
   ciRun(tarball, { team } = {}) { return this.request('POST', '/api/v1/ci/runs', { body: { tarball: tarball.toString('base64'), team } }); }
   ciRuns() { return this.request('GET', '/api/v1/ci/runs'); }
   ciGet(id) { return this.request('GET', `/api/v1/ci/runs/${encodeURIComponent(id)}`); }
+  ciSecrets(owner) { return this.request('GET', `/api/v1/ci/secrets${owner ? `?owner=${encodeURIComponent(owner)}` : ''}`); }
+  setCiSecret(name, value, owner) { return this.request('PUT', `/api/v1/ci/secrets/${encodeURIComponent(name)}`, { body: { value, owner } }); }
+  removeCiSecret(name, owner) { return this.request('DELETE', `/api/v1/ci/secrets/${encodeURIComponent(name)}${owner ? `?owner=${encodeURIComponent(owner)}` : ''}`); }
   ciArtifacts(id) { return this.request('GET', `/api/v1/ci/runs/${encodeURIComponent(id)}/artifacts`, { raw: true }); }
   setVisibility(name, priv) { return this.request('POST', `/api/v1/packages/${encodeURIComponent(name)}/visibility`, { body: { private: priv } }); }
 

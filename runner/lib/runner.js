@@ -10,6 +10,7 @@ import path from 'node:path';
 import * as processBackend from './backends/process.js';
 import * as bcontainBackend from './backends/bcontain.js';
 import { prepare, readOutput } from './script.js';
+import { secretMasker } from '../../extension/lib/secrets-mask.js';
 
 // The ways a job can run. "bcontain" isolates each job in a VM; "process" does not isolate at all.
 export const BACKENDS = { process: processBackend, bcontain: bcontainBackend };
@@ -64,10 +65,12 @@ export async function executeJob(client, config, { job, job_token: jobToken }, s
   let partial = '';
   // Stream the CI log line by line, with our step markers turned into readable headings.
   // `partial` holds a line that has not ended yet; `pending` holds text waiting to be sent.
+  // A build's secrets never leave this machine in its log: each whole line is masked before it is queued.
+  const mask = secretMasker(Object.values(job.secrets ?? {}));
   const take = (s) => {
     const lines = (partial + s).split('\n');
     partial = lines.pop();
-    if (lines.length) pending += readOutput(lines.join('\n'), 0).log + '\n';
+    if (lines.length) pending += mask(readOutput(lines.join('\n'), 0).log) + '\n';
   };
   // The server keeps no more than a quarter of a megabyte per log call, so we send small pieces.
   // If a call fails, its piece is kept for the next try. If the server says "this job is already over"
@@ -106,6 +109,8 @@ export async function executeJob(client, config, { job, job_token: jobToken }, s
       onOutput: job.kind === 'ci' ? take : null, signal: stopper.signal,
     });
     if (stopper.signal.aborted) { say(`job ${job.id} was ended by the server; stopped`); return; }
+    // run.sh deletes the secrets file before its first step; if the job never got that far, it goes now.
+    fs.rmSync(path.join(workdir, 'secrets.sh'), { force: true });
     const parsed = readOutput(result.output, result.code);
     if (job.kind === 'ci') {
       // Send the rest of the log, then the artifact (only for a passing build) and the final status.

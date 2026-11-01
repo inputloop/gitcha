@@ -86,7 +86,15 @@ export function normalizePipeline(p, { maxTimeoutMs = 3_600_000, defaultImage } 
   const deploy = p.deploy?.site ? { site: String(p.deploy.site).toLowerCase() } : null;
   if (deploy && !artifacts) throw bad('"deploy" needs "artifacts": the directory to publish.');
   const on = Array.isArray(p.on) ? p.on.filter((x) => ['publish', 'manual'].includes(x)) : ['manual'];
-  return { image, timeoutMs: parseDuration(p.timeout, 10 * 60_000, maxTimeoutMs), env, steps, artifacts, deploy, on };
+  // The secret settings the steps use, by name (their values live on the server: compute/secrets.js).
+  if (p.secrets !== undefined && !Array.isArray(p.secrets)) throw bad('"secrets" is a list of names, like ["APT_SIGNING_KEY"].');
+  const secrets = [...new Set((p.secrets ?? []).map(String))];
+  if (secrets.length > 20) throw bad('A pipeline uses at most 20 secrets.');
+  for (const n of secrets) {
+    if (!/^[A-Z_][A-Z0-9_]{0,63}$/.test(n)) throw bad(`Bad secret name "${n}" (capitals, digits and _).`);
+    if (Object.hasOwn(env, n)) throw bad(`"${n}" is both in "env" and in "secrets".`);
+  }
+  return { image, timeoutMs: parseDuration(p.timeout, 10 * 60_000, maxTimeoutMs), env, steps, artifacts, deploy, on, secrets };
 }
 
 /**

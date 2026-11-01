@@ -18,6 +18,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { HttpError } from '../errors.js';
 import { randomToken, sha256 } from '../crypto.js';
+import { secretMasker } from '../../../extension/lib/secrets-mask.js';
 
 // A job's log is cut off at 5 MB. The store keeps the newest 1000 finished jobs.
 const LOG_LIMIT = 5 * 1024 * 1024;
@@ -58,6 +59,7 @@ export class JobService {
     this.queue = [];          // queued job ids, oldest first (CI + functions)
     this.live = new Map();    // in-memory function invocations by id
     this.waiters = [];        // runners blocked in claim()
+    this.masks = new Map();   // job id -> a function that hides that build's secrets in its log
     this.done = new Map();    // job id -> resolve() for awaitResult
     this.onComplete = null;   // set by the CI service (deploy artifacts)
     // Put CI jobs that were queued when the server stopped back in the queue.
@@ -298,6 +300,14 @@ export class JobService {
       job: { id: j.id, kind: j.kind, spec: this.specOf(j), timeoutMs: j.timeoutMs, hasSource: Boolean(j.sourceSha), owner: j.owner, limits: { maxUnpackedBytes: 4 * this.config.maxPackageBytes } },
       jobToken,
     };
+    // A build's secrets go to this runner in this answer only; the record keeps their names, and the log
+    // hides their values (here, and on the runner before it sends a line).
+    if (j.kind === 'ci' && j.secretNames?.length && this.secretsFor) {
+      const { values, notes } = this.secretsFor(j);
+      handed.job.secrets = values;
+      this.masks.set(j.id, secretMasker(Object.values(values)));
+      for (const n of notes) this.appendLog(j, `${n}\n`);
+    }
     // The runner has the caller's request now, so the server need not keep its
     // body while the call runs (FN-1).
     if (j.kind === 'fn' && j.spec?.request) j.spec = { ...j.spec, request: { ...j.spec.request, body: '' } };
@@ -350,7 +360,8 @@ export class JobService {
   // Add text to a job's log, up to LOG_LIMIT. A function's log is kept in
   // memory; a CI log goes to a file on disk.
   appendLog(job, text) {
-    const buf = Buffer.from(String(text));
+    const mask = this.masks.get(job.id);
+    const buf = Buffer.from(mask ? mask(String(text)) : String(text));
     // A function's log lives in memory with its byte count. A CI log's size is the size of its file,
     // so nothing about it needs saving in the database while the job runs.
     const used = job.kind === 'fn' ? (job.logBytes ?? 0) : this.logSize(job.id);
@@ -382,6 +393,7 @@ export class JobService {
   // forgotten after 60 seconds.
   async complete(job, { status, exitCode = null, error = null, artifact = null, response = null }) {
     if (!['succeeded', 'failed', 'cancelled', 'timed_out'].includes(status)) throw new HttpError(400, 'bad_status', 'Unknown job status.');
+    this.masks.delete(job.id); // the runner has sent its last line; nothing it says now carries a secret
     let artifactSha = null;
     if (artifact) {
       artifactSha = sha256(artifact);
