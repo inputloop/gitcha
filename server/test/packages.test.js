@@ -183,7 +183,7 @@ test('a README\'s HTML comments (a licence header, say) are not shown, except in
   const { markdown } = await import('../src/views.js');
   const html = markdown('<!-- Licence header: example only -->\n<!--\nmore\n-->\n# Title\n\nText <!-- hidden --> here.\n\n```\n<!-- shown in the example -->\n```\n').__html;
   assert.doesNotMatch(html, /Licence header|more|hidden/);
-  assert.match(html, /<h2>Title<\/h2>/);
+  assert.match(html, /<h2 id="md-title">Title<\/h2>/);
   assert.match(html, /Text  here\./);
   assert.match(html, /&lt;!-- shown in the example --&gt;/);
 });

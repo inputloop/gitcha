@@ -29,7 +29,7 @@ import { GIT_ENV, ownerLabel } from './projects.js';
 const REF_RE = /^(?![-/])(?!.*(?:\.\.|@\{|\/\/))[A-Za-z0-9._/@+-]{1,200}$/;
 const SHA_RE = /^[0-9a-f]{40,64}$/;
 // The biggest file the Files page shows inline. Bigger ones are offered as a download.
-const SHOW_MAX = 512 * 1024;
+export const SHOW_MAX = 512 * 1024;
 // A whole-project download may run this long before it is stopped.
 const ARCHIVE_TIMEOUT_MS = 10 * 60_000;
 
@@ -161,16 +161,16 @@ export class RepoBrowser {
 }
 
 // A file's bytes look like text when they have no NUL byte and are valid UTF-8.
-function isText(buf) {
+export function isText(buf) {
   if (buf.subarray(0, 8000).includes(0)) return false;
   try { new TextDecoder('utf-8', { fatal: true }).decode(buf); return true; } catch { return false; }
 }
 
 const bytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 // A safe file name for Content-Disposition: the plain ASCII name, and the real one in RFC 5987 form.
-const disposition = (kind, name) => `${kind}; filename="${name.replace(/[^\x20-\x7e]|["\\]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+export const disposition = (kind, name) => `${kind}; filename="${name.replace(/[^\x20-\x7e]|["\\]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 // What every file reply carries: no sniffing, no script, no framing, not stored by shared caches.
-const FILE_HEADERS = { 'Content-Security-Policy': "default-src 'none'; sandbox", 'X-Content-Type-Options': 'nosniff', 'Cross-Origin-Resource-Policy': 'same-origin', 'Cache-Control': 'private, no-store' };
+export const FILE_HEADERS = { 'Content-Security-Policy': "default-src 'none'; sandbox", 'X-Content-Type-Options': 'nosniff', 'Cross-Origin-Resource-Policy': 'same-origin', 'Cache-Control': 'private, no-store' };
 
 /** Adds the Files pages and the download routes (web and API). */
 export function registerBrowse(router, { browse, projects, tasks, principals, auth, web }) {
@@ -357,7 +357,7 @@ export function filesPage({ p, base, refs, ref, sha, path = '', entries, file, r
 <div class="table-wrap card"><table class="table compact files-list"><tbody>
 ${path ? h`<tr><td class="files-kind"></td><td><a href="${filesUrl(parts.slice(0, -1).join('/'))}">..</a></td><td></td><td></td></tr>` : ''}
 ${rows}</tbody></table>${entries.length ? '' : h`<p class="muted">This folder is empty.</p>`}</div>
-${readme ? h`<div class="card readme"><h3>${readme.name}</h3>${readme.md ? markdown(readme.text) : h`<pre>${readme.text}</pre>`}</div>` : ''}`;
+${readme ? h`<div class="card readme"><h3>${readme.name}</h3>${readme.md ? markdown(readme.text, { dir: path, link: filesUrl }) : h`<pre>${readme.text}</pre>`}</div>` : ''}`;
   }
 
   const name = parts[parts.length - 1];
@@ -366,7 +366,9 @@ ${readme ? h`<div class="card readme"><h3>${readme.name}</h3>${readme.md ? markd
 <div class="card files-file">
   <div class="row gap files-file-head"><strong>${name}</strong><span class="muted small">${bytes(file.size)}</span>
     <span class="grow"></span>${file.text !== null ? h`<a class="btn ghost small" href="${rawUrl}">Raw</a>` : ''}<a class="btn small" href="${rawUrl}&amp;download=1" download>Download</a></div>
-  ${file.text !== null
+  ${file.text !== null && /\.(md|markdown)$/i.test(name)
+    ? h`<div class="readme">${markdown(file.text, { dir: parts.slice(0, -1).join('/'), link: filesUrl })}</div>`
+    : file.text !== null
     ? h`<pre class="files-code"><code>${file.text}</code></pre>`
     : alert(file.size > SHOW_MAX ? `This file is ${bytes(file.size)}, too big to show here. Download it instead.` : 'This file is not text, so it is not shown here. Download it instead.', 'info')}
 </div>`;

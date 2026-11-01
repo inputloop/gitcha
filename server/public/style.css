@@ -346,3 +346,14 @@ button.link:focus-visible { color: var(--text); }
 .files-file-head .grow { flex: 1; }
 .files-file-head strong { overflow-wrap: anywhere; min-width: 0; }
 .files-code { margin: 0; max-height: 75vh; overflow: auto; }
+
+/* README extras: quotes, tables and the version being looked at in the Versions list. */
+.readme blockquote { margin: 12px 0; padding: 4px 14px; border-left: 4px solid var(--border); color: var(--muted); }
+.readme blockquote > :first-child { margin-top: 0; }
+.readme blockquote > :last-child { margin-bottom: 0; }
+.md-table th, .md-table td { overflow-wrap: anywhere; }
+.md-table .center { text-align: center; }
+.md-table .right { text-align: right; }
+.readme .table-wrap { margin: 12px 0; }
+.versions tr.current td { font-weight: 650; }
+.versions .right { text-align: right; }

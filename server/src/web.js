@@ -7,7 +7,8 @@
 // registerWeb adds these routes to the router. The HTML itself comes from views.js.
 import crypto from 'node:crypto';
 import QRCode from 'qrcode';
-import { html, redirect, readForm, cookie } from './http.js';
+import { html, redirect, readForm, cookie, send } from './http.js';
+import { cleanPath, isText, disposition, FILE_HEADERS, SHOW_MAX } from './git/browse.js';
 import { HttpError } from './errors.js';
 import { safeEqual, deriveKey, hmac } from './crypto.js';
 import * as V from './views.js';
@@ -312,6 +313,75 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     const a = config.publicRead ? current(ctx) : requireWeb(ctx);
     if (!a && !config.publicRead) return;
     packageView(ctx, a, ctx.params.name);
+  });
+
+  // ---- one version of a package: its page, its files, one file, and its tarball ----------------------------
+  // The same reading rules as the package page. A version is "1.2.3" or "latest".
+  const packageReader = (ctx) => {
+    const a = config.publicRead ? current(ctx) : requireWeb(ctx);
+    return a || config.publicRead ? { a } : null;
+  };
+  // The README of a version, from its own tarball (the package record keeps only the newest one).
+  const readmeOf = (files) => files.find((f) => /^readme(\.md)?$/i.test(f.path))?.data.toString('utf8') ?? null;
+  router.get('/packages/:name/v/:version', (ctx) => {
+    const r = packageReader(ctx);
+    if (!r) return;
+    const { rec, files } = packages.files(ctx.params.name, ctx.params.version, r.a?.user);
+    const pkg = packages.info(ctx.params.name, r.a?.user);
+    page(ctx, `${pkg.name} ${rec.version}`, V.packagePage({ pkg, serverUrl: config.publicUrl, at: { version: rec.version, yanked: rec.yanked, readme: readmeOf(files) } }), { user: r.a?.user, wide: true });
+  });
+  router.get('/packages/:name/v/:version/files', (ctx) => {
+    const r = packageReader(ctx);
+    if (!r) return;
+    const { rec, files } = packages.files(ctx.params.name, ctx.params.version, r.a?.user);
+    const pkg = packages.info(ctx.params.name, r.a?.user);
+    const path = cleanPath(ctx.url.searchParams.get('path'));
+    const view = { pkg, version: rec.version, latest: pkg.latest, path };
+    const one = files.find((f) => f.path === path);
+    if (one) {
+      const text = one.data.length <= SHOW_MAX && isText(one.data);
+      view.file = { size: one.data.length, big: one.data.length > SHOW_MAX, text: text ? one.data.toString('utf8') : null, markdown: text && /\.(md|markdown)$/i.test(path) };
+    } else {
+      // A folder: what is directly inside it, folders first. Folders exist only as the paths of their files.
+      const prefix = path ? `${path}/` : '';
+      const inside = files.filter((f) => f.path.startsWith(prefix));
+      if (path && !inside.length) throw new HttpError(404, 'not_found', `There is no "${path}" in ${pkg.name} ${rec.version}.`);
+      const seen = new Map();
+      for (const f of inside) {
+        const rest = f.path.slice(prefix.length);
+        const [first, ...more] = rest.split('/');
+        if (!seen.has(first)) seen.set(first, more.length ? { name: first, path: prefix + first, dir: true } : { name: first, path: f.path, size: f.data.length });
+      }
+      view.entries = [...seen.values()].sort((x, y) => (y.dir ? 1 : 0) - (x.dir ? 1 : 0) || x.name.localeCompare(y.name));
+      const rd = inside.find((f) => f.path.slice(prefix.length).match(/^readme(\.md|\.markdown|\.txt)?$/i) && f.data.length <= SHOW_MAX && isText(f.data));
+      // "README" with no ending is Markdown too, as on the package page; README.txt is shown as it is.
+      if (rd) view.readme = { name: rd.path.slice(prefix.length), md: !/\.txt$/i.test(rd.path), text: rd.data.toString('utf8') };
+    }
+    page(ctx, `${pkg.name} ${rec.version}: ${path || 'files'}`, V.packageFilesPage(view), { user: r.a?.user, wide: true });
+  });
+  // One file: shown as plain text when it is text, otherwise (or with ?download=1) saved. Never served as a web page.
+  router.get('/packages/:name/v/:version/raw', (ctx) => {
+    const r = packageReader(ctx);
+    if (!r) return;
+    const { files } = packages.files(ctx.params.name, ctx.params.version, r.a?.user);
+    const path = cleanPath(ctx.url.searchParams.get('path'));
+    const f = files.find((x) => x.path === path);
+    if (!f) throw new HttpError(404, 'not_found', `There is no file "${path}" in this version.`);
+    const text = f.data.length <= SHOW_MAX && isText(f.data);
+    send(ctx.res, 200, f.data, {
+      ...FILE_HEADERS, 'Content-Type': text ? 'text/plain; charset=utf-8' : 'application/octet-stream',
+      'Content-Disposition': disposition(text && ctx.url.searchParams.get('download') !== '1' ? 'inline' : 'attachment', path.split('/').pop()),
+    });
+  });
+  // The version's tarball, exactly as published (it counts as an install, as gitcha install does).
+  router.get('/packages/:name/v/:version/download', (ctx) => {
+    const r = packageReader(ctx);
+    if (!r) return;
+    const { rec, data } = packages.download(ctx.params.name, ctx.params.version, r.a?.user, ctx.ip);
+    send(ctx.res, 200, data, {
+      ...FILE_HEADERS, 'Content-Type': 'application/gzip', 'Content-Disposition': disposition('attachment', `${ctx.params.name}-${rec.version}.tgz`),
+      'X-Gitcha-Integrity': rec.integrity, 'X-Gitcha-Version': rec.version,
+    });
   });
 
   /** The shared shape for team and package POST forms that need a fresh code: check the form, sign-in and code, then run fn. */

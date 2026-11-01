@@ -55,7 +55,7 @@ never sees your password**. When Gitcha asks for a 2FA check, Claude has to
 ask *you* for the code.
 
 > **Status, honestly.** Everything below is built and covered by the test
-> suite (457 tests), and the screenshots come from a real running server. Some
+> suite (461 tests), and the screenshots come from a real running server. Some
 > parts have only been tested against stand-ins, not the real thing:
 > git over a real `sshd`, a job inside a real bContain VM, the Stripe and
 > PayPal sandboxes, a live NextTime instance, and C4OK's door inside a full
@@ -517,7 +517,17 @@ packages (set `GITCHA_PUBLIC_READ=true` to change that).
 </tr></table>
 
 Each package page shows its README, install command, license, versions and
-integrity hashes.
+integrity hashes. **Every version has its own page** (click it in the Versions list, or open
+`/packages/NAME/v/VERSION`), with that version's README and install command, a **Browse files**
+view of exactly what was published, and a **.tgz** download.
+
+READMEs may use headings, lists, `>` quotes, tables, code blocks, **bold**, *italics* and links.
+**Relative links** (`[guide](docs/guide.md)`, `[everything](pkg-1.0.zip)`) open that file of the
+same version in the file view, where text is shown and anything else is downloaded, so one README
+works in the registry and after unpacking. `#heading` links jump within the page. Other addresses
+(`javascript:`, `data:`, `//host`) are shown as plain words. An HTML file is shown as text, never
+run: to publish a page people can open, use [site hosting](#hosting-sites), which serves it from
+its own domain.
 
 <table><tr>
 <td width="70%"><img src="docs/screenshots/08-package.png" alt="Package detail page"><br><sub>On a computer</sub></td>
@@ -1567,7 +1577,7 @@ against Cassandra 5.0), point them at a node:
 GITCHA_TEST_STORE=cassandra GITCHA_TEST_CASSANDRA=127.0.0.1:9042 npm --workspace server test
 ```
 
-The tests (457 of them: 303 for the server, 89 for the extension and CLI,
+The tests (461 of them: 307 for the server, 89 for the extension and CLI,
 17 for the runner, 36 for the medic and 12 for Omni) cover RFC 4226/6238 TOTP vectors, encryption at rest,
 replay protection, enrollment and the follow-up checks, CSRF and sign-in
 hardening, proxy addresses, the store's locking and crash safety, teams,

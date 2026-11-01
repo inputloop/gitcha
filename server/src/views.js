@@ -185,11 +185,41 @@ ${results.map((p) => h`<a class="pkg card" href="/packages/${encodeURIComponent(
 </div>`;
 
 /**
- * A tiny, safe part of Markdown (a simple text format) for READMEs: headings, lists, code blocks,
- * `code`, **bold** and [links](https://...). It escapes the text first and then adds the few tags,
- * so README text can never add its own HTML. Links must start with http:// or https://.
+ * A path a README links to, relative to the folder `dir` the README is in ("" for the top), as a clean
+ * path inside the package or repository: "./docs/a.md" from "" is "docs/a.md", "../x" from "docs" is "x".
+ * Returns null for anything that is not a plain relative path: a scheme (https:, javascript:, data:...),
+ * "//host", an absolute "/path", or a path that climbs above the top.
  */
-export function markdown(src) {
+export function relativeTarget(dir, target) {
+  let t = String(target ?? '').split('#')[0].split('?')[0];
+  if (/^[a-z][a-z0-9+.-]*:/i.test(t) || t.startsWith('/') || t.startsWith('\\')) return null;
+  try { t = decodeURIComponent(t); } catch { return null; }
+  const parts = dir ? String(dir).split('/') : [];
+  for (const seg of t.split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') { if (!parts.length) return null; parts.pop(); continue; }
+    if (seg.includes('\0')) return null;
+    parts.push(seg);
+  }
+  return parts.join('/');
+}
+
+// A heading's id, as GitHub makes them: lower case, punctuation dropped, spaces to "-". Ours start with
+// "md-", so a README's headings can never take the id of something on Gitcha's own page.
+const slug = (s) => `md-${String(s).toLowerCase().replace(/<[^>]*>/g, '').replace(/[^\p{L}\p{N}\s_-]/gu, '').trim().replace(/\s/g, '-')}`;
+
+/**
+ * A safe part of Markdown (a simple text format) for READMEs: headings, lists (- and 1.), quotes (>),
+ * tables (| a | b | with a |---| line), code blocks, `code`, **bold**, *italics* and [links](...).
+ * It escapes the text first and then adds the few tags, so README text can never add its own HTML.
+ *
+ * Links: http:// and https:// go where they say; "#heading" goes to that heading on the page; and a
+ * relative link (docs/guide.md, ./data.zip) goes wherever `opts.link(path)` says, for the file of that
+ * name next to the README: a package's or a project's file view. Without `opts.link`, or for any other
+ * kind of address (javascript:, data:, //host, /path), the words are shown without a link.
+ * `opts.dir` is the README's own folder, for relative links ("" for the top).
+ */
+export function markdown(src, opts = {}) {
   // HTML comments (such as a README's licence header) are notes for the file's readers, not for the page:
   // they are left out, except inside a ``` code block, where they are part of the example and stay as text.
   let code = false;
@@ -197,21 +227,86 @@ export function markdown(src) {
     .map((part, i) => { if (i % 2) { code = !code; return part; } return code ? part : part.replace(/<!--[\s\S]*?-->\n?/g, ''); })
     .join('');
   const lines = cleaned.split('\n');
-  let html = '', inCode = false, inList = false, para = [];
-  const inline = (s) => esc(s)
+  const ids = opts.ids ?? new Map(); // heading ids used so far: a second "Usage" becomes md-usage-1
+  const fmt = (s) => esc(s)
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s"]+)\)/g, '<a href="$2" rel="nofollow noopener">$1</a>');
+    .replace(/(^|[\s(])\*([^*\s][^*]*?)\*(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
+  const anchor = (text, target) => {
+    const words = fmt(text);
+    if (/^https?:\/\/[^\s"]+$/i.test(target)) return `<a href="${esc(target)}" rel="nofollow noopener">${words}</a>`;
+    if (target.startsWith('#')) return `<a href="#${esc(slug(target.slice(1)).replace(/^md-md-/, 'md-'))}">${words}</a>`;
+    const rel = opts.link ? relativeTarget(opts.dir ?? '', target) : null;
+    const url = rel !== null && rel !== undefined ? opts.link(rel) : null;
+    return url ? `<a href="${esc(url)}">${words}</a>` : words;
+  };
+  // [words](target) and ![alt](target): an image is shown as a link to the file, never fetched.
+  const LINK = /!?\[([^\]]+)\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g;
+  const inline = (s) => {
+    let html = '', last = 0;
+    for (const m of s.matchAll(LINK)) { html += fmt(s.slice(last, m.index)) + anchor(m[1], m[2]); last = m.index + m[0].length; }
+    return html + fmt(s.slice(last));
+  };
+  // A table row's cells: the outer pipes dropped, split on the others (a "\|" is a pipe inside a cell).
+  const cells = (line) => line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'));
+  const isRule = (line) => /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/.test(line ?? '');
+
+  let html = '', inCode = false, list = null, para = [];
   const flush = () => { if (para.length) { html += `<p>${para.map(inline).join(' ')}</p>`; para = []; } };
-  const endList = () => { if (inList) { html += '</ul>'; inList = false; } };
-  for (const line of lines) {
+  const endList = () => { if (list) { html += `</${list}>`; list = null; } };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     if (line.startsWith('```')) { flush(); endList(); html += inCode ? '</code></pre>' : '<pre><code>'; inCode = !inCode; continue; }
     if (inCode) { html += esc(line) + '\n'; continue; }
-    const hm = /^(#{1,4})\s+(.*)/.exec(line);
-    if (hm) { flush(); endList(); const n = Math.min(hm[1].length + 1, 5); html += `<h${n}>${inline(hm[2])}</h${n}>`; continue; }
-    const li = /^\s*[-*]\s+(.*)/.exec(line);
-    if (li) { flush(); if (!inList) { html += '<ul>'; inList = true; } html += `<li>${inline(li[1])}</li>`; continue; }
+    const hm = /^(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line);
+    if (hm) {
+      flush(); endList();
+      const n = Math.min(hm[1].length + 1, 6);
+      let id = slug(hm[2]);
+      const seen = ids.get(id) ?? 0;
+      ids.set(id, seen + 1);
+      if (seen) id = `${id}-${seen}`;
+      html += `<h${n} id="${esc(id)}">${inline(hm[2])}</h${n}>`;
+      continue;
+    }
+    // A table: a row of cells, then a |---|---| line, then rows until a line without a pipe.
+    if (line.includes('|') && isRule(lines[i + 1])) {
+      flush(); endList();
+      const head = cells(line);
+      const align = cells(lines[i + 1]).map((c) => (c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : ''));
+      const td = (tag, c, k) => `<${tag}${align[k] ? ` class="${align[k]}"` : ''}>${inline(c)}</${tag}>`;
+      html += `<div class="table-wrap"><table class="table compact md-table"><thead><tr>${head.map((c, k) => td('th', c, k)).join('')}</tr></thead><tbody>`;
+      i += 2;
+      for (; i < lines.length && lines[i].includes('|') && lines[i].trim(); i++) {
+        const row = cells(lines[i]);
+        html += `<tr>${head.map((_, k) => td('td', row[k] ?? '', k)).join('')}</tr>`;
+      }
+      i--;
+      html += '</tbody></table></div>';
+      continue;
+    }
+    // A quote: every following line that starts with ">", shown as Markdown of its own.
+    if (/^\s*>/.test(line)) {
+      flush(); endList();
+      const inner = [];
+      for (; i < lines.length && /^\s*>/.test(lines[i]); i++) inner.push(lines[i].replace(/^\s*>\s?/, ''));
+      i--;
+      html += `<blockquote>${markdown(inner.join('\n'), { ...opts, ids }).__html}</blockquote>`;
+      continue;
+    }
+    const li = /^\s*[-*+]\s+(.*)/.exec(line);
+    const ol = li ? null : /^\s*\d{1,9}[.)]\s+(.*)/.exec(line);
+    if (li || ol) {
+      flush();
+      const kind = li ? 'ul' : 'ol';
+      if (list !== kind) { endList(); html += `<${kind}>`; list = kind; }
+      html += `<li>${inline((li ?? ol)[1])}</li>`;
+      continue;
+    }
     if (!line.trim()) { flush(); endList(); continue; }
+    // A line that continues a list item (indented) joins it rather than ending the list.
+    if (list && /^\s{2,}\S/.test(line)) { html = html.replace(/<\/li>$/, ` ${inline(line.trim())}</li>`); continue; }
+    endList();
     para.push(line);
   }
   flush(); endList();
@@ -222,18 +317,31 @@ export function markdown(src) {
 // One package: README, install command, owner, versions and their hashes, and the share card.
 // The homepage is a link only when it is a plain http or https address (isWebLink). New packages cannot
 // publish any other kind, and one stored before that rule shows as plain text.
-export const packagePage = ({ pkg, serverUrl, share }) => h`
+// `at` is set when an older (or a named) version is shown: { version, readme, yanked }. The README's
+// relative links open files of the version shown, in the package's file view.
+export const packagePage = ({ pkg, serverUrl, share, at = null }) => {
+  const shown = at?.version ?? pkg.latest;
+  const base = shown ? `/packages/${pkg.name}/v/${shown}` : null;
+  const readme = at ? at.readme : pkg.readme;
+  const link = base ? (p) => `${base}/files?path=${encodeURIComponent(p)}` : undefined;
+  return h`
 <div class="pkg-header">
-  <div><h1>${pkg.name} <span class="badge big">${pkg.latest ? `v${pkg.latest}` : 'no release'}</span>${pkg.visibility === 'team' ? h`<span class="badge big lock">🔒 team only</span>` : ''}</h1><p class="lead">${pkg.description}</p></div>
+  <div><h1>${pkg.name} <span class="badge big">${shown ? `v${shown}` : 'no release'}</span>${pkg.visibility === 'team' ? h`<span class="badge big lock">🔒 team only</span>` : ''}</h1><p class="lead">${pkg.description}</p></div>
 </div>
+${at && at.version !== pkg.latest ? alert(h`You are looking at version ${at.version}${at.yanked ? ' (yanked)' : ''}. The newest is <a href="/packages/${pkg.name}">${pkg.latest}</a>.`, 'info') : ''}
 <div class="pkg-grid">
-  <article class="card readme">${pkg.readme ? markdown(pkg.readme) : h`<p class="muted">This package has no README.</p>`}</article>
+  <article class="card readme">${readme ? markdown(readme, { link }) : h`<p class="muted">This package has no README.</p>`}</article>
   <aside>
     <div class="card">
       <h3>Install</h3>
-      <pre class="install"><code>gitcha install ${pkg.name}</code></pre>
+      <pre class="install"><code>gitcha install ${pkg.name}${at && at.version !== pkg.latest ? `@${at.version}` : ''}</code></pre>
       <p class="muted small">Or ask Claude: “install ${pkg.name} from Gitcha”.</p>
     </div>
+    ${base ? h`<div class="card">
+      <h3>Files</h3>
+      <div class="row gap files-downloads"><a class="btn small" href="${base}/files">Browse files</a><a class="btn ghost small" href="${base}/download" download>Download .tgz</a></div>
+      <p class="small muted">Version ${shown}, as it was published.</p>
+    </div>` : ''}
     <div class="card">
       <dl class="kv">
         <dt>Owner</dt><dd>${pkg.team ? h`👥 <a href="/teams/${pkg.team}">${pkg.team}</a> (team)` : pkg.owner}</dd>
@@ -246,13 +354,53 @@ export const packagePage = ({ pkg, serverUrl, share }) => h`
     <div class="card">
       <h3>Versions</h3>
       <table class="versions"><tbody>
-      ${pkg.versions.map((v) => h`<tr class="${v.yanked ? 'yanked' : ''}"><td><strong>${v.version}</strong>${v.yanked ? ' (yanked)' : ''}</td><td>${bytes(v.size)}</td><td>${ago(v.publishedAt)}</td></tr>
-      <tr class="sha ${v.yanked ? 'yanked' : ''}"><td colspan="3"><code title="${v.integrity}">${v.integrity.slice(0, 23)}…</code></td></tr>`)}
+      ${pkg.versions.map((v) => h`<tr class="${v.yanked ? 'yanked' : ''}${v.version === shown ? ' current' : ''}"><td><a href="${v.version === pkg.latest ? `/packages/${pkg.name}` : `/packages/${pkg.name}/v/${v.version}`}"><strong>${v.version}</strong></a>${v.yanked ? ' (yanked)' : ''}</td><td>${bytes(v.size)}</td><td>${ago(v.publishedAt)}</td>
+        <td class="right"><a class="small" href="/packages/${pkg.name}/v/${v.version}/download" download aria-label="Download ${pkg.name} ${v.version}">.tgz</a></td></tr>
+      <tr class="sha ${v.yanked ? 'yanked' : ''}"><td colspan="4"><code title="${v.integrity}">${v.integrity.slice(0, 23)}…</code></td></tr>`)}
       </tbody></table>
     </div>
     ${share ?? ''}
   </aside>
 </div>`;
+};
+
+/**
+ * A package version's files: a folder's list (with its README), or one file shown. `files` are the paths and
+ * sizes in the tarball; folders are made from the paths.
+ */
+export const packageFilesPage = ({ pkg, version, latest, path = '', entries, file, readme }) => {
+  const base = `/packages/${pkg.name}/v/${version}`;
+  const filesUrl = (p) => (p ? `${base}/files?path=${encodeURIComponent(p)}` : `${base}/files`);
+  const parts = path ? path.split('/') : [];
+  const crumbs = h`<div class="crumbs" role="navigation" aria-label="Path"><a href="${filesUrl('')}">${pkg.name}-${version}</a>${parts.map((x, i) => h` / ${i === parts.length - 1 ? h`<strong>${x}</strong>` : h`<a href="${filesUrl(parts.slice(0, i + 1).join('/'))}">${x}</a>`}`)}</div>`;
+  const head = h`<div class="page-head"><div><p class="muted"><a href="/packages/${pkg.name}${version === latest ? '' : `/v/${version}`}">${pkg.name}</a></p><h1>Files <span class="badge big">v${version}</span></h1>
+  ${version !== latest ? h`<p class="small muted">An older version. The newest is <a href="/packages/${pkg.name}/v/${latest}/files">${latest}</a>.</p>` : ''}</div>
+  <div class="row gap files-downloads"><a class="btn small" href="${base}/download" download>Download .tgz</a></div></div>
+<div class="card files-bar">${crumbs}</div>`;
+  if (entries) {
+    const dir = path;
+    return h`${head}
+<div class="table-wrap card"><table class="table compact files-list"><tbody>
+${path ? h`<tr><td class="files-kind"></td><td><a href="${filesUrl(parts.slice(0, -1).join('/'))}">..</a></td><td></td><td></td></tr>` : ''}
+${entries.map((e) => (e.dir
+    ? h`<tr><td class="files-kind" aria-label="folder">&#128193;</td><td><a href="${filesUrl(e.path)}">${e.name}/</a></td><td></td><td></td></tr>`
+    : h`<tr><td class="files-kind" aria-label="file">&#128196;</td><td><a href="${filesUrl(e.path)}">${e.name}</a></td><td class="muted small nowrap">${bytes(e.size)}</td>
+      <td class="right"><a class="small" href="${base}/raw?path=${encodeURIComponent(e.path)}&amp;download=1" download aria-label="Download ${e.name}">Download</a></td></tr>`))}
+</tbody></table></div>
+${readme ? h`<div class="card readme"><h3>${readme.name}</h3>${readme.md ? markdown(readme.text, { dir, link: (p) => filesUrl(p) }) : h`<pre>${readme.text}</pre>`}</div>` : ''}`;
+  }
+  const name = parts[parts.length - 1];
+  const rawUrl = `${base}/raw?path=${encodeURIComponent(path)}`;
+  const dir = parts.slice(0, -1).join('/');
+  return h`${head}
+<div class="card files-file">
+  <div class="row gap files-file-head"><strong>${name}</strong><span class="muted small">${bytes(file.size)}</span>
+    <span class="grow"></span>${file.text !== null ? h`<a class="btn ghost small" href="${rawUrl}">Raw</a>` : ''}<a class="btn small" href="${rawUrl}&amp;download=1" download>Download</a></div>
+  ${file.markdown ? h`<div class="readme">${markdown(file.text, { dir, link: (p) => filesUrl(p) })}</div>`
+    : file.text !== null ? h`<pre class="files-code"><code>${file.text}</code></pre>`
+      : alert(file.big ? `This file is ${bytes(file.size)}, too big to show here. Download it instead.` : 'This file is not text, so it is not shown here. Download it instead.', 'info')}
+</div>`;
+};
 
 // Labels and help text for the three follow-up 2FA checks on the Account page.
 const CHECK_LABELS = {

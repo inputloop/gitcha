@@ -187,6 +187,22 @@ export class PackageService {
     return { pkg, rec };
   }
 
+  /**
+   * The files of one version, read from its tarball: [{ path, data }] with "package/" taken off the front.
+   * The last few versions read are kept in memory, so browsing a version does not unpack it on every click.
+   */
+  files(name, version, user = null) {
+    const { pkg, rec } = this.resolve(name, version, user);
+    this.unpacked ??= new Map();
+    let files = this.unpacked.get(rec.integrity);
+    if (!files) {
+      files = unpackFiles(this.store.readBlob(rec.integrity.slice('sha256-'.length)), { maxBytes: this.config.maxPackageBytes * 4 });
+      this.unpacked.set(rec.integrity, files);
+      while (this.unpacked.size > 4) this.unpacked.delete(this.unpacked.keys().next().value);
+    }
+    return { pkg, rec, files };
+  }
+
   /** Get a version's tarball bytes and count the download (with an audit row for a logged-in user). */
   download(name, version, user, ip) {
     const { rec } = this.resolve(name, version, user);
