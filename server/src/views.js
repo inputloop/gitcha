@@ -228,36 +228,129 @@ export function markdown(src, opts = {}) {
     .join('');
   const lines = cleaned.split('\n');
   const ids = opts.ids ?? new Map(); // heading ids used so far: a second "Usage" becomes md-usage-1
-  const fmt = (s) => esc(s)
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
+  // Bold and italics, on text already escaped.
+  const emph = (t) => t
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/(^|[\s(])\*([^*\s][^*]*?)\*(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
-  const anchor = (text, target) => {
-    const words = fmt(text);
-    if (/^https?:\/\/[^\s"]+$/i.test(target)) return `<a href="${esc(target)}" rel="nofollow noopener">${words}</a>`;
-    if (target.startsWith('#')) return `<a href="#${esc(slug(target.slice(1)).replace(/^md-md-/, 'md-'))}">${words}</a>`;
-    const rel = opts.link ? relativeTarget(opts.dir ?? '', target) : null;
-    const url = rel !== null && rel !== undefined ? opts.link(rel) : null;
-    return url ? `<a href="${esc(url)}">${words}</a>` : words;
+    .replace(/(^|[\s(>])\*([^*\s][^*]*?)\*(?=[\s).,;:!?<]|$)/g, '$1<em>$2</em>');
+  // Where a relative address in the README points: a link maker's URL, or null (then no link is made).
+  const relUrl = (target, make) => {
+    if (!make) return null;
+    const rel = relativeTarget(opts.dir ?? '', target);
+    return rel === null || rel === undefined ? null : make(rel);
   };
-  // [words](target) and ![alt](target): an image is shown as a link to the file, never fetched.
-  const LINK = /!?\[([^\]]+)\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g;
-  const inline = (s) => {
-    let html = '', last = 0;
-    for (const m of s.matchAll(LINK)) { html += fmt(s.slice(last, m.index)) + anchor(m[1], m[2]); last = m.index + m[0].length; }
-    return html + fmt(s.slice(last));
+  const href = (target) => {
+    if (/^https?:\/\/[^\s"<>]+$/i.test(target)) return { url: target, external: true };
+    if (target.startsWith('#')) return { url: `#${slug(target.slice(1)).replace(/^md-md-/, 'md-')}` };
+    const url = relUrl(target, opts.link);
+    return url ? { url } : null;
+  };
+  // An image: a file of this package or project is shown (opts.image says where it is served); an image
+  // on another site is not fetched (no outside requests from Gitcha's pages, so no one learns who reads
+  // the README): its alt text stands in for it.
+  const image = (alt, src, size = '') => {
+    const url = relUrl(src, opts.image);
+    if (url) return `<img src="${esc(url)}" alt="${esc(alt)}"${size} loading="lazy">`;
+    return alt ? `<span class="md-img-alt" title="An image from another site, not loaded here">${esc(alt)}</span>` : '';
+  };
+
+  // ---- the small set of HTML a README may use ------------------------------------------------------------
+  // READMEs written for GitHub center a logo with <p align="center">, put images side by side in <table>,
+  // fold sections with <details>. Those tags are kept, with only the attributes listed here and checked
+  // addresses; every other tag is dropped (its text stays, escaped). Tags are kept balanced, so a README
+  // cannot close a part of the page around it.
+  const ALIGN = /^(left|center|right)$/i;
+  const SIZE = /^\d{1,4}%?$/;
+  const BLOCK_ATTRS = { align: ALIGN };
+  const CELL_ATTRS = { align: ALIGN, width: SIZE, colspan: /^\d{1,2}$/, rowspan: /^\d{1,2}$/, valign: /^(top|middle|bottom)$/i };
+  const TAGS = {
+    p: BLOCK_ATTRS, div: BLOCK_ATTRS, h1: BLOCK_ATTRS, h2: BLOCK_ATTRS, h3: BLOCK_ATTRS, h4: BLOCK_ATTRS, h5: BLOCK_ATTRS, h6: BLOCK_ATTRS,
+    span: {}, strong: {}, b: {}, em: {}, i: {}, code: {}, kbd: {}, sub: {}, sup: {}, small: {}, s: {}, del: {}, ins: {}, mark: {},
+    br: {}, hr: {}, blockquote: {}, pre: {}, ul: {}, ol: {}, li: {}, details: { open: /^$|^open$/i }, summary: {},
+    table: { align: ALIGN }, thead: {}, tbody: {}, tr: { align: ALIGN }, th: CELL_ATTRS, td: CELL_ATTRS,
+    a: {}, img: {},
+  };
+  const VOID = new Set(['br', 'hr', 'img']);
+  const TAG = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:\s+[^\s"'<>/=]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))?)*)\s*\/?>/g;
+  const ATTR = /([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+  const unent = (v) => v.replace(/&(amp|quot|lt|gt|#39|apos);/g, (m, e) => ({ amp: '&', quot: '"', lt: '<', gt: '>', '#39': "'", apos: "'" }[e]));
+  const tag = (m, st) => {
+    const [, close, rawName, rawAttrs] = m;
+    const name = rawName.toLowerCase();
+    if (!Object.hasOwn(TAGS, name)) return '';
+    if (close) {
+      const at = st.lastIndexOf(name);
+      return at < 0 || VOID.has(name) ? '' : st.splice(at).reverse().map((n) => `</${n}>`).join('');
+    }
+    const attrs = {};
+    for (const a of (rawAttrs ?? '').matchAll(ATTR)) attrs[a[1].toLowerCase()] = unent(a[2] ?? a[3] ?? a[4] ?? '');
+    if (name === 'img') {
+      const size = ['width', 'height'].filter((k) => SIZE.test(attrs[k] ?? '')).map((k) => ` ${k}="${attrs[k]}"`).join('');
+      return image(attrs.alt ?? '', attrs.src ?? '', size);
+    }
+    let out = '';
+    if (name === 'a') {
+      const to = attrs.href ? href(attrs.href) : null;
+      out = to ? ` href="${esc(to.url)}"${to.external ? ' rel="nofollow noopener"' : ''}` : '';
+    } else {
+      for (const [k, re] of Object.entries(TAGS[name])) if (Object.hasOwn(attrs, k) && re.test(attrs[k])) out += attrs[k] === '' ? ` ${k}` : ` ${k}="${esc(attrs[k].toLowerCase())}"`;
+    }
+    if (!VOID.has(name)) st.push(name);
+    return `<${name}${out}>`;
+  };
+  // Text that may hold allowed tags: the tags rebuilt, the text between them escaped.
+  const html = (s, st) => {
+    if (!opts.html) return emph(esc(s)); // posts and comments: no HTML at all
+    let out = '', last = 0;
+    for (const m of s.matchAll(TAG)) { out += emph(esc(s.slice(last, m.index))) + tag(m, st); last = m.index + m[0].length; }
+    return out + emph(esc(s.slice(last)));
+  };
+
+  // [![alt](image)](target), ![alt](image) and [words](target).
+  const LINKISH = /\[!\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)|(!?)\[([^\]]+)\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/g;
+  const rich = (s, st) => {
+    let out = '', last = 0;
+    for (const m of s.matchAll(LINKISH)) {
+      out += html(s.slice(last, m.index), st);
+      last = m.index + m[0].length;
+      const [, imgAlt, imgSrc, imgTo, bang, words, target] = m;
+      if (imgSrc) { const to = href(imgTo); const pic = image(imgAlt, imgSrc); out += to ? `<a href="${esc(to.url)}"${to.external ? ' rel="nofollow noopener"' : ''}>${pic}</a>` : pic; continue; }
+      if (bang) { out += image(words, target); continue; }
+      const to = href(target);
+      const inner = [];
+      const text = html(words, inner) + inner.reverse().map((n) => `</${n}>`).join('');
+      out += to ? `<a href="${esc(to.url)}"${to.external ? ' rel="nofollow noopener"' : ''}>${text}</a>` : text;
+    }
+    return out + html(s.slice(last), st);
+  };
+  // One piece of text (a paragraph, heading, list item or cell): `code` first (never touched), then
+  // links and images, then tags. Whatever the text left open is closed at its end.
+  // An HTML block may leave <details>, <div> or <blockquote> open for the paragraphs that follow (a
+  // <details> with blank lines inside it); `doc` holds those until their closing tag or the README's end.
+  const CARRY = new Set(['details', 'div', 'blockquote']);
+  const doc = [];
+  const inline = (s, st = [], carry = false) => {
+    const out = String(s).split(/(`[^`\n]+`)/).map((part) => (/^`[^`\n]+`$/.test(part) ? `<code>${esc(part.slice(1, -1))}</code>` : rich(part, st))).join('');
+    let close = '';
+    while (st.length && !(carry && CARRY.has(st[st.length - 1]))) close += `</${st.pop()}>`;
+    return out + close;
   };
   // A table row's cells: the outer pipes dropped, split on the others (a "\|" is a pipe inside a cell).
   const cells = (line) => line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '').split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'));
   const isRule = (line) => /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/.test(line ?? '');
 
-  let html = '', inCode = false, list = null, para = [];
-  const flush = () => { if (para.length) { html += `<p>${para.map(inline).join(' ')}</p>`; para = []; } };
-  const endList = () => { if (list) { html += `</${list}>`; list = null; } };
+  let out = '', inCode = false, list = null, para = [];
+  // A paragraph that starts with a block tag (<p align="center">, <table>, <details>...) is HTML already.
+  const flush = () => {
+    if (!para.length) return;
+    const text = para.join('\n');
+    out += /^\s*<\/?(p|div|h[1-6]|table|details|summary|blockquote|ul|ol|pre|hr)\b/i.test(text) ? inline(text, doc, true) : `<p>${inline(text)}</p>`;
+    para = [];
+  };
+  const endList = () => { if (list) { out += `</${list}>`; list = null; } };
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (line.startsWith('```')) { flush(); endList(); html += inCode ? '</code></pre>' : '<pre><code>'; inCode = !inCode; continue; }
-    if (inCode) { html += esc(line) + '\n'; continue; }
+    if (line.startsWith('```')) { flush(); endList(); out += inCode ? '</code></pre>' : '<pre><code>'; inCode = !inCode; continue; }
+    if (inCode) { out += esc(line) + '\n'; continue; }
     const hm = /^(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line);
     if (hm) {
       flush(); endList();
@@ -266,7 +359,7 @@ export function markdown(src, opts = {}) {
       const seen = ids.get(id) ?? 0;
       ids.set(id, seen + 1);
       if (seen) id = `${id}-${seen}`;
-      html += `<h${n} id="${esc(id)}">${inline(hm[2])}</h${n}>`;
+      out += `<h${n} id="${esc(id)}">${inline(hm[2])}</h${n}>`;
       continue;
     }
     // A table: a row of cells, then a |---|---| line, then rows until a line without a pipe.
@@ -275,14 +368,14 @@ export function markdown(src, opts = {}) {
       const head = cells(line);
       const align = cells(lines[i + 1]).map((c) => (c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : ''));
       const td = (tag, c, k) => `<${tag}${align[k] ? ` class="${align[k]}"` : ''}>${inline(c)}</${tag}>`;
-      html += `<div class="table-wrap"><table class="table compact md-table"><thead><tr>${head.map((c, k) => td('th', c, k)).join('')}</tr></thead><tbody>`;
+      out += `<div class="table-wrap"><table class="table compact md-table"><thead><tr>${head.map((c, k) => td('th', c, k)).join('')}</tr></thead><tbody>`;
       i += 2;
       for (; i < lines.length && lines[i].includes('|') && lines[i].trim(); i++) {
         const row = cells(lines[i]);
-        html += `<tr>${head.map((_, k) => td('td', row[k] ?? '', k)).join('')}</tr>`;
+        out += `<tr>${head.map((_, k) => td('td', row[k] ?? '', k)).join('')}</tr>`;
       }
       i--;
-      html += '</tbody></table></div>';
+      out += '</tbody></table></div>';
       continue;
     }
     // A quote: every following line that starts with ">", shown as Markdown of its own.
@@ -291,7 +384,7 @@ export function markdown(src, opts = {}) {
       const inner = [];
       for (; i < lines.length && /^\s*>/.test(lines[i]); i++) inner.push(lines[i].replace(/^\s*>\s?/, ''));
       i--;
-      html += `<blockquote>${markdown(inner.join('\n'), { ...opts, ids }).__html}</blockquote>`;
+      out += `<blockquote>${markdown(inner.join('\n'), { ...opts, ids }).__html}</blockquote>`;
       continue;
     }
     const li = /^\s*[-*+]\s+(.*)/.exec(line);
@@ -299,19 +392,20 @@ export function markdown(src, opts = {}) {
     if (li || ol) {
       flush();
       const kind = li ? 'ul' : 'ol';
-      if (list !== kind) { endList(); html += `<${kind}>`; list = kind; }
-      html += `<li>${inline((li ?? ol)[1])}</li>`;
+      if (list !== kind) { endList(); out += `<${kind}>`; list = kind; }
+      out += `<li>${inline((li ?? ol)[1])}</li>`;
       continue;
     }
     if (!line.trim()) { flush(); endList(); continue; }
     // A line that continues a list item (indented) joins it rather than ending the list.
-    if (list && /^\s{2,}\S/.test(line)) { html = html.replace(/<\/li>$/, ` ${inline(line.trim())}</li>`); continue; }
+    if (list && /^\s{2,}\S/.test(line)) { out = out.replace(/<\/li>$/, ` ${inline(line.trim())}</li>`); continue; }
     endList();
     para.push(line);
   }
   flush(); endList();
-  if (inCode) html += '</code></pre>';
-  return raw(html);
+  if (inCode) out += '</code></pre>';
+  out += doc.reverse().map((n) => `</${n}>`).join('');
+  return raw(out);
 }
 
 // One package: README, install command, owner, versions and their hashes, and the share card.
@@ -324,13 +418,14 @@ export const packagePage = ({ pkg, serverUrl, share, at = null }) => {
   const base = shown ? `/packages/${pkg.name}/v/${shown}` : null;
   const readme = at ? at.readme : pkg.readme;
   const link = base ? (p) => `${base}/files?path=${encodeURIComponent(p)}` : undefined;
+  const image = base ? (p) => `${base}/raw?path=${encodeURIComponent(p)}` : undefined;
   return h`
 <div class="pkg-header">
   <div><h1>${pkg.name} <span class="badge big">${shown ? `v${shown}` : 'no release'}</span>${pkg.visibility === 'team' ? h`<span class="badge big lock">🔒 team only</span>` : ''}</h1><p class="lead">${pkg.description}</p></div>
 </div>
 ${at && at.version !== pkg.latest ? alert(h`You are looking at version ${at.version}${at.yanked ? ' (yanked)' : ''}. The newest is <a href="/packages/${pkg.name}">${pkg.latest}</a>.`, 'info') : ''}
 <div class="pkg-grid">
-  <article class="card readme">${readme ? markdown(readme, { link }) : h`<p class="muted">This package has no README.</p>`}</article>
+  <article class="card readme">${readme ? markdown(readme, { link, image, html: true }) : h`<p class="muted">This package has no README.</p>`}</article>
   <aside>
     <div class="card">
       <h3>Install</h3>
@@ -371,6 +466,7 @@ ${at && at.version !== pkg.latest ? alert(h`You are looking at version ${at.vers
 export const packageFilesPage = ({ pkg, version, latest, path = '', entries, file, readme }) => {
   const base = `/packages/${pkg.name}/v/${version}`;
   const filesUrl = (p) => (p ? `${base}/files?path=${encodeURIComponent(p)}` : `${base}/files`);
+  const rawOf = (p) => `${base}/raw?path=${encodeURIComponent(p)}`;
   const parts = path ? path.split('/') : [];
   const crumbs = h`<div class="crumbs" role="navigation" aria-label="Path"><a href="${filesUrl('')}">${pkg.name}-${version}</a>${parts.map((x, i) => h` / ${i === parts.length - 1 ? h`<strong>${x}</strong>` : h`<a href="${filesUrl(parts.slice(0, i + 1).join('/'))}">${x}</a>`}`)}</div>`;
   const head = h`<div class="page-head"><div><p class="muted"><a href="/packages/${pkg.name}${version === latest ? '' : `/v/${version}`}">${pkg.name}</a></p><h1>Files <span class="badge big">v${version}</span></h1>
@@ -387,7 +483,7 @@ ${entries.map((e) => (e.dir
     : h`<tr><td class="files-kind" aria-label="file">&#128196;</td><td><a href="${filesUrl(e.path)}">${e.name}</a></td><td class="muted small nowrap">${bytes(e.size)}</td>
       <td class="right"><a class="small" href="${base}/raw?path=${encodeURIComponent(e.path)}&amp;download=1" download aria-label="Download ${e.name}">Download</a></td></tr>`))}
 </tbody></table></div>
-${readme ? h`<div class="card readme"><h3>${readme.name}</h3>${readme.md ? markdown(readme.text, { dir, link: (p) => filesUrl(p) }) : h`<pre>${readme.text}</pre>`}</div>` : ''}`;
+${readme ? h`<div class="card readme"><h3>${readme.name}</h3>${readme.md ? markdown(readme.text, { dir, link: (p) => filesUrl(p), image: rawOf, html: true }) : h`<pre>${readme.text}</pre>`}</div>` : ''}`;
   }
   const name = parts[parts.length - 1];
   const rawUrl = `${base}/raw?path=${encodeURIComponent(path)}`;
@@ -396,7 +492,7 @@ ${readme ? h`<div class="card readme"><h3>${readme.name}</h3>${readme.md ? markd
 <div class="card files-file">
   <div class="row gap files-file-head"><strong>${name}</strong><span class="muted small">${bytes(file.size)}</span>
     <span class="grow"></span>${file.text !== null ? h`<a class="btn ghost small" href="${rawUrl}">Raw</a>` : ''}<a class="btn small" href="${rawUrl}&amp;download=1" download>Download</a></div>
-  ${file.markdown ? h`<div class="readme">${markdown(file.text, { dir, link: (p) => filesUrl(p) })}</div>`
+  ${file.markdown ? h`<div class="readme">${markdown(file.text, { dir, link: (p) => filesUrl(p), image: rawOf, html: true })}</div>`
     : file.text !== null ? h`<pre class="files-code"><code>${file.text}</code></pre>`
       : alert(file.big ? `This file is ${bytes(file.size)}, too big to show here. Download it instead.` : 'This file is not text, so it is not shown here. Download it instead.', 'info')}
 </div>`;

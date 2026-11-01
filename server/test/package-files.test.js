@@ -52,7 +52,7 @@ after(() => srv.close());
 
 test('PKG-FILES-1: Markdown tables, quotes and relative links; unsafe links are only words', () => {
   const html = markdown(README('1.0.1'), { link: (p) => `/f?path=${encodeURIComponent(p)}` }).__html;
-  assert.match(html, /<blockquote><p>Matter is discrete\. Correlation carries no signal between parts\.<\/p><\/blockquote>/);
+  assert.match(html, /<blockquote><p>Matter is discrete\. Correlation carries no signal\sbetween parts\.<\/p><\/blockquote>/);
   assert.match(html, /<table class="table compact md-table"><thead><tr><th>File<\/th><th>What it is<\/th><\/tr><\/thead>/);
   assert.match(html, /<td><a href="\/f\?path=disconnect-1\.0\.1\.zip">disconnect-1\.0\.1\.zip<\/a><\/td>/);
   assert.match(html, /<a href="\/f\?path=eclipse%2Fpass\.md">/);
@@ -117,4 +117,38 @@ test('PKG-FILES-4: without public reads, the version pages need a sign-in, like 
   assert.equal(r.status, 303);
   assert.match(r.headers.get('location'), /^\/login/);
   assert.equal((await fetch(`${srv.url}/packages/disconnect/v/1.0.0/download`, { redirect: 'manual' })).status, 303);
+});
+
+test('PKG-FILES-5: README HTML: the allowed tags render, everything else is dropped, and tags stay balanced', () => {
+  const o = { link: (p) => `/L?p=${encodeURIComponent(p)}`, image: (p) => `/I?p=${encodeURIComponent(p)}`, html: true };
+  const md = (t) => markdown(t, o).__html;
+  assert.equal(md('<p align="center">\n  <img src="server/public/logo.svg" width="88" alt="Gitcha logo">\n</p>'),
+    '<p align="center">\n  <img src="/I?p=server%2Fpublic%2Flogo.svg" alt="Gitcha logo" width="88" loading="lazy">\n</p>');
+  assert.match(md('<table><tr>\n<td width="70%"><img src="docs/a.png" alt="A"><br><sub>On a computer</sub></td>\n</tr></table>'),
+    /^<table><tr>\n<td width="70%"><img src="\/I\?p=docs%2Fa\.png" alt="A" loading="lazy"><br><sub>On a computer<\/sub><\/td>\n<\/tr><\/table>$/);
+  // Images on other sites are never fetched: their alt text stands in.
+  assert.match(md('<a href="LICENSE"><img alt="License: GPL" src="https://img.shields.io/badge/x"></a>'), /<a href="\/L\?p=LICENSE"><span class="md-img-alt"[^>]*>License: GPL<\/span><\/a>/);
+  assert.match(md('[![CI](https://img.shields.io/x.svg)](https://ci.example)'), /<a href="https:\/\/ci\.example" rel="nofollow noopener"><span class="md-img-alt"[^>]*>CI<\/span><\/a>/);
+  for (const evil of ['<script>alert(1)</script>', '<img src=x onerror=alert(1)>', '<a href="javascript:alert(1)">x</a>', '<p onclick="x" style="color:red">t</p>',
+    '<svg onload=alert(1)>', '<iframe src="https://evil"></iframe>', '<a href="data:text/html,x">x</a>', '<img src="javascript:alert(1)">', '<form action=/logout><button>x</button></form>']) {
+    const out = md(evil);
+    assert.doesNotMatch(out, /<script|onerror|onclick|onload|style=|javascript:|<iframe|<svg|data:|<form|<button/i, `${evil} => ${out}`);
+  }
+  // A README cannot close the page around it: unmatched closing tags are dropped, open ones are closed.
+  assert.doesNotMatch(md('</div></article></div>\n\nx'), /<\/div>|<\/article>/);
+  assert.equal(md('<div align="center">\n\nnever closed'), '<div align="center"><p>never closed</p></div>');
+  assert.equal(md('<details open><summary>More</summary>\n\ninside\n\n</details>'), '<details open><summary>More</summary><p>inside</p></details>');
+  assert.match(md('`<b>code</b>`'), /<code>&lt;b&gt;code&lt;\/b&gt;<\/code>/, 'code spans stay text');
+  assert.equal(markdown('Welcome <b>in</b>!').__html, '<p>Welcome &lt;b&gt;in&lt;/b&gt;!</p>', 'without html: true (posts), every tag is text');
+});
+
+test('PKG-FILES-6: a package\'s own pictures are served as pictures for its README', async () => {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><script>alert(1)</script></svg>';
+  assert.equal((await publish(tarball('1.1.0', [{ path: 'logo.svg', data: svg }, { path: 'pic.png', data: Buffer.from([0x89, 0x50, 0x4e, 0x47]) }]))).status, 201);
+  const s = await get('/packages/disconnect/v/1.1.0/raw?path=logo.svg');
+  assert.equal(s.headers.get('content-type'), 'image/svg+xml');
+  assert.match(s.headers.get('content-disposition'), /^inline/);
+  assert.equal(s.headers.get('content-security-policy'), "default-src 'none'; sandbox", 'an SVG opened by itself cannot run its script');
+  assert.equal((await get('/packages/disconnect/v/1.1.0/raw?path=pic.png')).headers.get('content-type'), 'image/png');
+  assert.match((await get('/packages/disconnect/v/1.1.0/raw?path=pic.png&download=1')).headers.get('content-disposition'), /^attachment/);
 });

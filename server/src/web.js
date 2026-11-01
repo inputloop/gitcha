@@ -8,7 +8,7 @@
 import crypto from 'node:crypto';
 import QRCode from 'qrcode';
 import { html, redirect, readForm, cookie, send } from './http.js';
-import { cleanPath, isText, disposition, FILE_HEADERS, SHOW_MAX } from './git/browse.js';
+import { cleanPath, isText, disposition, imageType, FILE_HEADERS, SHOW_MAX } from './git/browse.js';
 import { HttpError } from './errors.js';
 import { safeEqual, deriveKey, hmac } from './crypto.js';
 import * as V from './views.js';
@@ -302,11 +302,16 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     page(ctx, 'Packages', V.packagesPage({ q, results: packages.search(q, a?.user) }), { user: a?.user, wide: true });
   });
 
+  // The README of a version, from its own tarball (the package record keeps only the newest one).
+  const readmeOf = (files) => files.find((f) => /^readme(\.md)?$/i.test(f.path))?.data.toString('utf8') ?? null;
   const packageView = (ctx, a, name, { status = 200 } = {}) => {
     const pkg = packages.info(name, a?.user);
     const myTeams = a ? teams.forUser(a.user).filter((t) => t.role !== 'member' && t.name !== pkg.team) : [];
     const share = a && pkg.canPublish ? V.shareCard({ csrf: csrfToken(ctx), pkg, teams: myTeams }) : '';
-    page(ctx, pkg.name, V.packagePage({ pkg, serverUrl: config.publicUrl, share }), { user: a?.user, wide: true, status });
+    // The whole README from the newest version's own files (the package record keeps only its first 64 KB).
+    let full = null;
+    try { if (pkg.latest) full = readmeOf(packages.files(name, pkg.latest, a?.user).files); } catch { /* fall back to the record's copy */ }
+    page(ctx, pkg.name, V.packagePage({ pkg: full ? { ...pkg, readme: full.slice(0, 512 * 1024) } : pkg, serverUrl: config.publicUrl, share }), { user: a?.user, wide: true, status });
   };
 
   router.get('/packages/:name', (ctx) => {
@@ -321,8 +326,6 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     const a = config.publicRead ? current(ctx) : requireWeb(ctx);
     return a || config.publicRead ? { a } : null;
   };
-  // The README of a version, from its own tarball (the package record keeps only the newest one).
-  const readmeOf = (files) => files.find((f) => /^readme(\.md)?$/i.test(f.path))?.data.toString('utf8') ?? null;
   router.get('/packages/:name/v/:version', (ctx) => {
     const r = packageReader(ctx);
     if (!r) return;
@@ -368,9 +371,10 @@ export function registerWeb(router, { auth, packages, teams, config, billing }) 
     const f = files.find((x) => x.path === path);
     if (!f) throw new HttpError(404, 'not_found', `There is no file "${path}" in this version.`);
     const text = f.data.length <= SHOW_MAX && isText(f.data);
+    const pic = imageType(path);
     send(ctx.res, 200, f.data, {
-      ...FILE_HEADERS, 'Content-Type': text ? 'text/plain; charset=utf-8' : 'application/octet-stream',
-      'Content-Disposition': disposition(text && ctx.url.searchParams.get('download') !== '1' ? 'inline' : 'attachment', path.split('/').pop()),
+      ...FILE_HEADERS, 'Content-Type': pic ?? (text ? 'text/plain; charset=utf-8' : 'application/octet-stream'),
+      'Content-Disposition': disposition((text || pic) && ctx.url.searchParams.get('download') !== '1' ? 'inline' : 'attachment', path.split('/').pop()),
     });
   });
   // The version's tarball, exactly as published (it counts as an install, as gitcha install does).

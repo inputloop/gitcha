@@ -170,6 +170,9 @@ const bytes = (n) => (n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(
 // A safe file name for Content-Disposition: the plain ASCII name, and the real one in RFC 5987 form.
 export const disposition = (kind, name) => `${kind}; filename="${name.replace(/[^\x20-\x7e]|["\\]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 // What every file reply carries: no sniffing, no script, no framing, not stored by shared caches.
+// Pictures a README may show: served as themselves (an SVG under the sandboxing CSP, so it cannot run script).
+export const IMAGE_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', avif: 'image/avif', svg: 'image/svg+xml', ico: 'image/x-icon' };
+export const imageType = (name) => IMAGE_TYPES[String(name).split('.').pop().toLowerCase()] ?? null;
 export const FILE_HEADERS = { 'Content-Security-Policy': "default-src 'none'; sandbox", 'X-Content-Type-Options': 'nosniff', 'Cross-Origin-Resource-Policy': 'same-origin', 'Cache-Control': 'private, no-store' };
 
 /** Adds the Files pages and the download routes (web and API). */
@@ -229,10 +232,11 @@ export function registerBrowse(router, { browse, projects, tasks, principals, au
     // Text is shown as plain text; anything else (and anything asked for as a download) is saved as a file.
     const head = st.size <= SHOW_MAX ? await browse.read(p, sha, path) : null;
     const text = head ? isText(head) : false;
+    const pic = imageType(name);
     const headers = {
       ...FILE_HEADERS, 'Content-Length': String(st.size), 'X-Gitcha-Commit': sha, 'X-Gitcha-Ref': ref,
-      'Content-Type': text ? 'text/plain; charset=utf-8' : 'application/octet-stream',
-      'Content-Disposition': disposition(download || !text ? 'attachment' : 'inline', name),
+      'Content-Type': pic ?? (text ? 'text/plain; charset=utf-8' : 'application/octet-stream'),
+      'Content-Disposition': disposition(download || !(text || pic) ? 'attachment' : 'inline', name),
     };
     if (head) return send(ctx.res, 200, head, headers);
     ctx.res.writeHead(200, { ...headers });
@@ -328,6 +332,7 @@ export function filesPage({ p, base, refs, ref, sha, path = '', entries, file, r
   // Links keep the ref only when one was chosen, so plain links follow the default branch as it moves.
   const keepRef = explicitRef ? ref : null;
   const filesUrl = (pth) => `${base}/files?${q({ ref: keepRef, path: pth })}`;
+  const rawOf = (pth) => `${base}/raw?${q({ ref: keepRef ?? ref, path: pth })}`;
   const parts = path ? path.split('/') : [];
   const crumbs = h`<div class="crumbs" role="navigation" aria-label="Path"><a href="${filesUrl('')}">${p.name}</a>${parts.map((x, i) => h` / ${i === parts.length - 1 ? h`<strong>${x}</strong>` : h`<a href="${filesUrl(parts.slice(0, i + 1).join('/'))}">${x}</a>`}`)}</div>`;
   const isRefName = refs.branches.includes(ref) || refs.tags.includes(ref);
@@ -357,7 +362,7 @@ export function filesPage({ p, base, refs, ref, sha, path = '', entries, file, r
 <div class="table-wrap card"><table class="table compact files-list"><tbody>
 ${path ? h`<tr><td class="files-kind"></td><td><a href="${filesUrl(parts.slice(0, -1).join('/'))}">..</a></td><td></td><td></td></tr>` : ''}
 ${rows}</tbody></table>${entries.length ? '' : h`<p class="muted">This folder is empty.</p>`}</div>
-${readme ? h`<div class="card readme"><h3>${readme.name}</h3>${readme.md ? markdown(readme.text, { dir: path, link: filesUrl }) : h`<pre>${readme.text}</pre>`}</div>` : ''}`;
+${readme ? h`<div class="card readme"><h3>${readme.name}</h3>${readme.md ? markdown(readme.text, { dir: path, link: filesUrl, image: rawOf, html: true }) : h`<pre>${readme.text}</pre>`}</div>` : ''}`;
   }
 
   const name = parts[parts.length - 1];
@@ -367,7 +372,7 @@ ${readme ? h`<div class="card readme"><h3>${readme.name}</h3>${readme.md ? markd
   <div class="row gap files-file-head"><strong>${name}</strong><span class="muted small">${bytes(file.size)}</span>
     <span class="grow"></span>${file.text !== null ? h`<a class="btn ghost small" href="${rawUrl}">Raw</a>` : ''}<a class="btn small" href="${rawUrl}&amp;download=1" download>Download</a></div>
   ${file.text !== null && /\.(md|markdown)$/i.test(name)
-    ? h`<div class="readme">${markdown(file.text, { dir: parts.slice(0, -1).join('/'), link: filesUrl })}</div>`
+    ? h`<div class="readme">${markdown(file.text, { dir: parts.slice(0, -1).join('/'), link: filesUrl, image: rawOf, html: true })}</div>`
     : file.text !== null
     ? h`<pre class="files-code"><code>${file.text}</code></pre>`
     : alert(file.size > SHOW_MAX ? `This file is ${bytes(file.size)}, too big to show here. Download it instead.` : 'This file is not text, so it is not shown here. Download it instead.', 'info')}

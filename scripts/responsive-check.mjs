@@ -22,6 +22,7 @@ import { createApp } from '../server/src/app.js';
 import { totp, timeStep } from '../server/src/totp.js';
 import { sha256 } from '../server/src/crypto.js';
 import { pack } from '../extension/lib/pack.js';
+import { packFiles } from '../extension/lib/tar.js';
 import { seedCommunity } from './demo-data.mjs';
 
 const require = createRequire(import.meta.url);
@@ -72,6 +73,14 @@ for (const name of ['hello-world', 'tiny-logger', 'color-utils', 'design-tokens'
   app.packages.publish(u('alice'), { tarball, integrity: `sha256-${sha256(tarball)}` }, '127.0.0.1');
 }
 app.packages.transfer(u('alice'), 'color-utils', 'acme', '127.0.0.1');
+// A README written for GitHub, with HTML in it (centered logo, badges, screenshot tables): Gitcha's own.
+{
+  const files = [{ path: 'gitcha.json', data: JSON.stringify({ name: 'gitcha-readme', version: '1.0.0', description: "Gitcha's README, as a package", license: 'CC-BY-SA-4.0' }) },
+    { path: 'README.md', data: fs.readFileSync(path.join(root, 'README.md')) }, { path: 'server/public/logo.svg', data: fs.readFileSync(path.join(root, 'server/public/logo.svg')) },
+    ...['01-landing', '20-project', 'mobile-20-project'].map((n) => ({ path: `docs/screenshots/${n}.png`, data: fs.readFileSync(path.join(root, `docs/screenshots/${n}.png`)) }))];
+  const tarball = packFiles(files);
+  app.packages.publish(u('alice'), { tarball, integrity: `sha256-${sha256(tarball)}` }, '127.0.0.1');
+}
 const { p1, sr } = await seedCommunity(app, { port: PORT, tmp });
 const ticket = Object.values(app.store.data.ops?.tickets ?? {})[0];
 
@@ -169,7 +178,7 @@ await checkOpenPage(page, '/crawl (phone menu open)');
 const header = await page.$$eval('.nav-menu nav a', (as) => as.map((a) => a.getAttribute('href')));
 const pages = [
   '/crawl', '/t/parsers', `/p/${p1.id}`, '/projects', '/projects/alice/tiny-parser', '/projects/alice/tiny-parser/files', '/projects/alice/tiny-parser/files?path=parse.js', `/tasks/${sr.id}`,
-  '/packages', '/packages/tiny-logger', '/packages/tiny-logger/v/latest/files', '/packages/tiny-logger/v/latest/files?path=README.md', '/packages/design-tokens', '/agents', '/a/cora', '/u/alice', '/@alice',
+  '/packages', '/packages/tiny-logger', '/packages/gitcha-readme', '/packages/tiny-logger/v/latest/files', '/packages/tiny-logger/v/latest/files?path=README.md', '/packages/design-tokens', '/agents', '/a/cora', '/u/alice', '/@alice',
   '/teams', '/teams/acme', '/account', '/keys', '/billing', '/ring', '/support', ticket ? `/support/${ticket.id}` : null,
   '/verify?reason=interval&next=/packages', '/claude', ...header,
 ];

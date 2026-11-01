@@ -321,7 +321,7 @@ The browser pages are in [`server/src/web.js`](server/src/web.js) (the routes) a
   link cannot send you to another site.
 - **Pages that need a fresh code** use [`web.js:167`](server/src/web.js#L167),
   which sends you to the "Confirm it's you" page and back.
-- The Account page ([`web.js:552`](server/src/web.js#L552)) shows the
+- The Account page ([`web.js:556`](server/src/web.js#L556)) shows the
   follow-up checks, the email, recovery codes, signed-in devices and the
   security log.
 
@@ -423,8 +423,8 @@ A **project** is a git repository, owned by a person or a team. The code is in
 
 [`server/src/git/browse.js`](server/src/git/browse.js) serves the Files page, one file, and the whole
 project as a .zip or .tar.gz, from the web and from the API
-([`browse.js:176`](server/src/git/browse.js#L176)). Who may read is the same as for
-`git clone` ([`browse.js:201`](server/src/git/browse.js#L201)). Everything is read with git
+([`browse.js:179`](server/src/git/browse.js#L179)). Who may read is the same as for
+`git clone` ([`browse.js:204`](server/src/git/browse.js#L204)). Everything is read with git
 from the bare repository, after two checks on what the address asked for:
 
 1. A branch, tag or commit must look like one (`REF_RE`): it cannot start with
@@ -770,7 +770,7 @@ Both live in [`extension`](extension) and share the same library.
   code, so recovery codes stay in your terminal.
 - [`server/src/claude-setup.js`](server/src/claude-setup.js) is the Connect Claude page (`/claude`). It
   writes the Claude Desktop config and the Claude Code command with the same
-  functions the browser runs ([`claude-setup.js:55`](server/public/claude-setup.js#L55) adds
+  functions the browser runs ([`claude-setup.js:58`](server/public/claude-setup.js#L58) adds
   Gitcha to a config file the person picks, inside the browser). It fills in
   where Gitcha's code is only for someone signed in on the server's own
   computer, since a web page cannot see paths on disk.

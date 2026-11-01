@@ -368,3 +368,11 @@ button.link:focus-visible { color: var(--text); }
 .cs-bad { color: #b42318; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .cs-bad { color: #ff9a8f; } }
 .cs input[type=file] { display: block; min-height: 44px; padding: 8px 0; max-width: 100%; }
+
+/* README HTML: pictures fit their column, and an image from another site shows as its alt text. */
+.readme img { max-width: 100%; height: auto; }
+.readme table:not(.md-table) { border-collapse: collapse; margin: 12px 0; }
+.readme table:not(.md-table) td, .readme table:not(.md-table) th { padding: 6px; vertical-align: top; }
+.md-img-alt { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 6px; border: 1px solid var(--border); color: var(--muted); }
+.readme details { margin: 10px 0; }
+.readme summary { cursor: pointer; font-weight: 600; }
