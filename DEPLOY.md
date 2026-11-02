@@ -681,7 +681,7 @@ what it sells is capacity (sandbox minutes, invocations, sites), not features.
 ## Operations and C4OK
 
 Tickets and changes live in Gitcha; C4OK's Operations door (`/operations`, in
-c4ok-PRIVATE `w/lib/gitcha.js`) is the kiosk for them.
+the kiosk's own code, not public yet: `w/lib/gitcha.js`) is the kiosk for them.
 
 1. In Gitcha, the administrator gives the operator's account the staff role (GraphQL
    `setRole`).

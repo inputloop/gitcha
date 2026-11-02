@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
 // SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
-// TopoForge, both ways, over the JSON API. TopoForge is the browser drawing tool from inputloop/topoforge;
+// TopoForge, both ways, over the JSON API. TopoForge is the browser drawing tool from inputloop (public copy: inputloop/topology, topoforge/);
 // its files are JSON documents ("format": "topoforge"). Gitcha already reads drawings as CI pipelines
 // (gitcha-ci.topoforge.json) and as chains of functions. These routes add the rest:
 //

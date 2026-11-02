@@ -1343,7 +1343,7 @@ VM.
 
 ## TopoForge, both ways
 
-[TopoForge](https://github.com/inputloop/topoforge) is the browser drawing
+[TopoForge](https://github.com/inputloop/topology/tree/corwin/topoforge) is the browser drawing
 tool from inputloop. Gitcha reads its drawings (as pipelines and as chain
 functions) and writes them:
 
@@ -1708,8 +1708,8 @@ Gitcha keeps the operational record; C4OK is the kiosk that works it.
   the change as it read when it was given: editing it, or sending it back to
   draft, sets the approvals aside (the record keeps them as voided) and the
   approvers approve again.
-- **C4OK's Operations door** (`/operations`, in c4ok-PRIVATE
-  `w/lib/gitcha.js`) shows the queue, tickets and changes, and asks for a code
+- **C4OK's Operations door** (`/operations`, in the kiosk's own code,
+  not public yet: `w/lib/gitcha.js`) shows the queue, tickets and changes, and asks for a code
   whenever Gitcha does. It reads a console key from a file with mode 600 and
   never shows it.
 

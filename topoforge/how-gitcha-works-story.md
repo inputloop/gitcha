@@ -1,6 +1,6 @@
 # How Gitcha works — what this drawing shows
 
-> story v=1 fence=facts-t0xx drawing-sha256=a7adb644bc436bfea2ee2445a7872936fc9b5897d6f92e25079cc5dda51f0289 facts-sha256=f9980de9edc87104beffbc8a21b761bc59e021ba65650fa6da38a7292c9b298c
+> story v=1 fence=facts-t0xx drawing-sha256=663e8a56a5874b0b7a083b89da7f5a753d68827ba95862043cf6e96cada1d3e0 facts-sha256=7bcb97f65f1e6ab82b7aa4c994893ed360ea65e26e1aac05e70f2c8ff7190c6d
 >
 > Made by TopoForge 1.7 from the drawing alone, 2026-10-30. This page is also a text alternative for the drawing.
 > Drawing file: "how-gitcha-works.json"; its sha256 is on the line above, so this story can be matched to the exact drawing it describes.
@@ -38,7 +38,7 @@ DATA p=1 ref=cloud-stripe key="what" value="Checkout, portal, webhooks checked b
 DATA p=1 ref=database-cassandra key="code" value="server/src/store-cassandra.js"
 DATA p=1 ref=database-cassandra key="status" value="built, tested, and run for real on Cassandra 5.0.9"
 DATA p=1 ref=database-cassandra key="what" value="The database, one row per entry; each save is one batch applied whole or not at all. A lease row stops two servers writing."
-DATA p=1 ref=desktop-c4ok key="code" value="c4ok-PRIVATE w/lib/gitcha.js"
+DATA p=1 ref=desktop-c4ok key="code" value="the staff kiosk's own code (not public yet), w/lib/gitcha.js"
 DATA p=1 ref=desktop-c4ok key="status" value="built; not yet run inside a full C4OK runtime"
 DATA p=1 ref=desktop-c4ok key="what" value="The operations door: tickets and changes, with a console key read from a mode-600 file. Asks for a code whenever Gitcha does."
 DATA p=1 ref=internet-net key="what" value="Everything outside the server VM. Only the proxy (and sshd, for git) face it."
@@ -736,7 +736,7 @@ TOP p=5 ref=text-title5
 - Custom field "code" on "Apache Cassandra" is "server/src/store-cassandra.js". [database-cassandra]
 - Custom field "status" on "Apache Cassandra" is "built, tested, and run for real on Cassandra 5.0.9". [database-cassandra]
 - Custom field "what" on "Apache Cassandra" is "The database, one row per entry; each save is one batch applied whole or not at all. A lease row stops two servers writing.". [database-cassandra]
-- Custom field "code" on "C4OK kiosk \(staff\)" is "c4ok-PRIVATE w/lib/gitcha.js". [desktop-c4ok]
+- Custom field "code" on "C4OK kiosk \(staff\)" is "the staff kiosk's own code \(not public yet\), w/lib/gitcha.js". [desktop-c4ok]
 - Custom field "status" on "C4OK kiosk \(staff\)" is "built; not yet run inside a full C4OK runtime". [desktop-c4ok]
 - Custom field "what" on "C4OK kiosk \(staff\)" is "The operations door: tickets and changes, with a console key read from a mode-600 file. Asks for a code whenever Gitcha does.". [desktop-c4ok]
 - Custom field "what" on "Internet" is "Everything outside the server VM. Only the proxy \(and sshd, for git\) face it.". [internet-net]

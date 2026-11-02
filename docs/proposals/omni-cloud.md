@@ -50,7 +50,7 @@ The pieces are already separable, and Omni keeps them so:
 | piece | where it lives | how it reaches a cloud session |
 |---|---|---|
 | servers (memory seat, persona, tavernface, llamabridge, c4face) | inputloop/vibrobeast, `plugins/vibrobeast-servers` | as gateway members on a host |
-| Tavern's own `mcp` face | inputloop/tavern | a gateway member (`python3 tavern.py mcp --as NAME`) |
+| Tavern's own `mcp` face | Tavern's own code (not public yet) | a gateway member (`python3 tavern.py mcp --as NAME`) |
 | Gitcha's extension server | this repository, `extension/` | a gateway member, or installed as its own plugin |
 | skills (vibrobeast-skills, jarvis) | their repositories | `OMNI_SKILLS` checkouts read by `skill_read`, or installed as plugins |
 | the hub | this repository, `omni/` | the `omni` plugin from this marketplace |

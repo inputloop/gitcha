@@ -4,7 +4,7 @@
 # How Gitcha works, as a TopoForge drawing
 
 [`how-gitcha-works.json`](how-gitcha-works.json) is a drawing of how Gitcha
-works, made for [TopoForge](https://github.com/inputloop/topoforge) 1.7. Open
+works, made for [TopoForge](https://github.com/inputloop/topology/tree/corwin/topoforge) 1.7. Open
 it in TopoForge (**File › Open**) to move things around, read every shape's
 custom fields, or export it again. It has five pages:
 
@@ -35,13 +35,12 @@ it:
 sh tests/check.sh how-gitcha-works.json how-gitcha-works-story.md
 ```
 
-(run from a TopoForge checkout). The story's **Gaps** section lists what
+(run from the `topoforge/` folder of a
+[topology](https://github.com/inputloop/topology) checkout). The story's **Gaps** section lists what
 TopoForge's rules expect in a network drawing and do not find here: link
 speeds, IP addresses, subnets and labels on every arrow. Most of these do not
 apply to software, so they were left as TopoForge reports them rather than
 filled in.
-
-The same files are in TopoForge's repository, in `examples/`.
 
 Gitcha also draws and reads TopoForge files itself: a pipeline, a build
 with its results, a function, or a live instance (`gitcha topoforge`, the

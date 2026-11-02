@@ -167,7 +167,7 @@
      "data": {
       "tf_ref": "desktop-c4ok",
       "what": "The operations door: tickets and changes, with a console key read from a mode-600 file. Asks for a code whenever Gitcha does.",
-      "code": "c4ok-PRIVATE w/lib/gitcha.js",
+      "code": "the staff kiosk's own code (not public yet), w/lib/gitcha.js",
       "status": "built; not yet run inside a full C4OK runtime"
      },
      "style": {}
