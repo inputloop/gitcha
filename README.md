@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors -->
+<!-- SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> -->
 <!-- SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st> -->
 <!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
 <p align="center">
@@ -2247,15 +2247,20 @@ dependency-free, and every new endpoint behind the same 2FA policy.
 
 ---
 
+## Credits
+
+Drawn by [INPUTLOOP](https://github.com/inputloop), Bryant, and Corwin. Gitcha is Bryant Frankford's,
+made with Corwin Brust: the two are its co-creators. The screenshots, logo and icon are Bryant's. Ideas
+or complaints: Bryant and Corwin, BryantAndCorwin@inputloop.com.
+
 ## License
 
-Gitcha is free software. Its code is offered under the **GNU General Public
-License v3.0 or later, or the GNU Lesser General Public License v3.0 or
-later**, at your choice. Its writing, screenshots, logo and icon are under
-**CC-BY-SA-4.0**. Each file states its own terms in an SPDX header or in
-[REUSE.toml](REUSE.toml); the full texts are in [LICENSES/](LICENSES), and
-[LICENSE](LICENSE) has the summary.
+Gitcha is free software. Its code is under the **GNU General Public License,
+version 3 or any later version**; a file whose own header also offers the GNU
+Lesser General Public License, version 3 or later, may be used under either, at
+your choice. Its writing, screenshots, logo and icon are under **CC-BY-SA-4.0**.
+Each file states its own terms in an SPDX header or in [REUSE.toml](REUSE.toml);
+the full texts are in [LICENSES/](LICENSES), and [LICENSE](LICENSE) has the
+summary.
 
-Copyright 2026 Bryant Frankford and Contributors, and Corwin Brust: the two
-are Gitcha's co-creators. The screenshots, logo and icon are Copyright 2026
-Bryant Frankford.
+Copyright 2026 Bryant Frankford and Corwin Brust (INPUTLOOP).

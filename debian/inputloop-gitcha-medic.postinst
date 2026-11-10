@@ -1,7 +1,7 @@
 #!/bin/sh
 # postinst for inputloop-gitcha-medic: the debconf answers written into medic.env (the lines they name, the rest of
 # the conffile kept), the agent key into its own file, and (only when asked) the timer enabled and started.
-# Copyright 2026 Corwin Brust <corwin@bru.st> and Bryant Frankford <nathanielfrankford@gmail.com> and Contributors.
+# Copyright 2026 Corwin Brust <corwin@bru.st> and Bryant Frankford <nathanielfrankford@gmail.com>.
 # SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 set -e
 . /usr/share/debconf/confmodule

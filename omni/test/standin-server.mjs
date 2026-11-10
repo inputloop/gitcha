@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
-// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // A stand-in stdio MCP server for the gateway tests: a "memory seat" with two tools, one of which echoes the
 // arguments and the process's environment marker, so a test can see which child answered and with what.

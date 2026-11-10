@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
-// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // omni/lib/mcp.js is extension/lib/mcp.js, copied so the plugin stands alone when installed from the marketplace.
 // A copy drifts unless a check says it has not: this is that check (as vibrobeast's hub keeps parity by comparison).

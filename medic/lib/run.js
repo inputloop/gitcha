@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
-// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // One way to run a program and read what it said. Every probe and remedy goes through a runner made here, so
 // the tests can hand in a stand-in that answers from a table instead of touching systemd or Cassandra.

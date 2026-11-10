@@ -65,7 +65,7 @@ path = [
   "topoforge/page-5.png",
 ]
 precedence = "closest"
-SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors"]
+SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com>"]
 SPDX-License-Identifier = "CC-BY-SA-4.0"
 
 [[annotations]]
@@ -91,7 +91,7 @@ path = [
   "topoforge/how-gitcha-works.json",
 ]
 precedence = "closest"
-SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors", "2026 Corwin Brust <corwin@bru.st>"]
+SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com>", "2026 Corwin Brust <corwin@bru.st>"]
 SPDX-License-Identifier = "GPL-3.0-or-later OR LGPL-3.0-or-later"
 
 [[annotations]]
@@ -100,7 +100,7 @@ path = [
   "omni/skills/omni/SKILL.md",
 ]
 precedence = "closest"
-SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors", "2026 Corwin Brust <corwin@bru.st>"]
+SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com>", "2026 Corwin Brust <corwin@bru.st>"]
 SPDX-License-Identifier = "CC-BY-SA-4.0"
 
 # colophon: end
@@ -126,7 +126,7 @@ path = [
   "deploy/omni-members.example.json",
 ]
 precedence = "closest"
-SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors", "2026 Corwin Brust <corwin@bru.st>"]
+SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com>", "2026 Corwin Brust <corwin@bru.st>"]
 SPDX-License-Identifier = "GPL-3.0-or-later OR LGPL-3.0-or-later"
 
 [[annotations]]
@@ -137,7 +137,7 @@ path = [
   "debian/inputloop-gitcha-omni-gateway.README.Debian",
 ]
 precedence = "closest"
-SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors", "2026 Corwin Brust <corwin@bru.st>"]
+SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com>", "2026 Corwin Brust <corwin@bru.st>"]
 SPDX-License-Identifier = "CC-BY-SA-4.0"
 
 # topoforge/: the story TopoForge wrote from the drawing. Its third line carries the drawing's and the facts'
@@ -146,5 +146,5 @@ SPDX-License-Identifier = "CC-BY-SA-4.0"
 [[annotations]]
 path = "topoforge/how-gitcha-works-story.md"
 precedence = "closest"
-SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors", "2026 Corwin Brust <corwin@bru.st>"]
+SPDX-FileCopyrightText = ["2026 Bryant Frankford <nathanielfrankford@gmail.com>", "2026 Corwin Brust <corwin@bru.st>"]
 SPDX-License-Identifier = "CC-BY-SA-4.0"

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com>
 // SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // The package registry: publish, list, search, fetch, yank (mark a version as "do not use"), and

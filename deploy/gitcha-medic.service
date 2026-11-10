@@ -1,5 +1,5 @@
 # gitcha-medic.service -- one run of the medic: look at Gitcha, Cassandra and the proxy; mend what is safe; tell the rooms.
-# Copyright 2026 Corwin Brust <corwin@bru.st> and Bryant Frankford <nathanielfrankford@gmail.com> and Contributors.
+# Copyright 2026 Corwin Brust <corwin@bru.st> and Bryant Frankford <nathanielfrankford@gmail.com>.
 # SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 # Started by gitcha-medic.timer (every five minutes) and by hand: systemctl start gitcha-medic
 [Unit]

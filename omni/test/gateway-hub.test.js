@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
-// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // End to end: two stand-in stdio servers behind a gateway on 127.0.0.1, a hub in front of it, calls through the
 // hub's MCP face. Tokens, clashes, errors, and that nothing but the members file decides what the gateway runs.

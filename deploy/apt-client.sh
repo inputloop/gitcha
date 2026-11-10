@@ -1,6 +1,6 @@
 #!/bin/sh
 # apt-client.sh -- make this host pull inputloop's packages from a signed apt repository, and keep them current.
-# Copyright 2026 Corwin Brust <corwin@bru.st> and Bryant Frankford <nathanielfrankford@gmail.com> and Contributors.
+# Copyright 2026 Corwin Brust <corwin@bru.st> and Bryant Frankford <nathanielfrankford@gmail.com>.
 # SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 #
 # usage:  sudo sh apt-client.sh REPO_URL [--keyring FILE|URL] [--name NAME] [--unattended] [--install PKG...]

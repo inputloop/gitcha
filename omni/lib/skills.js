@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
-// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // Skills as files: a root is a folder holding skills/NAME/SKILL.md (a plugin checkout such as vibrobeast-skills or
 // jarvis), or a folder of NAME/SKILL.md directly. Read only; a name is never joined into a path it could escape.

@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
-// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // The medic's own settings (GITCHA_MEDIC_*, from /etc/inputloop/gitcha/medic.env and the environment), and the
 // Gitcha settings it reads to know what it is watching (gitcha.env, then debconf.env, as the unit reads them).

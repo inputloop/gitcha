@@ -1,6 +1,6 @@
 #!/bin/sh
 # publish.sh -- build the packages, put them in the signed apt repository, and copy that folder where it is served.
-# Copyright 2026 Corwin Brust <corwin@bru.st> and Bryant Frankford <nathanielfrankford@gmail.com> and Contributors.
+# Copyright 2026 Corwin Brust <corwin@bru.st> and Bryant Frankford <nathanielfrankford@gmail.com>.
 # SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 #
 # usage:  sh deploy/publish.sh REPO_DIR --sign KEYID [--to DEST] [--debian|--debs] [--without-cassandra]

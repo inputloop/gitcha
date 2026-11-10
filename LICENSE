@@ -1,10 +1,8 @@
-Gitcha
-Copyright 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors.
-Copyright 2026 Corwin Brust <corwin@bru.st>.
-Bryant Frankford and Corwin Brust are Gitcha's co-creators. The screenshots, logo and icon
-are Copyright 2026 Bryant Frankford.
+Gitcha, by Bryant Frankford and Corwin Brust (INPUTLOOP), its co-creators.
+The screenshots, logo and icon are Bryant Frankford's.
 
-Code: GPL-3.0-or-later OR LGPL-3.0-or-later, at your choice.
+Code: GPL-3.0-or-later. A file whose own header also offers LGPL-3.0-or-later
+may be used under either, at your choice.
 Writing (README, guides, documentation): CC-BY-SA-4.0.
 Screenshots, logo and icon: CC-BY-SA-4.0.
 
@@ -15,3 +13,5 @@ The full texts are in LICENSES/:
 
 Each file says its own terms, in an SPDX header or in REUSE.toml.
 Files that carry someone else's notice keep their own terms.
+
+Copyright 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Corwin Brust <corwin@bru.st>.

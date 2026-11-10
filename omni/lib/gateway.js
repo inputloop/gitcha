@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st>
-// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors
+// SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com>
 // SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 // The gateway: the host side of Omni. It runs on a machine you own (a ghostwheel node, or your desk) and puts
 // stdio MCP servers that live there (vibrobeast's mentcached, persona, tavernface, llamabridge, c4face; Tavern's

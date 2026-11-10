@@ -1,7 +1,7 @@
 #!/bin/sh
 # postrm for inputloop-gitcha-omni-gateway.  Purging removes the token files and the gateway's own state; the
 # members file and anything the members themselves keep (a seat, Tavern's data) are left alone.
-# Copyright 2026 Corwin Brust <corwin@bru.st> and Bryant Frankford <nathanielfrankford@gmail.com> and Contributors.
+# Copyright 2026 Corwin Brust <corwin@bru.st> and Bryant Frankford <nathanielfrankford@gmail.com>.
 # SPDX-License-Identifier: GPL-3.0-or-later OR LGPL-3.0-or-later
 set -e
 

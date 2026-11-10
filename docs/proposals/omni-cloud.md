@@ -1,5 +1,5 @@
 <!-- SPDX-FileCopyrightText: 2026 Corwin Brust <corwin@bru.st> -->
-<!-- SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> and Contributors -->
+<!-- SPDX-FileCopyrightText: 2026 Bryant Frankford <nathanielfrankford@gmail.com> -->
 <!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
 
 # Omni: continuity for Claude in a cloud sandbox
